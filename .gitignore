@@ -1,0 +1,45 @@
+# === 憑證與環境變數（絕不提交）===
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.p12
+credentials.json
+secrets/
+
+# === Python ===
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+dist/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+coverage.xml
+
+# === Node / Frontend ===
+node_modules/
+frontend/dist/
+frontend/.cache/
+
+# === IDE / 本地工具設定 ===
+.vscode/settings.json
+.idea/
+.claude/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# === Docker volumes (本地資料，不提交）===
+pgdata/
+
+# === 測試/暫存 ===
+*.log
+*.tmp
