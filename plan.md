@@ -1,6 +1,6 @@
 # Taiwan Stock Screener (主力未跑籌碼篩選) Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- X`) syntax for tracking.
 
 **Goal:** 篩選台股電子類股中「創60日新高後拉回但主力未出場」的標的，以布林位階量化拉回程度，結合三大法人/融資/持股集中度判斷籌碼狀態，並以 React dashboard 呈現。
 
@@ -66,7 +66,7 @@ stock-main-force/
 - Create: `docker-compose.yml`
 - Create: `config/sector_tags.yaml`
 
-- [ ] **Step 1: 寫 docker-compose.yml**
+- ○ **Step 1: 寫 docker-compose.yml**
 
 ```yaml
 services:
@@ -110,7 +110,7 @@ volumes:
   pgdata:
 ```
 
-- [ ] **Step 2: 寫 sector_tags.yaml**
+- ○ **Step 2: 寫 sector_tags.yaml**
 
 ```yaml
 # 每檔股票可掛多個標籤
@@ -155,7 +155,7 @@ all_tags:
   - other
 ```
 
-- [ ] **Step 3: 驗證 PostgreSQL 啟動**
+- ○ **Step 3: 驗證 PostgreSQL 啟動**
 
 ```bash
 cd ~/stock-main-force
@@ -164,7 +164,7 @@ docker compose exec db psql -U stock -d stock_force -c "SELECT version();"
 ```
 Expected: PostgreSQL 16.x 版本字串
 
-- [ ] **Step 4: Commit**
+- ○ **Step 4: Commit**
 
 ```bash
 git add docker-compose.yml config/sector_tags.yaml
@@ -183,7 +183,7 @@ git commit -m "feat: add Docker Compose with PostgreSQL and sector_tags config"
 - Create: `backend/alembic.ini`
 - Create: `backend/alembic/env.py`
 
-- [ ] **Step 1: 初始化 uv 專案**
+- ○ **Step 1: 初始化 uv 專案**
 
 ```bash
 cd ~/stock-main-force/backend
@@ -194,7 +194,7 @@ cd ~/stock-main-force/backend
 ~/.local/bin/uv add --dev pytest pytest-asyncio httpx
 ```
 
-- [ ] **Step 2: 寫 config.py**
+- ○ **Step 2: 寫 config.py**
 
 ```python
 from pydantic_settings import BaseSettings
@@ -210,7 +210,7 @@ class Settings(BaseSettings):
 settings = Settings()
 ```
 
-- [ ] **Step 3: 寫 db/base.py**
+- ○ **Step 3: 寫 db/base.py**
 
 ```python
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
@@ -228,7 +228,7 @@ async def get_db() -> AsyncSession:
         yield session
 ```
 
-- [ ] **Step 4: 寫 db/models.py**
+- ○ **Step 4: 寫 db/models.py**
 
 ```python
 from datetime import date, datetime
@@ -329,7 +329,7 @@ class FetchLog(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 ```
 
-- [ ] **Step 5: 設定 Alembic**
+- ○ **Step 5: 設定 Alembic**
 
 ```bash
 cd ~/stock-main-force/backend
@@ -348,7 +348,7 @@ target_metadata = Base.metadata
 sqlalchemy.url = postgresql+asyncpg://stock:secret@localhost:5432/stock_force
 ```
 
-- [ ] **Step 6: 產生並套用 migration**
+- ○ **Step 6: 產生並套用 migration**
 
 ```bash
 cd ~/stock-main-force/backend
@@ -358,7 +358,7 @@ cd ~/stock-main-force/backend
 
 Expected: 6 個 table 建立完成，`alembic_version` table 存在
 
-- [ ] **Step 7: Commit**
+- ○ **Step 7: Commit**
 
 ```bash
 git add backend/
@@ -373,7 +373,7 @@ git commit -m "feat: backend project init with SQLAlchemy models and Alembic"
 - Create: `backend/app/services/fetcher/twse.py`
 - Create: `backend/tests/test_fetcher.py` (TWSE 部分)
 
-- [ ] **Step 1: 寫失敗測試**
+- ○ **Step 1: 寫失敗測試**
 
 ```python
 # backend/tests/test_fetcher.py
@@ -398,7 +398,7 @@ async def test_fetch_margin_returns_list():
     assert "margin_balance" in rows[0]
 ```
 
-- [ ] **Step 2: 執行確認失敗**
+- ○ **Step 2: 執行確認失敗**
 
 ```bash
 cd ~/stock-main-force/backend
@@ -407,7 +407,7 @@ cd ~/stock-main-force/backend
 
 Expected: `ImportError` 或 `ModuleNotFoundError`
 
-- [ ] **Step 3: 實作 twse.py**
+- ○ **Step 3: 實作 twse.py**
 
 ```python
 import json
@@ -502,7 +502,7 @@ def _parse_int(s: str) -> int:
     return int(s.replace(",", "").replace("+", ""))
 ```
 
-- [ ] **Step 4: 執行測試確認通過**
+- ○ **Step 4: 執行測試確認通過**
 
 ```bash
 cd ~/stock-main-force/backend
@@ -512,7 +512,7 @@ cd ~/stock-main-force/backend
 
 Expected: PASS，rows > 100
 
-- [ ] **Step 5: Commit**
+- ○ **Step 5: Commit**
 
 ```bash
 git add backend/app/services/fetcher/twse.py backend/tests/test_fetcher.py
@@ -526,7 +526,7 @@ git commit -m "feat: TWSE institutional, daily price, margin fetchers"
 **Files:**
 - Modify: `backend/app/services/fetcher/finmind.py`
 
-- [ ] **Step 1: 寫失敗測試（加到 test_fetcher.py）**
+- ○ **Step 1: 寫失敗測試（加到 test_fetcher.py）**
 
 ```python
 @pytest.mark.asyncio
@@ -543,14 +543,14 @@ async def test_fetch_stock_capital_returns_float():
     assert capital > 0  # 台積電股本 > 0
 ```
 
-- [ ] **Step 2: 執行確認失敗**
+- ○ **Step 2: 執行確認失敗**
 
 ```bash
 ~/.local/bin/uv run pytest tests/test_fetcher.py::test_fetch_shareholding_returns_data -v
 ~/.local/bin/uv run pytest tests/test_fetcher.py::test_fetch_stock_capital_returns_float -v
 ```
 
-- [ ] **Step 3: 實作 finmind.py**
+- ○ **Step 3: 實作 finmind.py**
 
 ```python
 import httpx
@@ -608,14 +608,14 @@ async def fetch_stock_capital(code: str) -> float:
     return capital_k_ntd / 10 / 1000  # 回傳：張數（千張 scale）
 ```
 
-- [ ] **Step 4: 執行測試確認通過**
+- ○ **Step 4: 執行測試確認通過**
 
 ```bash
 ~/.local/bin/uv run pytest tests/test_fetcher.py::test_fetch_shareholding_returns_data -v
 ~/.local/bin/uv run pytest tests/test_fetcher.py::test_fetch_stock_capital_returns_float -v
 ```
 
-- [ ] **Step 5: Commit**
+- ○ **Step 5: Commit**
 
 ```bash
 git add backend/app/services/fetcher/finmind.py
@@ -629,7 +629,7 @@ git commit -m "feat: FinMind shareholding + stock capital fetcher"
 **Files:**
 - Create: `backend/app/services/fetcher/stock_list.py`
 
-- [ ] **Step 1: 實作 stock_list.py**
+- ○ **Step 1: 實作 stock_list.py**
 
 ```python
 import json
@@ -665,7 +665,7 @@ async def fetch_electronic_stocks() -> list[dict]:
     return rows
 ```
 
-- [ ] **Step 2: 測試清單抓取**
+- ○ **Step 2: 測試清單抓取**
 
 ```bash
 cd ~/stock-main-force/backend
@@ -680,7 +680,7 @@ print(rows[:2])
 
 Expected: 電子股數量 > 200
 
-- [ ] **Step 3: Commit**
+- ○ **Step 3: Commit**
 
 ```bash
 git add backend/app/services/fetcher/stock_list.py
@@ -694,7 +694,7 @@ git commit -m "feat: electronic stock list fetcher with sector tags"
 **Files:**
 - Create: `backend/app/services/fetcher/market.py`
 
-- [ ] **Step 1: 實作 market.py**
+- X **Step 1: 實作 market.py**
 
 ```python
 import numpy as np
@@ -721,7 +721,7 @@ def fetch_twii_bb_stats() -> tuple[float, float]:
     return peak_bb_30d, current_bb
 ```
 
-- [ ] **Step 2: 快速驗證**
+- X **Step 2: 快速驗證**
 
 ```bash
 ~/.local/bin/uv run python -c "
@@ -733,7 +733,7 @@ print(f'大盤 BB 位階: 近30日高點={peak:.2f}, 當前={current:.2f}, 降�
 
 Expected: peak >= current，降幅 >= 0
 
-- [ ] **Step 3: Commit**
+- X **Step 3: Commit**
 
 ```bash
 git add backend/app/services/fetcher/market.py
@@ -748,7 +748,7 @@ git commit -m "feat: market index BB position via yfinance"
 - Create: `backend/app/services/screener.py`
 - Create: `backend/tests/test_screener.py`
 
-- [ ] **Step 1: 寫失敗測試**
+- X **Step 1: 寫失敗測試**
 
 ```python
 # backend/tests/test_screener.py
@@ -834,7 +834,7 @@ def test_check_entry_criteria_fail_too_low():
     assert result["passes"] is False  # 跌破 -3
 ```
 
-- [ ] **Step 2: 執行確認失敗**
+- X **Step 2: 執行確認失敗**
 
 ```bash
 ~/.local/bin/uv run pytest tests/test_screener.py -v
@@ -842,7 +842,7 @@ def test_check_entry_criteria_fail_too_low():
 
 Expected: `ImportError` 或函式不存在
 
-- [ ] **Step 3: 實作 screener.py**
+- X **Step 3: 實作 screener.py**
 
 ```python
 import numpy as np
@@ -1071,7 +1071,7 @@ def calc_score(result: dict, chip: dict, market_bb_drop: float) -> float:
     return round(min(100, max(0, score)), 1)
 ```
 
-- [ ] **Step 4: 執行測試確認通過**
+- X **Step 4: 執行測試確認通過**
 
 ```bash
 ~/.local/bin/uv run pytest tests/test_screener.py -v
@@ -1079,7 +1079,7 @@ def calc_score(result: dict, chip: dict, market_bb_drop: float) -> float:
 
 Expected: 全部 5 個測試 PASS
 
-- [ ] **Step 5: Commit**
+- X **Step 5: Commit**
 
 ```bash
 git add backend/app/services/screener.py backend/tests/test_screener.py
@@ -1093,7 +1093,7 @@ git commit -m "feat: BB position screener engine with entry criteria and scoring
 **Files:**
 - Create: `backend/app/services/scheduler.py`
 
-- [ ] **Step 1: 實作 scheduler.py**
+- X **Step 1: 實作 scheduler.py**
 
 ```python
 import asyncio
@@ -1312,7 +1312,7 @@ def create_scheduler() -> AsyncIOScheduler:
     return scheduler
 ```
 
-- [ ] **Step 2: Commit**
+- X **Step 2: Commit**
 
 ```bash
 git add backend/app/services/scheduler.py
@@ -1328,7 +1328,7 @@ git commit -m "feat: APScheduler with 4 daily jobs and 90-day backfill"
 - Create: `backend/app/api/routes.py`
 - Create: `backend/app/api/deps.py`
 
-- [ ] **Step 1: 實作 deps.py**
+- X **Step 1: 實作 deps.py**
 
 ```python
 from typing import AsyncGenerator
@@ -1340,7 +1340,7 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
         yield session
 ```
 
-- [ ] **Step 2: 實作 routes.py**
+- X **Step 2: 實作 routes.py**
 
 ```python
 from datetime import date
@@ -1423,7 +1423,7 @@ def _format_result(r: ScreeningResult) -> dict:
     }
 ```
 
-- [ ] **Step 3: 實作 main.py**
+- X **Step 3: 實作 main.py**
 
 ```python
 from contextlib import asynccontextmanager
@@ -1459,7 +1459,7 @@ async def health():
     return {"status": "ok"}
 ```
 
-- [ ] **Step 4: 測試 API 啟動**
+- X **Step 4: 測試 API 啟動**
 
 ```bash
 cd ~/stock-main-force/backend
@@ -1471,7 +1471,7 @@ curl http://localhost:8000/api/status
 
 Expected: `{"status": "ok"}` 和 jobs 列表
 
-- [ ] **Step 5: Commit**
+- X **Step 5: Commit**
 
 ```bash
 git add backend/app/
@@ -1486,7 +1486,7 @@ git commit -m "feat: FastAPI app with screener routes and scheduler lifespan"
 - Create: `frontend/package.json`, `frontend/vite.config.ts`
 - Create: `frontend/src/types/index.ts`
 
-- [ ] **Step 1: 初始化 Vite + React**
+- X **Step 1: 初始化 Vite + React**
 
 ```bash
 cd ~/stock-main-force
@@ -1497,7 +1497,7 @@ npm install recharts axios
 npm install -D tailwindcss @tailwindcss/vite
 ```
 
-- [ ] **Step 2: 設定 Tailwind (vite.config.ts)**
+- X **Step 2: 設定 Tailwind (vite.config.ts)**
 
 ```typescript
 import { defineConfig } from 'vite'
@@ -1514,7 +1514,7 @@ export default defineConfig({
 })
 ```
 
-- [ ] **Step 3: 定義型別 (src/types/index.ts)**
+- X **Step 3: 定義型別 (src/types/index.ts)**
 
 ```typescript
 export interface ScreenerResult {
@@ -1539,7 +1539,7 @@ export interface DataStatus {
 }
 ```
 
-- [ ] **Step 4: Commit**
+- X **Step 4: Commit**
 
 ```bash
 git add frontend/
@@ -1557,7 +1557,7 @@ git commit -m "feat: React frontend init with Vite, Tailwind, types"
 - Create: `frontend/src/components/TagFilter.tsx`
 - Create: `frontend/src/components/ChipBar.tsx`
 
-- [ ] **Step 1: 實作 useScreener hook**
+- X **Step 1: 實作 useScreener hook**
 
 ```typescript
 // frontend/src/hooks/useScreener.ts
@@ -1585,7 +1585,7 @@ export function useScreener(tags: string[]) {
 }
 ```
 
-- [ ] **Step 2: 實作 BBGauge.tsx**
+- X **Step 2: 實作 BBGauge.tsx**
 
 ```typescript
 // frontend/src/components/BBGauge.tsx
@@ -1616,7 +1616,7 @@ export function BBGauge({ position }: BBGaugeProps) {
 }
 ```
 
-- [ ] **Step 3: 實作 ChipBar.tsx**
+- X **Step 3: 實作 ChipBar.tsx**
 
 ```typescript
 // frontend/src/components/ChipBar.tsx
@@ -1645,7 +1645,7 @@ export function ChipBar({ stock }: ChipBarProps) {
 }
 ```
 
-- [ ] **Step 4: 實作 StockCard.tsx**
+- X **Step 4: 實作 StockCard.tsx**
 
 ```typescript
 // frontend/src/components/StockCard.tsx
@@ -1684,7 +1684,7 @@ export function StockCard({ stock }: StockCardProps) {
 }
 ```
 
-- [ ] **Step 5: 實作 TagFilter.tsx**
+- X **Step 5: 實作 TagFilter.tsx**
 
 ```typescript
 // frontend/src/components/TagFilter.tsx
@@ -1718,7 +1718,7 @@ export function TagFilter({ allTags, selected, onChange }: TagFilterProps) {
 }
 ```
 
-- [ ] **Step 6: Commit**
+- X **Step 6: Commit**
 
 ```bash
 git add frontend/src/
@@ -1733,7 +1733,7 @@ git commit -m "feat: frontend components (BBGauge, StockCard, ChipBar, TagFilter
 - Create: `frontend/src/pages/Dashboard.tsx`
 - Modify: `frontend/src/App.tsx`
 
-- [ ] **Step 1: 實作 Dashboard.tsx**
+- X **Step 1: 實作 Dashboard.tsx**
 
 ```typescript
 // frontend/src/pages/Dashboard.tsx
@@ -1801,7 +1801,7 @@ export function Dashboard() {
 }
 ```
 
-- [ ] **Step 2: 修改 App.tsx**
+- X **Step 2: 修改 App.tsx**
 
 ```typescript
 import { Dashboard } from './pages/Dashboard';
@@ -1812,13 +1812,13 @@ export default function App() {
 }
 ```
 
-- [ ] **Step 3: 在 index.css 確認 Tailwind**
+- X **Step 3: 在 index.css 確認 Tailwind**
 
 ```css
 @import "tailwindcss";
 ```
 
-- [ ] **Step 4: 啟動並驗證**
+- X **Step 4: 啟動並驗證**
 
 ```bash
 # Terminal 1: 後端
@@ -1833,7 +1833,7 @@ cd ~/stock-main-force/frontend && npm run dev
 - 族群標籤 filter 可點選
 - API status bar 顯示各 job 狀態
 
-- [ ] **Step 5: Commit**
+- X **Step 5: Commit**
 
 ```bash
 git add frontend/src/
@@ -1848,7 +1848,7 @@ git commit -m "feat: complete dashboard with tag filter and stock cards"
 - Create: `backend/Dockerfile`
 - Create: `frontend/Dockerfile`
 
-- [ ] **Step 1: 寫 backend/Dockerfile**
+- X **Step 1: 寫 backend/Dockerfile**
 
 ```dockerfile
 FROM python:3.12-slim
@@ -1862,7 +1862,7 @@ COPY alembic.ini .
 CMD ["uv", "run", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
 ```
 
-- [ ] **Step 2: 寫 frontend/Dockerfile**
+- X **Step 2: 寫 frontend/Dockerfile**
 
 ```dockerfile
 FROM node:20-alpine as builder
@@ -1878,7 +1878,7 @@ COPY nginx.conf /etc/nginx/conf.d/default.conf
 EXPOSE 80
 ```
 
-- [ ] **Step 3: 寫 frontend/nginx.conf**
+- X **Step 3: 寫 frontend/nginx.conf**
 
 ```nginx
 server {
@@ -1894,7 +1894,7 @@ server {
 }
 ```
 
-- [ ] **Step 4: Docker Compose 全套啟動**
+- X **Step 4: Docker Compose 全套啟動**
 
 ```bash
 cd ~/stock-main-force
@@ -1904,7 +1904,7 @@ docker compose logs -f backend
 
 Expected: backend 起動，DB migration 完成，backfill 開始
 
-- [ ] **Step 5: 端對端驗證**
+- X **Step 5: 端對端驗證**
 
 ```bash
 curl http://localhost:8000/health
@@ -1912,7 +1912,7 @@ curl http://localhost:8000/api/status
 curl http://localhost:3000  # 前端 dashboard
 ```
 
-- [ ] **Step 6: 最終 Commit**
+- X **Step 6: 最終 Commit**
 
 ```bash
 git add backend/Dockerfile frontend/Dockerfile frontend/nginx.conf
