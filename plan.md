@@ -244,6 +244,7 @@ class StockList(Base):
     market: Mapped[str] = mapped_column(String(10))  # TWSE / TPEx
     sector: Mapped[str] = mapped_column(String(50))   # 電子工業 etc.
     tags: Mapped[str] = mapped_column(Text, default="")  # JSON list as text
+    capital: Mapped[float] = mapped_column(Float, default=0)  # 股本（千股），用於法人買超比率正規化
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 class DailyPrice(Base):
@@ -305,8 +306,10 @@ class ScreeningResult(Base):
     # 成交量
     vol_ratio: Mapped[float] = mapped_column(Float)        # 近5日/前5日均量
     # 籌碼
-    foreign_5d_net: Mapped[float] = mapped_column(Float, default=0)   # 外資5日淨買超
-    trust_5d_net: Mapped[float] = mapped_column(Float, default=0)     # 投信5日淨買超
+    foreign_6d_net: Mapped[float] = mapped_column(Float, default=0)    # 外資6日淨買超（張）
+    trust_6d_net: Mapped[float] = mapped_column(Float, default=0)     # 投信6日淨買超（張）
+    chip_ratio_6d: Mapped[float] = mapped_column(Float, default=0)    # (外資+投信)6日買超/股本 %
+    chip_ratio_12d: Mapped[float] = mapped_column(Float, default=0)   # (外資+投信)12日買超/股本 %
     margin_5d_chg: Mapped[float] = mapped_column(Float, default=0)    # 融資5日增減%
     holders_1000_chg: Mapped[float] = mapped_column(Float, default=0) # 大戶增減人數
     # RS
@@ -518,7 +521,7 @@ git commit -m "feat: TWSE institutional, daily price, margin fetchers"
 
 ---
 
-## Task 4: FinMind 持股集中度抓取
+## Task 4: FinMind 持股集中度 + 股本抓取
 
 **Files:**
 - Modify: `backend/app/services/fetcher/finmind.py`
@@ -532,12 +535,19 @@ async def test_fetch_shareholding_returns_data():
     assert isinstance(rows, list)
     assert len(rows) > 0
     assert "holders_1000_lot" in rows[0]
+
+@pytest.mark.asyncio
+async def test_fetch_stock_capital_returns_float():
+    capital = await fetch_stock_capital("2330")
+    assert isinstance(capital, float)
+    assert capital > 0  # 台積電股本 > 0
 ```
 
 - [ ] **Step 2: 執行確認失敗**
 
 ```bash
 ~/.local/bin/uv run pytest tests/test_fetcher.py::test_fetch_shareholding_returns_data -v
+~/.local/bin/uv run pytest tests/test_fetcher.py::test_fetch_stock_capital_returns_float -v
 ```
 
 - [ ] **Step 3: 實作 finmind.py**
@@ -549,25 +559,23 @@ from app.config import settings
 
 FINMIND_BASE = "https://api.finmindtrade.com/api/v4/data"
 
+def _finmind_params(dataset: str, data_id: str, start_date: str) -> dict:
+    params = {"dataset": dataset, "data_id": data_id, "start_date": start_date}
+    if settings.finmind_token:
+        params["token"] = settings.finmind_token
+    return params
+
 async def fetch_shareholding(code: str, weeks: int = 12) -> list[dict]:
     """FinMind TaiwanStockShareholding — 千張以上大戶持股"""
     start = (date.today() - timedelta(weeks=weeks)).strftime("%Y-%m-%d")
-    params = {
-        "dataset": "TaiwanStockShareholding",
-        "data_id": code,
-        "start_date": start,
-    }
-    if settings.finmind_token:
-        params["token"] = settings.finmind_token
-
     async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.get(FINMIND_BASE, params=params)
+        resp = await client.get(FINMIND_BASE, params=_finmind_params(
+            "TaiwanStockShareholding", code, start
+        ))
     if resp.status_code != 200:
         return []
-    raw = resp.json().get("data", [])
     rows = []
-    for r in raw:
-        # 篩選 >1000張 那一列
+    for r in resp.json().get("data", []):
         if r.get("HoldingSharesLevel") == "1,000張以上":
             rows.append({
                 "code": code,
@@ -576,19 +584,42 @@ async def fetch_shareholding(code: str, weeks: int = 12) -> list[dict]:
                 "pct_1000_lot": float(r.get("holdingSharesPercent", 0)),
             })
     return rows
+
+async def fetch_stock_capital(code: str) -> float:
+    """
+    FinMind TaiwanStockInfo — 取得股本（千股）
+    capital 欄位單位為「千元」，需除以票面價（通常10元）得到股數千股
+    實務上直接用 capital / 10 / 1000 = 張數（千張）
+    回傳單位：張（方便與三大法人買賣超張數計算比率）
+    """
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.get(
+            "https://api.finmindtrade.com/api/v4/data",
+            params={"dataset": "TaiwanStockInfo", "data_id": code,
+                    **({"token": settings.finmind_token} if settings.finmind_token else {})}
+        )
+    if resp.status_code != 200:
+        return 0.0
+    data = resp.json().get("data", [])
+    if not data:
+        return 0.0
+    # capital 欄位：股本（千元），÷10（票面）÷1000 = 千張
+    capital_k_ntd = float(data[0].get("capital", 0))
+    return capital_k_ntd / 10 / 1000  # 回傳：張數（千張 scale）
 ```
 
 - [ ] **Step 4: 執行測試確認通過**
 
 ```bash
 ~/.local/bin/uv run pytest tests/test_fetcher.py::test_fetch_shareholding_returns_data -v
+~/.local/bin/uv run pytest tests/test_fetcher.py::test_fetch_stock_capital_returns_float -v
 ```
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add backend/app/services/fetcher/finmind.py
-git commit -m "feat: FinMind shareholding concentration fetcher"
+git commit -m "feat: FinMind shareholding + stock capital fetcher"
 ```
 
 ---
@@ -666,33 +697,41 @@ git commit -m "feat: electronic stock list fetcher with sector tags"
 - [ ] **Step 1: 實作 market.py**
 
 ```python
-import pandas as pd
+import numpy as np
 import yfinance as yf
-from datetime import date
 
-def fetch_twii_bb_position(days: int = 30) -> float:
-    """計算大盤 ^TWII 當前布林位階"""
-    df = yf.Ticker("^TWII").history(period="3mo", interval="1d")
-    if df.empty:
-        return 0.0
-    close = df["Close"]
-    ma20 = close.rolling(20).mean()
-    std20 = close.rolling(20).std()
+def fetch_twii_bb_stats() -> tuple[float, float]:
+    """
+    計算大盤 ^TWII 的 BB 位階資訊。
+    回傳 (peak_bb_30d, current_bb)：
+      peak_bb_30d — 近30日內 BB 位階最高值（用於計算大盤下滑幅度）
+      current_bb  — 當前 BB 位階
+    用於 RS 計算：market_bb_drop = peak_bb_30d - current_bb
+    """
+    df = yf.Ticker("^TWII").history(period="6mo", interval="1d")
+    if df.empty or len(df) < 20:
+        return 0.0, 0.0
+    close = df["Close"].values
+    ma20 = np.array([close[max(0,i-19):i+1].mean() for i in range(len(close))])
+    std20 = np.array([close[max(0,i-19):i+1].std(ddof=0) + 1e-8 for i in range(len(close))])
     bb_pos = (close - ma20) / (2 * std20) * 10
-    return float(bb_pos.iloc[-1])
+
+    current_bb = float(bb_pos[-1])
+    peak_bb_30d = float(bb_pos[-30:].max()) if len(bb_pos) >= 30 else float(bb_pos.max())
+    return peak_bb_30d, current_bb
 ```
 
 - [ ] **Step 2: 快速驗證**
 
 ```bash
 ~/.local/bin/uv run python -c "
-from app.services.fetcher.market import fetch_twii_bb_position
-pos = fetch_twii_bb_position()
-print(f'大盤 BB 位階: {pos:.2f}')
+from app.services.fetcher.market import fetch_twii_bb_stats
+peak, current = fetch_twii_bb_stats()
+print(f'大盤 BB 位階: 近30日高點={peak:.2f}, 當前={current:.2f}, 降幅={peak-current:.2f}')
 "
 ```
 
-Expected: 數值介於 -10 到 +10
+Expected: peak >= current，降幅 >= 0
 
 - [ ] **Step 3: Commit**
 
@@ -715,46 +754,84 @@ git commit -m "feat: market index BB position via yfinance"
 # backend/tests/test_screener.py
 import pytest
 import numpy as np
-from app.services.screener import calc_bb_position, is_squeeze, check_entry_criteria
+from app.services.screener import (
+    calc_bb_position, is_squeeze, check_entry_criteria,
+    find_50d_high_event, check_breakout_candle
+)
 
-def make_prices(n=60, trend="up_then_down"):
-    """產生測試用價格序列"""
-    base = 100.0
+def make_ohlcv(n=80, trend="up_then_down"):
+    """產生測試用 OHLCV 序列"""
     if trend == "up_then_down":
-        up = np.linspace(100, 130, 40)
-        down = np.linspace(130, 110, 20)
-        return list(np.concatenate([up, down]))
-    return [base + i * 0.1 for i in range(n)]
+        closes = list(np.concatenate([np.linspace(100, 130, 50), np.linspace(130, 110, 30)]))
+    else:
+        closes = [100.0 + i * 0.1 for i in range(n)]
+    opens  = [c * 0.995 for c in closes]   # 全紅K（收>開）
+    highs  = [c * 1.005 for c in closes]
+    lows   = [c * 0.990 for c in closes]
+    vols   = [1000] * n
+    # 突破日（第50天）出量
+    vols[49] = 3000
+    return opens, highs, lows, closes, vols
 
 def test_calc_bb_position_at_ma20():
-    prices = [100.0] * 60  # 完全平坦，當前在均線
-    pos = calc_bb_position(prices)
-    assert abs(pos) < 0.5  # 應接近 0
+    closes = [100.0] * 60
+    assert abs(calc_bb_position(closes)) < 0.5
 
-def test_calc_bb_position_at_upper():
-    base = 100.0
-    std = 2.0
-    prices = [base] * 59 + [base + 2 * std]  # 正好在上軌
-    pos = calc_bb_position(prices)
-    assert 9.0 <= pos <= 10.0
+def test_calc_bb_position_beyond_upper():
+    # 位階可超過 10
+    closes = [100.0] * 59 + [115.0]  # 遠超上軌
+    pos = calc_bb_position(closes)
+    assert pos > 10.0  # 不截斷
 
 def test_is_squeeze_detects_contraction():
-    # 帶寬收縮時應為 True
-    prices = [100.0 + 0.01 * i for i in range(60)]  # 極小波動
-    assert is_squeeze(prices) is True
+    closes = [100.0 + 0.01 * i for i in range(60)]
+    assert is_squeeze(closes) is True
+
+def test_find_50d_high_event_detects_breakout():
+    opens, highs, lows, closes, vols = make_ohlcv()
+    # 第50天是突破日（今日>=50日高，昨日<50日高）
+    event = find_50d_high_event(closes, vols, lookback_event=25)
+    assert event is not None
+    bb_peak, days_ago = event
+    assert bb_peak > 8
+    assert days_ago <= 25
+
+def test_find_50d_high_event_no_breakout():
+    # 平穩下跌，無突破
+    closes = list(np.linspace(130, 100, 80))
+    vols = [1000] * 80
+    assert find_50d_high_event(closes, vols) is None
+
+def test_check_breakout_candle_pass():
+    # 紅K + 出量 + 無長上影
+    assert check_breakout_candle(
+        open_=100, high=105, low=99, close=104,
+        volume=3000, ma20_vol=1000
+    ) is True
+
+def test_check_breakout_candle_fail_long_shadow():
+    # 長上影 (high-close)/(high-low) > 0.2
+    assert check_breakout_candle(
+        open_=100, high=110, low=99, close=101,
+        volume=3000, ma20_vol=1000
+    ) is False
 
 def test_check_entry_criteria_pass():
-    prices = make_prices(trend="up_then_down")
-    result = check_entry_criteria(prices)
+    opens, highs, lows, closes, vols = make_ohlcv()
+    result = check_entry_criteria(opens, highs, lows, closes, vols)
     assert result["passes"] is True
-    assert 0 <= result["bb_position"] <= 5
+    assert -3 <= result["bb_position"] <= 5
     assert result["bb_peak"] > 8
 
 def test_check_entry_criteria_fail_too_low():
-    # 已跌破 -3，不應通過
-    prices = [100.0] * 40 + list(np.linspace(100, 70, 20))
-    result = check_entry_criteria(prices)
-    assert result["passes"] is False
+    opens = [100.0] * 80
+    closes = list(np.concatenate([np.linspace(100, 130, 50), np.linspace(130, 70, 30)]))
+    highs = [c * 1.005 for c in closes]
+    lows = [c * 0.99 for c in closes]
+    vols = [1000] * 80
+    vols[49] = 3000
+    result = check_entry_criteria(opens, highs, lows, closes, vols)
+    assert result["passes"] is False  # 跌破 -3
 ```
 
 - [ ] **Step 2: 執行確認失敗**
@@ -772,12 +849,15 @@ import numpy as np
 from datetime import date
 
 def calc_bb_position(closes: list[float]) -> float:
-    """布林位階 = (Close - MA20) / (2 × STD20) × 10"""
+    """
+    布林位階 = (Close - MA20) / (2 × STD20) × 10
+    可超出 ±10（超出布林帶時延伸計算，不截斷）
+    """
     arr = np.array(closes, dtype=float)
     if len(arr) < 20:
         return 0.0
     ma20 = arr[-20:].mean()
-    std20 = arr[-20:].std(ddof=1)
+    std20 = arr[-20:].std(ddof=0)  # 總體標準差（與布林帶標準定義一致）
     if std20 < 1e-8:
         return 0.0
     return float((arr[-1] - ma20) / (2 * std20) * 10)
@@ -788,14 +868,13 @@ def calc_bb_bandwidth(closes: list[float]) -> float:
     if len(arr) < 20:
         return 0.0
     ma20 = arr.mean()
-    std20 = arr.std(ddof=1)
+    std20 = arr.std(ddof=0)
     return float(4 * std20 / ma20) if ma20 > 0 else 0.0
 
 def is_squeeze(closes: list[float]) -> bool:
     """盤整確認: 最近5日中 ≥3日帶寬 < 帶寬_MA20 × 0.85"""
     if len(closes) < 40:
         return False
-    # 計算過去 25 日每日帶寬，取 MA20
     bws = []
     for i in range(len(closes) - 25, len(closes)):
         bws.append(calc_bb_bandwidth(closes[:i+1]))
@@ -803,44 +882,119 @@ def is_squeeze(closes: list[float]) -> bool:
         return False
     bw_ma20 = np.mean(bws[:20])
     recent_5 = bws[-5:]
-    squeeze_days = sum(1 for bw in recent_5 if bw < bw_ma20 * 0.85)
-    return squeeze_days >= 3
+    return sum(1 for bw in recent_5 if bw < bw_ma20 * 0.85) >= 3
 
-def find_peak_bb(closes: list[float], lookback: int = 60) -> tuple[float, int]:
-    """在最近 lookback 日內找 BB 位階最高點，回傳 (peak_bb, days_ago)"""
-    if len(closes) < 20:
-        return 0.0, 0
-    best_pos = -999.0
-    best_idx = 0
-    window = closes[-lookback:] if len(closes) >= lookback else closes
-    for i in range(20, len(window) + 1):
-        pos = calc_bb_position(window[:i])
-        if pos > best_pos:
-            best_pos = pos
-            best_idx = len(window) - i  # days ago
-    return best_pos, best_idx
+def check_breakout_candle(
+    open_: float, high: float, low: float, close: float,
+    volume: int, ma20_vol: float
+) -> bool:
+    """
+    驗證創高當日 K 棒形態：
+    1. 紅K（收 > 開）
+    2. 出量（成交量 > 20日均量 × 2，漲停除外）
+    3. 上影線 < (高 - 低) × 0.2
+    """
+    if close <= open_:  # 非紅K
+        return False
+    is_limit_up = (high == close)  # 漲停鎖住，量不足也通過
+    if not is_limit_up and volume < ma20_vol * 2:
+        return False
+    candle_range = high - low
+    upper_shadow = high - close
+    if candle_range > 0 and upper_shadow / candle_range > 0.2:
+        return False
+    return True
 
-def check_entry_criteria(closes: list[float]) -> dict:
+def find_50d_high_event(
+    closes: list[float],
+    volumes: list[int],
+    opens: list[float] = None,
+    highs: list[float] = None,
+    lows: list[float] = None,
+    lookback_event: int = 20,
+) -> tuple[float, int] | None:
+    """
+    在最近 lookback_event 日內找符合條件的50日新高突破事件。
+    條件：
+      - 今日收盤 > 50日最高收盤 且 昨日收盤 < 50日最高收盤（突破當天）
+      - 創高當日 check_breakout_candle 通過
+      - 創高當日 BB 位階 > 8
+    回傳 (bb_peak, days_ago) 或 None
+    """
+    n = len(closes)
+    if n < 52:  # 至少需要 50日高 + 1日前 + 1日當天
+        return None
+
+    for days_ago in range(lookback_event):
+        idx = n - 1 - days_ago
+        if idx < 51:
+            break
+
+        today_close = closes[idx]
+        yesterday_close = closes[idx - 1]
+        # 50日最高收盤（不含當天）
+        high_50d = max(closes[idx - 50: idx])
+
+        if today_close < high_50d or yesterday_close >= high_50d:
+            continue  # 不是突破當天
+
+        # K 棒形態驗證
+        if opens and highs and lows:
+            ma20_vol = float(np.mean(volumes[max(0, idx-20): idx])) if idx >= 20 else 0
+            if not check_breakout_candle(
+                opens[idx], highs[idx], lows[idx], closes[idx],
+                volumes[idx], ma20_vol
+            ):
+                continue
+
+        # BB 位階驗證
+        bb_peak = calc_bb_position(closes[:idx + 1])
+        if bb_peak <= 8:
+            continue
+
+        return bb_peak, days_ago
+
+    return None
+
+def check_entry_criteria(
+    opens: list[float],
+    highs: list[float],
+    lows: list[float],
+    closes: list[float],
+    volumes: list[int],
+) -> dict:
     """
     篩選條件:
-    1. 過去 60 日有創高（BB位階 > 8）
-    2. 創高在 20 個交易日內
-    3. 當前 BB 位階 0~5（拉回到月線附近但未跌破 -3）
+    1. 近20日內有50日新高突破事件（出量+紅K+無長上影+BB位階>8）
+    2. 當前 BB 位階 -3 ~ 5（拉回到月線附近）
+    3. 趨勢保護：MA20 > MA60, MA60 斜率>0, 收盤>MA60
     """
     bb_now = calc_bb_position(closes)
-    bb_peak, days_ago = find_peak_bb(closes, lookback=60)
+    event = find_50d_high_event(closes, volumes, opens, highs, lows, lookback_event=20)
     squeeze = is_squeeze(closes)
 
+    # 趨勢保護
+    arr = np.array(closes, dtype=float)
+    trend_ok = False
+    if len(arr) >= 60:
+        ma20 = arr[-20:].mean()
+        ma60 = arr[-60:].mean()
+        ma60_prev = arr[-61:-1].mean() if len(arr) >= 61 else ma60
+        trend_ok = bool(ma20 > ma60 and ma60 > ma60_prev and arr[-1] > ma60)
+
     passes = (
-        bb_peak > 8
-        and days_ago <= 20
+        event is not None
         and -3 <= bb_now <= 5
+        and trend_ok
     )
+
+    bb_peak, peak_days_ago = event if event else (0.0, 0)
     return {
         "bb_position": round(bb_now, 2),
         "bb_peak": round(bb_peak, 2),
-        "peak_days_ago": days_ago,
+        "peak_days_ago": peak_days_ago,
         "is_squeeze": squeeze,
+        "trend_ok": trend_ok,
         "passes": passes,
     }
 
@@ -852,35 +1006,68 @@ def calc_vol_ratio(volumes: list[int]) -> float:
     prev = np.mean(volumes[-10:-5])
     return float(recent / prev) if prev > 0 else 1.0
 
+def calc_chip_ratios(inst_rows: list, capital_lots: float) -> dict:
+    """
+    計算法人買超/股本比率（6日 + 12日）
+    inst_rows: 從 DB 取出的 Institutional 記錄（按日期升序）
+    capital_lots: 股本（張），來自 StockList.capital
+    """
+    if not inst_rows or capital_lots <= 0:
+        return {"chip_ratio_6d": 0.0, "chip_ratio_12d": 0.0,
+                "foreign_6d_net": 0.0, "trust_6d_net": 0.0}
+
+    rows_6 = inst_rows[-6:]
+    rows_12 = inst_rows[-12:]
+    f6 = sum(r.foreign_net for r in rows_6)
+    t6 = sum(r.trust_net for r in rows_6)
+    f12 = sum(r.foreign_net for r in rows_12)
+    t12 = sum(r.trust_net for r in rows_12)
+
+    return {
+        "foreign_6d_net": f6,
+        "trust_6d_net": t6,
+        "chip_ratio_6d": round((f6 + t6) / capital_lots * 100, 3),
+        "chip_ratio_12d": round((f12 + t12) / capital_lots * 100, 3),
+    }
+
 def calc_score(result: dict, chip: dict, market_bb_drop: float) -> float:
     """
     綜合評分 (0~100)
-    - BB 位階越低分越高（拉回越深越有機會）
-    - 主力籌碼指標加分
-    - RS 優於大盤加分
+    - BB 位階越靠近 0~2 分越高（25%）
+    - 法人買超/股本（6日+12日各滿1%加分）（25%）
+    - 量縮（拉回量比 < 0.5）（20%）
+    - RS 優於大盤（15%）
+    - 盤整突破加分（15%）
     """
     score = 50.0
     bb = result["bb_position"]
-    # BB 0~5: 位階越靠近 2~3 最佳，加分
-    score += max(0, 5 - abs(bb - 2.5)) * 3
-    # 三大法人 5 日淨買超 > 0
-    if chip.get("foreign_5d_net", 0) > 0:
-        score += 10
-    if chip.get("trust_5d_net", 0) > 0:
-        score += 10
-    # 融資增加扣分（散戶追高）
+
+    # BB 位階（25%，最高 25 分）
+    score += max(0, (5 - abs(bb - 1.5)) / 5 * 25)
+
+    # 法人籌碼（25%）
+    if chip.get("chip_ratio_6d", 0) >= 1.0:
+        score += 12.5
+    if chip.get("chip_ratio_12d", 0) >= 1.0:
+        score += 12.5
+
+    # 融資扣分（散戶追高）
     if chip.get("margin_5d_chg", 0) > 0.05:
         score -= 10
+
     # 大戶人數增加加分
     if chip.get("holders_1000_chg", 0) > 0:
-        score += 10
-    # 盤整加分
-    if result.get("is_squeeze"):
         score += 5
-    # RS: 個股 BB 降幅 < 大盤 × 1.2 加分
+
+    # 盤整加分（15%）
+    if result.get("is_squeeze"):
+        score += 15
+
+    # RS（15%）：個股 BB 降幅 < 大盤降幅 × 1.2
     stock_bb_drop = result["bb_peak"] - result["bb_position"]
-    if stock_bb_drop < market_bb_drop * 1.2:
-        score += 10
+    if market_bb_drop > 0 and stock_bb_drop < market_bb_drop * 1.2:
+        score += 15
+
     return round(min(100, max(0, score)), 1)
 ```
 
@@ -1005,20 +1192,21 @@ async def job4_screener():
     if await _already_fetched("job4", today):
         return
     try:
-        market_bb = fetch_twii_bb_position()
+        market_bb_peak, market_bb_now = fetch_twii_bb_stats()
+        market_bb_drop = max(0, market_bb_peak - market_bb_now)
         async with AsyncSessionLocal() as db:
             stocks = (await db.execute(select(StockList))).scalars().all()
         results = []
         for stock in stocks:
-            closes, volumes = await _get_price_series(stock.code, days=90)
-            if len(closes) < 25:
+            closes, volumes, opens, highs, lows = await _get_price_series(stock.code, days=90)
+            if len(closes) < 55:  # 需要足夠歷史計算50日高+MA60
                 continue
-            entry = check_entry_criteria(closes)
+            entry = check_entry_criteria(opens, highs, lows, closes, volumes)
             if not entry["passes"]:
                 continue
-            chip = await _get_chip_summary(stock.code, today)
+            chip = await _get_chip_summary(stock.code, today, stock.capital)
             vol_ratio = calc_vol_ratio(volumes)
-            score = calc_score(entry, chip, abs(market_bb))
+            score = calc_score(entry, chip, market_bb_drop)
             results.append(ScreeningResult(
                 code=stock.code,
                 name=stock.name,
@@ -1042,7 +1230,8 @@ async def job4_screener():
         await _log_fetch("job4", today, "failed")
         logger.error(f"job4 failed: {e}")
 
-async def _get_price_series(code: str, days: int = 90) -> tuple[list[float], list[int]]:
+async def _get_price_series(code: str, days: int = 120) -> tuple[list, list, list, list, list]:
+    """回傳 (opens, highs, lows, closes, volumes)，取更多天確保 MA60 + 50日高有效"""
     cutoff = date.today() - timedelta(days=days)
     async with AsyncSessionLocal() as db:
         result = await db.execute(
@@ -1051,14 +1240,21 @@ async def _get_price_series(code: str, days: int = 90) -> tuple[list[float], lis
             .order_by(DailyPrice.trade_date)
         )
         rows = result.scalars().all()
-    return [r.close for r in rows], [r.volume for r in rows]
+    return (
+        [r.open for r in rows],
+        [r.high for r in rows],
+        [r.low for r in rows],
+        [r.close for r in rows],
+        [r.volume for r in rows],
+    )
 
-async def _get_chip_summary(code: str, today: date) -> dict:
+async def _get_chip_summary(code: str, today: date, capital_lots: float) -> dict:
+    cutoff_12d = today - timedelta(days=17)  # 多抓幾天保證有12個交易日
     cutoff_5d = today - timedelta(days=7)
     async with AsyncSessionLocal() as db:
         inst = (await db.execute(
             select(Institutional)
-            .where(and_(Institutional.code == code, Institutional.trade_date >= cutoff_5d))
+            .where(and_(Institutional.code == code, Institutional.trade_date >= cutoff_12d))
             .order_by(Institutional.trade_date)
         )).scalars().all()
         margin = (await db.execute(
@@ -1066,16 +1262,15 @@ async def _get_chip_summary(code: str, today: date) -> dict:
             .where(and_(MarginTrading.code == code, MarginTrading.trade_date >= cutoff_5d))
             .order_by(MarginTrading.trade_date)
         )).scalars().all()
-    foreign_5d = sum(r.foreign_net for r in inst[-5:]) if inst else 0
-    trust_5d = sum(r.trust_net for r in inst[-5:]) if inst else 0
+    from app.services.screener import calc_chip_ratios
+    chip = calc_chip_ratios(list(inst), capital_lots)
     margin_chg = 0.0
     if len(margin) >= 2:
         old_bal = margin[0].margin_balance
         new_bal = margin[-1].margin_balance
         margin_chg = (new_bal - old_bal) / old_bal if old_bal > 0 else 0.0
     return {
-        "foreign_5d_net": foreign_5d,
-        "trust_5d_net": trust_5d,
+        **chip,
         "margin_5d_chg": margin_chg,
         "holders_1000_chg": 0,  # 從 shareholding 補充
     }
