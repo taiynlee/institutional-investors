@@ -3,7 +3,12 @@ from datetime import date
 
 BASE_TWSE = "https://www.twse.com.tw/rwd/zh"
 
-_HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "zh-TW,zh;q=0.9,en-US;q=0.8",
+    "Referer": "https://www.twse.com.tw/",
+}
 
 
 def _get(url: str) -> dict:
@@ -28,10 +33,10 @@ async def fetch_institutional(trade_date: date) -> list[dict]:
             rows.append({
                 "code": r[0].strip(),
                 "trade_date": trade_date,
-                "foreign_net": _parse_num(r[4]),
-                "trust_net": _parse_num(r[7]),
-                "dealer_net": _parse_num(r[10]),
-                "three_major_net": _parse_num(r[11]),
+                "foreign_net": _parse_num(r[4]) / 1000,      # 股→張 (/1000)
+                "trust_net": _parse_num(r[7]) / 1000,
+                "dealer_net": _parse_num(r[10]) / 1000,
+                "three_major_net": _parse_num(r[11]) / 1000,
             })
         except (IndexError, ValueError):
             continue
@@ -77,24 +82,34 @@ async def fetch_margin(trade_date: date) -> list[dict]:
     if data.get("stat") != "OK":
         return []
     rows = []
+    # TWT93U fields: [代號, 名稱, 融資前日餘額, 賣出, 買進, 現券, 融資今日餘額, 次日限額,
+    #                  融券前日餘額, 當日賣出, 當日還券, 當日調整, 融券今日餘額, 次日限額, 備註]
     for r in data.get("data", []):
         try:
+            mb = _parse_int(r[6])
+            mb_prev = _parse_int(r[2])
+            sb = _parse_int(r[12])
+            sb_prev = _parse_int(r[8])
             rows.append({
                 "code": r[0].strip(),
                 "trade_date": trade_date,
-                "margin_balance": _parse_int(r[6]),
-                "margin_change": _parse_int(r[7]),
-                "short_balance": _parse_int(r[12]),
-                "short_change": _parse_int(r[13]),
+                "margin_balance": mb,
+                "margin_change": mb - mb_prev,
+                "short_balance": sb,
+                "short_change": sb - sb_prev,
             })
-        except (IndexError, ValueError):
+        except (IndexError, ValueError, AttributeError):
             continue
     return rows
 
 
-def _parse_num(s: str) -> float:
-    return float(s.replace(",", "").replace("+", "").strip() or "0")
+def _parse_num(s) -> float:
+    if isinstance(s, (int, float)):
+        return float(s)
+    return float(str(s).replace(",", "").replace("+", "").strip() or "0")
 
 
-def _parse_int(s: str) -> int:
-    return int(s.replace(",", "").replace("+", "").strip() or "0")
+def _parse_int(s) -> int:
+    if isinstance(s, int):
+        return s
+    return int(str(s).replace(",", "").replace("+", "").strip() or "0")

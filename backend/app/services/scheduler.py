@@ -21,31 +21,49 @@ async def _already_fetched(job_name: str, fetch_date: date) -> bool:
     async with AsyncSessionLocal() as db:
         result = await db.execute(
             select(FetchLog).where(
-                and_(FetchLog.job_name == job_name, FetchLog.fetch_date == fetch_date)
+                and_(
+                    FetchLog.job_name == job_name,
+                    FetchLog.fetch_date == fetch_date,
+                    FetchLog.status == "success",
+                )
             )
         )
         return result.scalar_one_or_none() is not None
 
 
 async def _log_fetch(job_name: str, fetch_date: date, status: str, rows: int = 0):
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
     async with AsyncSessionLocal() as db:
-        db.add(FetchLog(job_name=job_name, fetch_date=fetch_date, status=status, rows_fetched=rows))
+        stmt = pg_insert(FetchLog).values(
+            job_name=job_name, fetch_date=fetch_date, status=status, rows_fetched=rows
+        )
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["job_name", "fetch_date"],
+            set_={"status": status, "rows_fetched": rows},
+        )
+        await db.execute(stmt)
         await db.commit()
 
 
 async def job1_institutional_price():
-    """16:05 — 三大法人 + 日成交"""
+    """16:05 — 三大法人 + 日成交（只存 stock_list 內的上市上櫃電子股）"""
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
     today = date.today()
     if await _already_fetched("job1", today):
         return
     try:
-        rows = await fetch_institutional(today)
-        price_rows = await fetch_daily_price(today)
         async with AsyncSessionLocal() as db:
-            for r in rows:
-                db.add(Institutional(**r))
-            for r in price_rows:
-                db.add(DailyPrice(**r))
+            stock_codes = set(r[0] for r in (await db.execute(select(StockList.code))).all())
+        all_inst = await fetch_institutional(today)
+        rows = [r for r in all_inst if r["code"] in stock_codes]
+        price_rows = await fetch_daily_price(today, codes=stock_codes)
+        async with AsyncSessionLocal() as db:
+            if rows:
+                stmt = pg_insert(Institutional).values(rows)
+                await db.execute(stmt.on_conflict_do_nothing(index_elements=["code", "trade_date"]))
+            if price_rows:
+                stmt = pg_insert(DailyPrice).values(price_rows)
+                await db.execute(stmt.on_conflict_do_nothing(index_elements=["code", "trade_date"]))
             await db.commit()
         await _log_fetch("job1", today, "success", len(rows) + len(price_rows))
     except Exception as e:
@@ -54,16 +72,21 @@ async def job1_institutional_price():
 
 
 async def job2_margin():
-    """18:30 — 融資融券"""
+    """18:30 — 融資融券（只存 stock_list 內的上市上櫃電子股）"""
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
     today = date.today()
     if await _already_fetched("job2", today):
         return
     try:
-        rows = await fetch_margin(today)
         async with AsyncSessionLocal() as db:
-            for r in rows:
-                db.add(MarginTrading(**r))
-            await db.commit()
+            stock_codes = set(r[0] for r in (await db.execute(select(StockList.code))).all())
+        all_margin = await fetch_margin(today)
+        rows = [r for r in all_margin if r["code"] in stock_codes]
+        async with AsyncSessionLocal() as db:
+            if rows:
+                stmt = pg_insert(MarginTrading).values(rows)
+                await db.execute(stmt.on_conflict_do_nothing(index_elements=["code", "trade_date"]))
+                await db.commit()
         await _log_fetch("job2", today, "success", len(rows))
     except Exception as e:
         await _log_fetch("job2", today, "failed")
@@ -131,7 +154,9 @@ async def job4_screener():
                 passes=True,
                 **chip,
             ))
+        from sqlalchemy import delete
         async with AsyncSessionLocal() as db:
+            await db.execute(delete(ScreeningResult).where(ScreeningResult.calc_date == today))
             for r in results:
                 db.add(r)
             await db.commit()

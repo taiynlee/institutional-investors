@@ -6,6 +6,12 @@
 
 **Architecture:** FastAPI + PostgreSQL (Docker) 後端，每日 4 排程自動抓取 TWSE/FinMind 資料，21:00 後執行篩選並更新 dashboard；前端以 Vite + React + TypeScript 呈現深色主題看板，支援電子子族群標籤過濾。
 
+**資料範圍限制（重要）：**
+- **只處理台股上市（TWSE）和上櫃（TPEx）電子類股**，共約 1055 檔
+- TWSE T86、TWT93U 等 API 回傳全市場資料，**必須在寫入 DB 前過濾**，只保留 `stock_list` 中存在的代號
+- 非電子股、興櫃、創新板、ETF 等一律不寫入，不佔 DB 空間
+- `institutional` 和 `margin_trading` 欄位 `foreign_net`/`trust_net` 單位為**張**（TWSE T86 原始股數 ÷ 1000）
+
 **Tech Stack:** Python 3.12 / uv / FastAPI / SQLAlchemy async + asyncpg / Alembic / APScheduler / Scrapling / React 18 / TypeScript / Vite / Recharts / Docker Compose (PostgreSQL 16)
 
 ---

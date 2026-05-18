@@ -30,13 +30,24 @@ export function Dashboard() {
         </div>
 
         {status && (
-          <div className="flex gap-4 mb-6 p-3 bg-gray-900 rounded-lg flex-wrap">
-            {status.jobs.map(job => (
-              <div key={job.name} className="flex items-center gap-1">
-                <span className={`w-2 h-2 rounded-full ${job.status === 'success' ? 'bg-green-400' : 'bg-gray-600'}`} />
-                <span className="text-xs text-gray-400">{job.name} ({job.rows})</span>
-              </div>
-            ))}
+          <div className="flex gap-4 mb-6 p-3 bg-gray-900 rounded-lg flex-wrap items-center">
+            {status.jobs.length === 0 && (
+              <span className="text-xs text-gray-500">今日尚未執行更新排程</span>
+            )}
+            {status.jobs.map(job => {
+              const labels: Record<string, string> = {
+                job1: '法人+價量', job2: '融資融券', job3: '持股集中', job4: '篩選完成'
+              }
+              return (
+                <div key={job.name} className="flex items-center gap-1.5">
+                  <span className={`w-2 h-2 rounded-full ${job.status === 'success' ? 'bg-green-400' : 'bg-red-500'}`} />
+                  <span className="text-xs text-gray-400">
+                    {labels[job.name] ?? job.name}
+                    {job.rows > 0 && <span className="text-gray-600 ml-1">({job.rows})</span>}
+                  </span>
+                </div>
+              )
+            })}
             <span className="text-xs text-gray-500 ml-auto">篩出 {results.length} 檔</span>
           </div>
         )}

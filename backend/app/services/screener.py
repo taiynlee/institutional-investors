@@ -166,10 +166,10 @@ def calc_vol_ratio(volumes: list[int]) -> float:
 def calc_chip_ratios(inst_rows: list, capital_lots: float) -> dict:
     """
     計算法人買超/股本比率（6日 + 12日）
-    inst_rows: 從 DB 取出的 Institutional 記錄（按日期升序）
+    inst_rows: 從 DB 取出的 Institutional 記錄（按日期升序），foreign_net 單位：張
     capital_lots: 股本（張），來自 StockList.capital
     """
-    if not inst_rows or capital_lots <= 0:
+    if not inst_rows:
         return {
             "chip_ratio_6d": 0.0, "chip_ratio_12d": 0.0,
             "foreign_6d_net": 0.0, "trust_6d_net": 0.0,
@@ -181,6 +181,15 @@ def calc_chip_ratios(inst_rows: list, capital_lots: float) -> dict:
     t6 = sum(r.trust_net for r in rows_6)
     f12 = sum(r.foreign_net for r in rows_12)
     t12 = sum(r.trust_net for r in rows_12)
+
+    # capital_lots=0（未取得股本）→ 無法計算比率，但仍回傳淨買超張數供顯示
+    if capital_lots <= 0:
+        return {
+            "foreign_6d_net": f6,
+            "trust_6d_net": t6,
+            "chip_ratio_6d": 0.0,
+            "chip_ratio_12d": 0.0,
+        }
 
     return {
         "foreign_6d_net": f6,

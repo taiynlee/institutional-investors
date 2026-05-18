@@ -8,10 +8,12 @@ from app.db.base import engine, Base
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    import os
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-    await refresh_stock_list()
-    await backfill_90_days()
+    if os.getenv("SKIP_STARTUP_SYNC", "").lower() not in ("1", "true"):
+        await refresh_stock_list()
+        await backfill_90_days()
     scheduler = create_scheduler()
     scheduler.start()
     yield
