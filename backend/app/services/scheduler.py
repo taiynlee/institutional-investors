@@ -1,0 +1,256 @@
+import asyncio
+import logging
+from datetime import date, timedelta
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from sqlalchemy import select, and_
+from app.db.base import AsyncSessionLocal
+from app.db.models import (
+    FetchLog, DailyPrice, Institutional, MarginTrading,
+    Shareholding, ScreeningResult, StockList,
+)
+from app.services.fetcher.twse import fetch_institutional, fetch_daily_price, fetch_margin
+from app.services.fetcher.finmind import fetch_shareholding
+from app.services.fetcher.market import fetch_twii_bb_stats
+from app.services.fetcher.stock_list import fetch_electronic_stocks
+from app.services.screener import check_entry_criteria, calc_vol_ratio, calc_chip_ratios, calc_score
+
+logger = logging.getLogger(__name__)
+
+
+async def _already_fetched(job_name: str, fetch_date: date) -> bool:
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(
+            select(FetchLog).where(
+                and_(FetchLog.job_name == job_name, FetchLog.fetch_date == fetch_date)
+            )
+        )
+        return result.scalar_one_or_none() is not None
+
+
+async def _log_fetch(job_name: str, fetch_date: date, status: str, rows: int = 0):
+    async with AsyncSessionLocal() as db:
+        db.add(FetchLog(job_name=job_name, fetch_date=fetch_date, status=status, rows_fetched=rows))
+        await db.commit()
+
+
+async def job1_institutional_price():
+    """16:05 — 三大法人 + 日成交"""
+    today = date.today()
+    if await _already_fetched("job1", today):
+        return
+    try:
+        rows = await fetch_institutional(today)
+        price_rows = await fetch_daily_price(today)
+        async with AsyncSessionLocal() as db:
+            for r in rows:
+                db.add(Institutional(**r))
+            for r in price_rows:
+                db.add(DailyPrice(**r))
+            await db.commit()
+        await _log_fetch("job1", today, "success", len(rows) + len(price_rows))
+    except Exception as e:
+        await _log_fetch("job1", today, "failed")
+        logger.error(f"job1 failed: {e}")
+
+
+async def job2_margin():
+    """18:30 — 融資融券"""
+    today = date.today()
+    if await _already_fetched("job2", today):
+        return
+    try:
+        rows = await fetch_margin(today)
+        async with AsyncSessionLocal() as db:
+            for r in rows:
+                db.add(MarginTrading(**r))
+            await db.commit()
+        await _log_fetch("job2", today, "success", len(rows))
+    except Exception as e:
+        await _log_fetch("job2", today, "failed")
+        logger.error(f"job2 failed: {e}")
+
+
+async def job3_shareholding():
+    """20:30 — FinMind 持股集中度（只在週五執行）"""
+    today = date.today()
+    if today.weekday() != 4:
+        return
+    if await _already_fetched("job3", today):
+        return
+    try:
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(select(StockList.code))
+            codes = [r[0] for r in result.fetchall()]
+        total = 0
+        for code in codes:
+            rows = await fetch_shareholding(code, weeks=1)
+            async with AsyncSessionLocal() as db:
+                for r in rows:
+                    db.add(Shareholding(**r))
+                await db.commit()
+            total += len(rows)
+            await asyncio.sleep(0.5)
+        await _log_fetch("job3", today, "success", total)
+    except Exception as e:
+        await _log_fetch("job3", today, "failed")
+        logger.error(f"job3 failed: {e}")
+
+
+async def job4_screener():
+    """21:00 — 執行篩選，更新 screening_result"""
+    today = date.today()
+    if await _already_fetched("job4", today):
+        return
+    try:
+        market_bb_peak, market_bb_now = fetch_twii_bb_stats()
+        market_bb_drop = max(0, market_bb_peak - market_bb_now)
+        async with AsyncSessionLocal() as db:
+            stocks = (await db.execute(select(StockList))).scalars().all()
+        results = []
+        for stock in stocks:
+            opens, highs, lows, closes, volumes = await _get_price_series(stock.code)
+            if len(closes) < 65:
+                continue
+            entry = check_entry_criteria(opens, highs, lows, closes, volumes)
+            if not entry["passes"]:
+                continue
+            chip = await _get_chip_summary(stock.code, today, stock.capital)
+            vol_ratio = calc_vol_ratio(volumes)
+            score = calc_score(entry, chip, market_bb_drop)
+            results.append(ScreeningResult(
+                code=stock.code,
+                name=stock.name,
+                calc_date=today,
+                tags=stock.tags,
+                bb_position=entry["bb_position"],
+                bb_peak=entry["bb_peak"],
+                peak_date=None,
+                is_squeeze=entry["is_squeeze"],
+                vol_ratio=vol_ratio,
+                score=score,
+                passes=True,
+                **chip,
+            ))
+        async with AsyncSessionLocal() as db:
+            for r in results:
+                db.add(r)
+            await db.commit()
+        await _log_fetch("job4", today, "success", len(results))
+        logger.info(f"Screener found {len(results)} stocks")
+    except Exception as e:
+        await _log_fetch("job4", today, "failed")
+        logger.error(f"job4 failed: {e}")
+
+
+async def _get_price_series(code: str, days: int = 120) -> tuple[list, list, list, list, list]:
+    """回傳 (opens, highs, lows, closes, volumes)"""
+    cutoff = date.today() - timedelta(days=days)
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(
+            select(DailyPrice)
+            .where(and_(DailyPrice.code == code, DailyPrice.trade_date >= cutoff))
+            .order_by(DailyPrice.trade_date)
+        )
+        rows = result.scalars().all()
+    return (
+        [r.open for r in rows],
+        [r.high for r in rows],
+        [r.low for r in rows],
+        [r.close for r in rows],
+        [r.volume for r in rows],
+    )
+
+
+async def _get_chip_summary(code: str, today: date, capital_lots: float) -> dict:
+    cutoff_12d = today - timedelta(days=18)
+    cutoff_5d = today - timedelta(days=8)
+    async with AsyncSessionLocal() as db:
+        inst = (await db.execute(
+            select(Institutional)
+            .where(and_(Institutional.code == code, Institutional.trade_date >= cutoff_12d))
+            .order_by(Institutional.trade_date)
+        )).scalars().all()
+        margin = (await db.execute(
+            select(MarginTrading)
+            .where(and_(MarginTrading.code == code, MarginTrading.trade_date >= cutoff_5d))
+            .order_by(MarginTrading.trade_date)
+        )).scalars().all()
+
+    chip = calc_chip_ratios(list(inst), capital_lots)
+    margin_chg = 0.0
+    if len(margin) >= 2:
+        old_bal = margin[0].margin_balance
+        new_bal = margin[-1].margin_balance
+        margin_chg = (new_bal - old_bal) / old_bal if old_bal > 0 else 0.0
+
+    return {
+        **chip,
+        "margin_5d_chg": margin_chg,
+        "holders_1000_chg": 0,
+    }
+
+
+async def backfill_90_days():
+    """首次啟動時，補抓 90 日歷史（僅在 daily_price 為空時執行）"""
+    async with AsyncSessionLocal() as db:
+        count = (await db.execute(select(DailyPrice))).first()
+    if count is not None:
+        logger.info("Data exists, skipping backfill.")
+        return
+
+    logger.info("Starting 90-day backfill...")
+    today = date.today()
+    for i in range(90, -1, -1):
+        d = today - timedelta(days=i)
+        if d.weekday() >= 5:
+            continue
+        try:
+            rows_i = await fetch_institutional(d)
+            price_rows = await fetch_daily_price(d)
+            margin_rows = await fetch_margin(d)
+            async with AsyncSessionLocal() as db:
+                for r in rows_i:
+                    db.add(Institutional(**r))
+                for r in price_rows:
+                    db.add(DailyPrice(**r))
+                for r in margin_rows:
+                    db.add(MarginTrading(**r))
+                await db.commit()
+        except Exception as e:
+            logger.warning(f"Backfill {d} failed: {e}")
+        await asyncio.sleep(1)
+    logger.info("Backfill complete.")
+
+
+async def refresh_stock_list():
+    """更新電子股清單（含股本）"""
+    rows = await fetch_electronic_stocks()
+    if not rows:
+        return
+    from app.services.fetcher.finmind import fetch_stock_capital
+    from app.db.models import StockList
+    from datetime import datetime
+    async with AsyncSessionLocal() as db:
+        for r in rows:
+            capital = await fetch_stock_capital(r["code"])
+            existing = (await db.execute(
+                select(StockList).where(StockList.code == r["code"])
+            )).scalar_one_or_none()
+            if existing:
+                existing.name = r["name"]
+                existing.tags = r["tags"]
+                existing.capital = capital
+                existing.updated_at = datetime.utcnow()
+            else:
+                db.add(StockList(**r, capital=capital))
+        await db.commit()
+    logger.info(f"Stock list updated: {len(rows)} stocks")
+
+
+def create_scheduler() -> AsyncIOScheduler:
+    scheduler = AsyncIOScheduler(timezone="Asia/Taipei")
+    scheduler.add_job(job1_institutional_price, "cron", hour=16, minute=5)
+    scheduler.add_job(job2_margin, "cron", hour=18, minute=30)
+    scheduler.add_job(job3_shareholding, "cron", hour=20, minute=30)
+    scheduler.add_job(job4_screener, "cron", hour=21, minute=0)
+    return scheduler
