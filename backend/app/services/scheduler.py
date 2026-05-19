@@ -295,10 +295,57 @@ async def refresh_stock_list():
     logger.info(f"Stock list updated: {len(rows)} stocks")
 
 
+async def job5_notify():
+    """23:00 — LINE 推播今日篩選結果"""
+    today = date.today()
+    if await _already_fetched("job5", today):
+        return
+    try:
+        async with AsyncSessionLocal() as db:
+            results = (await db.execute(
+                select(ScreeningResult)
+                .where(ScreeningResult.calc_date == today)
+                .order_by(ScreeningResult.score.desc())
+            )).scalars().all()
+
+        if not results:
+            await _log_fetch("job5", today, "skipped")
+            logger.info("No screening results today, skip LINE notify")
+            return
+
+        lines = [f"📊 今日篩選結果（{today}）共 {len(results)} 檔\n"]
+        for r in results:
+            tags = r.tags or ""
+            strategy = next((t for t in reversed(tags.split()) if t in ("A", "B", "A+B")), "")
+            icon = "🔴" if r.score >= 80 else "🟡"
+            lines.append(
+                f"{icon} {r.code} {r.name} [{strategy}] 分={r.score:.0f}\n"
+                f"   BB={r.bb_position:.1f} chip1d={r.chip_ratio_1d:.2f}% chip6d={r.chip_ratio_6d:.2f}%"
+            )
+
+        message = "\n".join(lines)
+
+        import subprocess
+        proc = subprocess.run(
+            ["/home/tommy0322/claude-line-bot/.venv/bin/python", "send.py", message],
+            cwd="/home/tommy0322/claude-line-bot",
+            capture_output=True, text=True, timeout=30,
+        )
+        if proc.returncode != 0:
+            raise RuntimeError(proc.stderr.strip())
+
+        await _log_fetch("job5", today, "success", len(results))
+        logger.info(f"LINE notify sent: {len(results)} stocks")
+    except Exception as e:
+        await _log_fetch("job5", today, "failed")
+        logger.error(f"job5 failed: {e}")
+
+
 def create_scheduler() -> AsyncIOScheduler:
     scheduler = AsyncIOScheduler(timezone="Asia/Taipei")
     scheduler.add_job(job1_institutional_price, "cron", hour=16, minute=5)
     scheduler.add_job(job2_margin, "cron", hour=18, minute=30)
     scheduler.add_job(job3_shareholding, "cron", hour=20, minute=30)
     scheduler.add_job(job4_screener, "cron", hour=21, minute=0)
+    scheduler.add_job(job5_notify, "cron", hour=23, minute=0)
     return scheduler
