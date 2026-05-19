@@ -22,6 +22,13 @@
 ![dashboard](docs/screenshots/dashboard.png)
 
 ---
+
+## 用 Line 通知
+
+![dashboard](docs/screenshots/line.png)
+
+---
+
 ## 篩選邏輯
 
 ### 入場條件總覽

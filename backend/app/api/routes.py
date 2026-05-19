@@ -1,4 +1,3 @@
-import json
 from datetime import date
 from typing import Optional
 from fastapi import APIRouter, Depends, Query
@@ -26,7 +25,7 @@ async def get_screener_results(
         tag_list = [t.strip() for t in tags.split(",")]
         results = [
             r for r in results
-            if any(t in json.loads(r.tags or "[]") for t in tag_list)
+            if any(t in (r.tags or "").split() for t in tag_list)
         ]
     if min_score > 0:
         results = [r for r in results if r.score >= min_score]
@@ -69,7 +68,7 @@ def _format_result(r: ScreeningResult) -> dict:
         "code": r.code,
         "name": r.name,
         "calc_date": str(r.calc_date),
-        "tags": json.loads(r.tags or "[]"),
+        "tags": r.tags.split() if r.tags else [],
         "bb_position": r.bb_position,
         "bb_peak": r.bb_peak,
         "peak_days_ago": 0,
