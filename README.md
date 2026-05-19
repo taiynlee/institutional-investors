@@ -23,7 +23,7 @@
 
 ---
 
-## 用 Line 通知
+## 可結合 Line 通知，當然你也可以外掛券商 API 直接下單 
 
 ![dashboard](docs/screenshots/line.png)
 
