@@ -116,7 +116,7 @@ async def step3_screener():
 
     today = date.today()
     results = []
-    cutoff = today - timedelta(days=120)
+    cutoff = today - timedelta(days=200)
 
     from sqlalchemy import and_
 
@@ -127,7 +127,7 @@ async def step3_screener():
                 .where(and_(DailyPrice.code == stock.code, DailyPrice.trade_date >= cutoff))
                 .order_by(DailyPrice.trade_date)
             )).scalars().all()
-        if len(rows) < 52:
+        if len(rows) < 65:
             continue
 
         opens = [r.open for r in rows]
@@ -139,8 +139,6 @@ async def step3_screener():
         entry = check_entry_criteria(opens, highs, lows, closes, volumes)
         if not entry["passes"]:
             continue
-
-        vol_ratio = calc_vol_ratio(volumes)
 
         # 法人籌碼
         inst_cutoff = today - timedelta(days=20)
@@ -158,37 +156,56 @@ async def step3_screener():
 
         chip = calc_chip_ratios(inst_rows, stock.capital)
 
-        # 融資5日變化
+        chip["margin_5d_chg"] = 0.0
         if len(margin_rows) >= 5:
             mb_now = margin_rows[-1].margin_balance
             mb_5d = margin_rows[-5].margin_balance
             chip["margin_5d_chg"] = float((mb_now - mb_5d) / mb_5d) if mb_5d > 0 else 0.0
-        else:
-            chip["margin_5d_chg"] = 0.0
         chip["holders_1000_chg"] = 0
 
-        # 法人硬門檻：6日或12日買超/股本 >= 1%
-        if stock.capital > 0:
-            if chip["chip_ratio_6d"] < 1.0 and chip["chip_ratio_12d"] < 1.0:
-                continue
+        # A 策略：chip_1d ≥ 1%（今日主力剛發動）AND chip_12d > 0
+        a_chip_ok = (
+            chip.get("chip_ratio_1d", 0) >= 1.0
+            and chip.get("chip_ratio_12d", 0) > 0
+        )
+        # B 策略：chip_6d ≥ 1% AND chip_12d ≥ 1%
+        b_chip_ok = (
+            chip.get("chip_ratio_6d", 0) >= 1.0
+            and chip.get("chip_ratio_12d", 0) >= 1.0
+        )
+        a_passes = entry["passes_A"] and a_chip_ok
+        b_passes = entry["passes_B_price"] and b_chip_ok
+        if not (a_passes or b_passes):
+            continue
 
+        # 標記入場策略
+        if a_passes and b_passes:
+            strategy_tag = "A+B"
+        elif a_passes:
+            strategy_tag = "A"
+        else:
+            strategy_tag = "B"
+        tags = " ".join(filter(None, [stock.tags, strategy_tag]))
+
+        vol_ratio = calc_vol_ratio(volumes)
         score = calc_score(entry, chip, market_bb_drop)
 
         results.append(ScreeningResult(
             code=stock.code,
             name=stock.name,
             calc_date=today,
-            tags=stock.tags,
+            tags=tags,
             bb_position=entry["bb_position"],
             bb_peak=entry["bb_peak"],
             peak_date=None,
+            peak_days_ago=entry["peak_days_ago"],
             is_squeeze=entry["is_squeeze"],
             vol_ratio=vol_ratio,
             score=score,
             passes=True,
             **chip,
         ))
-        print(f"  ✓ {stock.code} {stock.name} BB={entry['bb_position']} score={score}")
+        print(f"  ✓ {stock.code} {stock.name} [{strategy_tag}] BB={entry['bb_position']} score={score}")
 
     from sqlalchemy import delete as sa_delete
     async with AsyncSessionLocal() as db:
@@ -204,12 +221,16 @@ async def main():
     args = sys.argv[1:]
     skip_step1 = "--skip-step1" in args
     skip_prices = "--skip-prices" in args
+    days = 90
+    for a in args:
+        if a.startswith("--days="):
+            days = int(a.split("=", 1)[1])
 
     if not skip_step1:
         await step1_stock_list()
     else:
         print("Step 1: 跳過（stock_list 已有資料）")
-    await step2_backfill(90, skip_prices=skip_prices)
+    await step2_backfill(days, skip_prices=skip_prices)
     await step3_screener()
     print("\n完成！開啟 http://localhost:5173 查看儀表板")
 

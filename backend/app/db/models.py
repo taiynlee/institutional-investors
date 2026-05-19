@@ -82,6 +82,7 @@ class ScreeningResult(Base):
     # 籌碼（法人用股本正規化）
     foreign_6d_net: Mapped[float] = mapped_column(Float, default=0)
     trust_6d_net: Mapped[float] = mapped_column(Float, default=0)
+    chip_ratio_1d: Mapped[float] = mapped_column(Float, default=0)   # (外資+投信)當日/股本 %
     chip_ratio_6d: Mapped[float] = mapped_column(Float, default=0)   # (外資+投信)6日/股本 %
     chip_ratio_12d: Mapped[float] = mapped_column(Float, default=0)  # (外資+投信)12日/股本 %
     margin_5d_chg: Mapped[float] = mapped_column(Float, default=0)

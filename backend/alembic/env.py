@@ -22,6 +22,13 @@ from app.db.base import Base
 from app.db import models  # noqa: F401  確保所有模型被載入
 target_metadata = Base.metadata
 
+# 優先使用環境變數 DATABASE_URL 覆蓋 alembic.ini 中的預設值
+db_url = os.environ.get("DATABASE_URL")
+if db_url:
+    # asyncpg driver 不支援 alembic sync migration，改用 psycopg2
+    db_url = db_url.replace("postgresql+asyncpg://", "postgresql+psycopg2://")
+    config.set_main_option("sqlalchemy.url", db_url)
+
 # other values from the config, defined by the needs of env.py,
 # can be acquired:
 # my_important_option = config.get_main_option("my_important_option")

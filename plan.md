@@ -2,7 +2,13 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- X`) syntax for tracking.
 
-**Goal:** 篩選台股電子類股中「創60日新高後拉回但主力未出場」的標的，以布林位階量化拉回程度，結合三大法人/融資/持股集中度判斷籌碼狀態，並以 React dashboard 呈現。
+**Goal:** 篩選台股電子類股（上市+上櫃，共約1055檔）中符合以下**入場條件 A 或 B** 的標的，以 React dashboard 呈現：
+
+**入場 = A or B**
+- **A（突破當日）：** BB帶寬壓縮 + 今日創30日新高 + 今日出量≥MA20×1.5 + chip_6d≥1% AND chip_12d>0 + 趨勢保護
+- **B（創高後拉回）：** 近50交易日內曾創30日新高 + 今日BB位階≤5 + chip_6d≥1% AND chip_12d≥1% + 趨勢保護
+
+**趨勢保護（A+B共用）：** MA20 > MA60 AND MA60斜率>0 AND 收盤>MA60
 
 **Architecture:** FastAPI + PostgreSQL (Docker) 後端，每日 4 排程自動抓取 TWSE/FinMind 資料，21:00 後執行篩選並更新 dashboard；前端以 Vite + React + TypeScript 呈現深色主題看板，支援電子子族群標籤過濾。
 

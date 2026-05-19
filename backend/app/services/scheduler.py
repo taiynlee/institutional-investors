@@ -138,16 +138,39 @@ async def job4_screener():
             if not entry["passes"]:
                 continue
             chip = await _get_chip_summary(stock.code, today, stock.capital)
+            # A 策略：chip_1d ≥ 1%（今日主力剛發動）AND chip_12d > 0
+            a_chip_ok = (
+                chip.get("chip_ratio_1d", 0) >= 1.0
+                and chip.get("chip_ratio_12d", 0) > 0
+            )
+            # B 策略：chip_6d ≥ 1% AND chip_12d ≥ 1%
+            b_chip_ok = (
+                chip.get("chip_ratio_6d", 0) >= 1.0
+                and chip.get("chip_ratio_12d", 0) >= 1.0
+            )
+            a_passes = entry["passes_A"] and a_chip_ok
+            b_passes = entry["passes_B_price"] and b_chip_ok
+            if not (a_passes or b_passes):
+                continue
+            # 標記入場策略
+            if a_passes and b_passes:
+                strategy_tag = "A+B"
+            elif a_passes:
+                strategy_tag = "A"
+            else:
+                strategy_tag = "B"
+            tags = " ".join(filter(None, [stock.tags, strategy_tag]))
             vol_ratio = calc_vol_ratio(volumes)
             score = calc_score(entry, chip, market_bb_drop)
             results.append(ScreeningResult(
                 code=stock.code,
                 name=stock.name,
                 calc_date=today,
-                tags=stock.tags,
+                tags=tags,
                 bb_position=entry["bb_position"],
                 bb_peak=entry["bb_peak"],
                 peak_date=None,
+                peak_days_ago=entry["peak_days_ago"],
                 is_squeeze=entry["is_squeeze"],
                 vol_ratio=vol_ratio,
                 score=score,
@@ -167,7 +190,7 @@ async def job4_screener():
         logger.error(f"job4 failed: {e}")
 
 
-async def _get_price_series(code: str, days: int = 120) -> tuple[list, list, list, list, list]:
+async def _get_price_series(code: str, days: int = 200) -> tuple[list, list, list, list, list]:
     """回傳 (opens, highs, lows, closes, volumes)"""
     cutoff = date.today() - timedelta(days=days)
     async with AsyncSessionLocal() as db:
