@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_db
-from app.db.models import ScreeningResult, FetchLog
+from app.db.models import ScreeningResult, FetchLog, DailyPrice
 
 router = APIRouter()
 
@@ -23,6 +23,17 @@ async def get_screener_results(
     if min_score > 0:
         results = [r for r in results if r.score >= min_score]
     return [_format_result(r) for r in results]
+
+
+@router.get("/api/price/{code}")
+async def get_price_history(code: str, db: AsyncSession = Depends(get_db)):
+    cutoff = date.today() - timedelta(days=65)
+    rows = (await db.execute(
+        select(DailyPrice)
+        .where(and_(DailyPrice.code == code, DailyPrice.trade_date >= cutoff))
+        .order_by(DailyPrice.trade_date)
+    )).scalars().all()
+    return [{"date": str(r.trade_date), "close": r.close} for r in rows]
 
 
 @router.get("/api/screener/{code}")

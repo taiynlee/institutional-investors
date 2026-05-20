@@ -1,6 +1,7 @@
 import type { ScreenerResult } from '../types'
 import { BBGauge } from './BBGauge'
 import { ChipBar } from './ChipBar'
+import { PriceSparkline } from './PriceSparkline'
 
 interface StockCardProps { stock: ScreenerResult }
 
@@ -34,6 +35,7 @@ export function StockCard({ stock }: StockCardProps) {
       </div>
 
       <ChipBar stock={stock} />
+      <PriceSparkline code={stock.code} />
     </div>
   )
 }
