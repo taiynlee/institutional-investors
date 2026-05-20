@@ -162,6 +162,8 @@ async def job4_screener():
             tags = strategy_tag
             vol_ratio = calc_vol_ratio(volumes)
             score = calc_score(entry, chip, market_bb_drop)
+            if score < 60:
+                continue
             results.append(ScreeningResult(
                 code=stock.code,
                 name=stock.name,

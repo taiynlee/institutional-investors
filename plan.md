@@ -1337,7 +1337,7 @@ _JOB_SCHEDULE = {
 @router.get("/api/screener")
 async def get_screener_results(
     db: AsyncSession = Depends(get_db),
-    min_score: float = Query(0),
+    min_score: float = Query(60),
     calc_date: Optional[date] = Query(None),
 ):
     target_date = calc_date or date.today()
