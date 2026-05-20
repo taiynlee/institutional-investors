@@ -28,7 +28,6 @@
 stock-main-force/
 ├── docker-compose.yml
 ├── config/
-│   └── sector_tags.yaml          # 電子子族群標籤設定
 ├── backend/
 │   ├── pyproject.toml
 │   ├── alembic.ini
@@ -64,8 +63,7 @@ stock-main-force/
         ├── components/
         │   ├── StockCard.tsx
         │   ├── BBGauge.tsx
-        │   ├── ChipBar.tsx
-        │   └── TagFilter.tsx
+        │   └── ChipBar.tsx
         └── pages/
             └── Dashboard.tsx
 ```
@@ -76,7 +74,6 @@ stock-main-force/
 
 **Files:**
 - Create: `docker-compose.yml`
-- Create: `config/sector_tags.yaml`
 
 - ○ **Step 1: 寫 docker-compose.yml**
 
@@ -122,52 +119,7 @@ volumes:
   pgdata:
 ```
 
-- ○ **Step 2: 寫 sector_tags.yaml**
-
-```yaml
-# 每檔股票可掛多個標籤
-# 格式: "代號": [tag1, tag2, ...]
-# 未列出的電子股視為 "other"
-
-tags:
-  "2330": [晶圓代工, AI]
-  "2454": [IC設計, AI]
-  "3034": [IC設計, AI]
-  "6770": [ABF載板]
-  "3037": [ABF載板]
-  "8046": [ABF載板]
-  "3008": [光學]
-  "2382": [伺服器, AI]
-  "3231": [伺服器]
-  "6669": [散熱]
-  "3591": [散熱]
-  "8081": [散熱]
-  "3105": [砷化鎵]
-  "2455": [砷化鎵]
-  "3443": [CPO, 光通訊]
-  "4977": [光通訊]
-  "6239": [光通訊, CPO]
-  "3035": [PCB]
-  "2374": [PCB]
-  "8046": [PCB, ABF載板]
-
-# 族群標籤清單（供前端 TagFilter 使用）
-all_tags:
-  - 晶圓代工
-  - IC設計
-  - AI
-  - ABF載板
-  - PCB
-  - 散熱
-  - 光通訊
-  - CPO
-  - 伺服器
-  - 砷化鎵
-  - 光學
-  - other
-```
-
-- ○ **Step 3: 驗證 PostgreSQL 啟動**
+- ○ **Step 2: 驗證 PostgreSQL 啟動**
 
 ```bash
 cd ~/stock-main-force
@@ -176,11 +128,11 @@ docker compose exec db psql -U stock -d stock_force -c "SELECT version();"
 ```
 Expected: PostgreSQL 16.x 版本字串
 
-- ○ **Step 4: Commit**
+- ○ **Step 3: Commit**
 
 ```bash
-git add docker-compose.yml config/sector_tags.yaml
-git commit -m "feat: add Docker Compose with PostgreSQL and sector_tags config"
+git add docker-compose.yml
+git commit -m "feat: add Docker Compose with PostgreSQL"
 ```
 
 ---
@@ -636,7 +588,7 @@ git commit -m "feat: FinMind shareholding + stock capital fetcher"
 
 ---
 
-## Task 5: 電子股清單 + sector_tags 載入
+## Task 5: 電子股清單載入
 
 **Files:**
 - Create: `backend/app/services/fetcher/stock_list.py`
@@ -644,35 +596,42 @@ git commit -m "feat: FinMind shareholding + stock capital fetcher"
 - ○ **Step 1: 實作 stock_list.py**
 
 ```python
-import json
-import yaml
-from pathlib import Path
-from scrapling.fetchers import Fetcher
+import requests
 from app.config import settings
 
-def load_sector_tags() -> dict[str, list[str]]:
-    path = Path(settings.config_path) / "sector_tags.yaml"
-    with open(path) as f:
-        cfg = yaml.safe_load(f)
-    return cfg.get("tags", {})
+ELECTRONIC_INDUSTRIES = {
+    "電子工業", "電子零組件業", "其他電子業", "其他電子類",
+    "光電業", "電腦及週邊設備業", "電子通路業", "半導體業",
+}
 
 async def fetch_electronic_stocks() -> list[dict]:
-    """從 TWSE BWIBBU_d 取得電子類股清單"""
-    url = "https://www.twse.com.tw/rwd/zh/afterTrading/BWIBBU_d?response=json&selectType=EW"
-    page = Fetcher.get(url, stealthy_headers=True)
-    if page.status != 200:
+    """FinMind TaiwanStockInfo — 電子類股清單（上市+上櫃）"""
+    try:
+        r = requests.get(
+            "https://api.finmindtrade.com/api/v4/data",
+            params={"dataset": "TaiwanStockInfo"},
+            timeout=20,
+            headers={"User-Agent": "Mozilla/5.0"},
+        )
+        data = r.json().get("data", [])
+    except Exception:
         return []
-    data = json.loads(page.text)
-    tags_map = load_sector_tags()
+
+    seen = set()
     rows = []
-    for r in data.get("data", []):
-        code = r[0].strip()
+    for item in data:
+        if item.get("industry_category", "") not in ELECTRONIC_INDUSTRIES:
+            continue
+        code = item.get("stock_id", "").strip()
+        if not code or code in seen:
+            continue
+        seen.add(code)
         rows.append({
             "code": code,
-            "name": r[1].strip(),
-            "market": "TWSE",
-            "sector": "電子工業",
-            "tags": json.dumps(tags_map.get(code, []), ensure_ascii=False),
+            "name": item.get("stock_name", "").strip(),
+            "market": "TWSE" if item.get("type") == "twse" else "TPEx",
+            "sector": item.get("industry_category", ""),
+            "tags": "",
         })
     return rows
 ```
@@ -1358,21 +1317,26 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
 - X **Step 2: 實作 routes.py**
 
 ```python
-from datetime import date
+from datetime import date, timedelta
 from typing import Optional
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_db
-from app.db.models import ScreeningResult, StockList, FetchLog
-import json
+from app.db.models import ScreeningResult, FetchLog
 
 router = APIRouter()
+
+_JOB_SCHEDULE = {
+    "job1": "16:05",
+    "job2": "18:30",
+    "job3": "20:30 (週五)",
+    "job4": "21:00",
+}
 
 @router.get("/api/screener")
 async def get_screener_results(
     db: AsyncSession = Depends(get_db),
-    tags: Optional[str] = Query(None),  # 逗號分隔標籤
     min_score: float = Query(0),
     calc_date: Optional[date] = Query(None),
 ):
@@ -1381,12 +1345,6 @@ async def get_screener_results(
         and_(ScreeningResult.calc_date == target_date, ScreeningResult.passes == True)
     ).order_by(ScreeningResult.score.desc())
     results = (await db.execute(q)).scalars().all()
-    if tags:
-        tag_list = [t.strip() for t in tags.split(",")]
-        results = [
-            r for r in results
-            if any(t in (r.tags or "").split() for t in tag_list)
-        ]
     if min_score > 0:
         results = [r for r in results if r.score >= min_score]
     return [_format_result(r) for r in results]
@@ -1405,20 +1363,27 @@ async def get_data_status(db: AsyncSession = Depends(get_db)):
         select(FetchLog).where(FetchLog.fetch_date == date.today())
         .order_by(FetchLog.job_name)
     )).scalars().all()
+    log_map = {l.job_name: l for l in logs}
+
+    def _fmt_job(job_name: str) -> dict:
+        l = log_map.get(job_name)
+        updated_at = None
+        if l and l.created_at:
+            taipei_dt = l.created_at + timedelta(hours=8)
+            updated_at = taipei_dt.strftime("%H:%M")
+        return {
+            "name": job_name,
+            "schedule": _JOB_SCHEDULE.get(job_name, ""),
+            "status": l.status if l else "pending",
+            "rows": l.rows_fetched if l else 0,
+            "updated_at": updated_at,
+        }
+
     return {
         "date": str(date.today()),
-        "jobs": [{"name": l.job_name, "status": l.status, "rows": l.rows_fetched} for l in logs],
+        "jobs": [_fmt_job(j) for j in ("job1", "job2", "job3", "job4")],
         "is_reliable": any(l.job_name == "job4" and l.status == "success" for l in logs),
     }
-
-@router.get("/api/tags")
-async def get_all_tags():
-    from app.services.fetcher.stock_list import load_sector_tags
-    from app.config import settings
-    import yaml
-    from pathlib import Path
-    cfg = yaml.safe_load(open(Path(settings.config_path) / "sector_tags.yaml"))
-    return {"tags": cfg.get("all_tags", [])}
 
 def _format_result(r: ScreeningResult) -> dict:
     return {
@@ -1428,7 +1393,7 @@ def _format_result(r: ScreeningResult) -> dict:
         "tags": r.tags.split() if r.tags else [],
         "bb_position": r.bb_position,
         "bb_peak": r.bb_peak,
-        "peak_days_ago": 0,
+        "peak_days_ago": r.peak_days_ago or 0,
         "is_squeeze": r.is_squeeze,
         "vol_ratio": r.vol_ratio,
         "foreign_6d_net": r.foreign_6d_net,
@@ -1704,45 +1669,11 @@ export function StockCard({ stock }: StockCardProps) {
 }
 ```
 
-- X **Step 5: 實作 TagFilter.tsx**
-
-```typescript
-// frontend/src/components/TagFilter.tsx
-interface TagFilterProps {
-  allTags: string[];
-  selected: string[];
-  onChange: (tags: string[]) => void;
-}
-
-export function TagFilter({ allTags, selected, onChange }: TagFilterProps) {
-  const toggle = (tag: string) => {
-    onChange(selected.includes(tag) ? selected.filter(t => t !== tag) : [...selected, tag]);
-  };
-  return (
-    <div className="flex flex-wrap gap-2 mb-6">
-      <button
-        onClick={() => onChange([])}
-        className={`px-3 py-1 rounded-full text-sm ${selected.length === 0 ? 'bg-blue-600 text-white' : 'bg-gray-800 text-gray-400'}`}
-      >全部</button>
-      {allTags.map(tag => (
-        <button
-          key={tag}
-          onClick={() => toggle(tag)}
-          className={`px-3 py-1 rounded-full text-sm transition-colors ${
-            selected.includes(tag) ? 'bg-blue-600 text-white' : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
-          }`}
-        >{tag}</button>
-      ))}
-    </div>
-  );
-}
-```
-
-- X **Step 6: Commit**
+- X **Step 5: Commit**
 
 ```bash
 git add frontend/src/
-git commit -m "feat: frontend components (BBGauge, StockCard, ChipBar, TagFilter)"
+git commit -m "feat: frontend components (BBGauge, StockCard, ChipBar)"
 ```
 
 ---
@@ -1757,25 +1688,37 @@ git commit -m "feat: frontend components (BBGauge, StockCard, ChipBar, TagFilter
 
 ```typescript
 // frontend/src/pages/Dashboard.tsx
-import { useState, useEffect } from 'react';
-import axios from 'axios';
 import { useScreener } from '../hooks/useScreener';
 import { StockCard } from '../components/StockCard';
-import { TagFilter } from '../components/TagFilter';
+import type { JobStatus } from '../types';
+
+const JOB_LABELS: Record<string, string> = {
+  job1: '法人+價量', job2: '融資融券', job3: '持股集中', job4: '篩選完成',
+};
+
+function JobStatusBadge({ job }: { job: JobStatus }) {
+  const done = job.status === 'success';
+  const failed = job.status === 'failed';
+  return (
+    <div className="flex flex-col items-center gap-0.5 min-w-[72px]">
+      <span className="text-xs text-gray-400 font-medium">{JOB_LABELS[job.name] ?? job.name}</span>
+      <span className="text-[10px] text-gray-600">{job.schedule}</span>
+      {done ? (
+        <span className="text-[10px] text-green-400">✓ {job.updated_at}</span>
+      ) : failed ? (
+        <span className="text-[10px] text-red-400">✗ 失敗</span>
+      ) : (
+        <span className="text-[10px] text-gray-600">等待中</span>
+      )}
+    </div>
+  );
+}
 
 export function Dashboard() {
-  const [selectedTags, setSelectedTags] = useState<string[]>([]);
-  const [allTags, setAllTags] = useState<string[]>([]);
-  const { results, status, loading } = useScreener(selectedTags);
-
-  useEffect(() => {
-    axios.get<{ tags: string[] }>('/api/tags').then(r => setAllTags(r.data.tags));
-  }, []);
-
+  const { results, status, loading } = useScreener();
   return (
     <div className="min-h-screen bg-gray-950 text-white p-6">
       <div className="max-w-7xl mx-auto">
-        {/* Header */}
         <div className="flex justify-between items-center mb-6">
           <div>
             <h1 className="text-2xl font-black text-white">台股電子股主力篩選</h1>
@@ -1788,24 +1731,14 @@ export function Dashboard() {
             <div className="text-xs text-gray-500">{status?.date} 21:00 後可信</div>
           </div>
         </div>
-
-        {/* Status Bar */}
         {status && (
-          <div className="flex gap-4 mb-6 p-3 bg-gray-900 rounded-lg">
-            {status.jobs.map(job => (
-              <div key={job.name} className="flex items-center gap-1">
-                <span className={`w-2 h-2 rounded-full ${job.status === 'success' ? 'bg-green-400' : 'bg-gray-600'}`} />
-                <span className="text-xs text-gray-400">{job.name}</span>
-              </div>
-            ))}
-            <span className="text-xs text-gray-500 ml-auto">篩出 {results.length} 檔</span>
+          <div className="flex gap-6 mb-6 p-4 bg-gray-900 rounded-lg flex-wrap items-start justify-between">
+            <div className="flex gap-6 flex-wrap">
+              {status.jobs.map(job => <JobStatusBadge key={job.name} job={job} />)}
+            </div>
+            <span className="text-xs text-gray-500 self-center">篩出 {results.length} 檔</span>
           </div>
         )}
-
-        {/* Tag Filter */}
-        <TagFilter allTags={allTags} selected={selectedTags} onChange={setSelectedTags} />
-
-        {/* Results Grid */}
         {loading ? (
           <div className="text-center text-gray-500 py-20">載入中...</div>
         ) : results.length === 0 ? (
@@ -1957,7 +1890,7 @@ git tag v0.1.0
 | 4 排程 | Task 8 (scheduler.py) |
 | 90日回填 | Task 8 (backfill_90_days) |
 | fetch_log 防重複 | Task 8 (_already_fetched) |
-| 族群標籤 YAML | Task 1 (sector_tags.yaml) |
+| 策略標籤 A/B/A+B | Task 8 (scheduler.py) |
 | RS vs 大盤 | Task 6 + Task 7 (calc_score) |
 | 21:00 後才可信 | Task 9 (is_reliable) |
 | React 深色 dashboard | Task 10-12 |

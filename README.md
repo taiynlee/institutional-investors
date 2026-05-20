@@ -244,7 +244,7 @@ institutional-investors/
 │   │   │   │   ├── finmind.py    # FinMind 持股集中度 + 股本
 │   │   │   │   ├── market.py     # yfinance 大盤指數（RS 基準）
 │   │   │   │   ├── price.py      # 歷史價格補抓
-│   │   │   │   └── stock_list.py # 電子股清單 + sector_tags
+│   │   │   │   └── stock_list.py # 電子股清單（FinMind）
 │   │   │   ├── screener.py       # BB 計算 + A/B 篩選邏輯 + 評分
 │   │   │   └── scheduler.py      # APScheduler 4 排程 + 90 日回填
 │   │   └── db/
@@ -258,8 +258,7 @@ institutional-investors/
 │   │   ├── components/
 │   │   │   ├── BBGauge.tsx   # 布林位階進度條
 │   │   │   ├── ChipBar.tsx   # 法人籌碼欄位
-│   │   │   ├── StockCard.tsx # 個股卡片
-│   │   │   └── TagFilter.tsx # 族群標籤篩選
+│   │   │   └── StockCard.tsx # 個股卡片（含策略徽章）
 │   │   ├── pages/
 │   │   │   └── Dashboard.tsx # 主儀表板頁面
 │   │   ├── hooks/
@@ -270,7 +269,6 @@ institutional-investors/
 │   ├── package.json
 │   └── vite.config.ts
 ├── config/
-│   └── sector_tags.yaml      # 電子子族群標籤設定
 ├── plan.md                   # 實作計劃（階段性任務）
 └── README.md                 # 本文件
 ```
@@ -300,11 +298,13 @@ institutional-investors/
 非交易日（週六、週日、國定假日）→ 跳過，不執行
 交易日自動執行流程：
 
-16:00  Job 1 — 抓三大法人 + 日成交資料（最早可用）
-18:30  Job 2 — 抓融資融券 + WantGoo 官股
-20:30  Job 3 — 抓 CMoney 分點資料 + FinMind 同步確認
-21:00  Job 4 — 執行篩選計算 + 生成投資建議 + 更新儀表板快取
+16:05  Job 1 — 抓三大法人 + 日成交資料
+18:30  Job 2 — 抓融資融券
+20:30  Job 3 — 抓 FinMind 持股集中度（僅週五）
+21:00  Job 4 — 執行篩選計算，更新 screening_result
 ```
+
+儀表板頂部顯示 4 個排程的執行狀態，完成後顯示台北時間更新時刻（如 `✓ 16:07`），尚未執行顯示「等待中」。
 
 > **注意：** yfinance 台股歷史資料通常當日晚間更新，若需當日收盤價建議優先用 TWSE API，yfinance 僅作備援。
 
@@ -474,7 +474,7 @@ docker compose up            # 全起（DB + 後端 + 前端）
 | `name` | VARCHAR(50) | 股票名稱 |
 | `market` | VARCHAR(10) | 上市 `TWSE` / 上櫃 `TPEx` |
 | `sector` | VARCHAR(50) | 產業別（電子工業等） |
-| `tags` | TEXT | 子族群標籤 JSON 陣列，如 `["AI","散熱"]` |
+| `tags` | TEXT | 留空（不再使用子族群標籤） |
 | `updated_at` | DATETIME | 清單最後更新時間 |
 
 #### `daily_price`
@@ -526,7 +526,7 @@ docker compose up            # 全起（DB + 後端 + 前端）
 |------|------|------|
 | `code` | VARCHAR(10) | 股票代號 |
 | `calc_date` | DATE | 計算日期 |
-| `tags` | TEXT | 子族群標籤（冗餘存放，加速查詢） |
+| `tags` | TEXT | 入場策略標籤：`A`、`B`、`A+B` |
 | `bb_position` | FLOAT | 當前布林位階（-10 ~ +10） |
 | `bb_peak` | FLOAT | 創高當日布林位階 |
 | `peak_date` | DATE | 創高日期 |
