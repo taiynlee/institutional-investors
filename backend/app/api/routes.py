@@ -55,7 +55,7 @@ async def get_data_status(db: AsyncSession = Depends(get_db)):
         updated_at = None
         if l and l.created_at:
             taipei_dt = l.created_at + timedelta(hours=8)
-            updated_at = taipei_dt.strftime("%H:%M")
+            updated_at = taipei_dt.strftime("%m/%d %H:%M")
         return {
             "name": job_name,
             "schedule": _JOB_SCHEDULE.get(job_name, ""),
