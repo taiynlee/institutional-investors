@@ -14,6 +14,8 @@ export interface ScreenerResult {
   chip_ratio_12d: number
   margin_5d_chg: number
   score: number
+  appearances_5d: number
+  streak: number
 }
 
 export interface JobStatus {

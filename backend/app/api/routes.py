@@ -9,6 +9,42 @@ from app.db.models import ScreeningResult, FetchLog, DailyPrice
 router = APIRouter()
 
 
+async def _appearance_stats(codes: list[str], target_date: date, db: AsyncSession) -> dict[str, dict]:
+    """近 5 個有篩選結果的交易日內，每檔的出現次數與連續天數。"""
+    dates_rows = (await db.execute(
+        select(ScreeningResult.calc_date)
+        .distinct()
+        .where(ScreeningResult.calc_date <= target_date)
+        .order_by(ScreeningResult.calc_date.desc())
+        .limit(5)
+    )).all()
+    last_5 = sorted([r[0] for r in dates_rows])
+
+    if not last_5:
+        return {c: {"appearances_5d": 1, "streak": 1} for c in codes}
+
+    hist = (await db.execute(
+        select(ScreeningResult.code, ScreeningResult.calc_date)
+        .where(and_(
+            ScreeningResult.code.in_(codes),
+            ScreeningResult.calc_date.in_(last_5),
+        ))
+    )).all()
+    appeared = {(r[0], r[1]) for r in hist}
+
+    stats = {}
+    for code in codes:
+        count = sum(1 for d in last_5 if (code, d) in appeared)
+        streak = 0
+        for d in sorted(last_5, reverse=True):
+            if (code, d) in appeared:
+                streak += 1
+            else:
+                break
+        stats[code] = {"appearances_5d": count, "streak": streak}
+    return stats
+
+
 @router.get("/api/screener")
 async def get_screener_results(
     db: AsyncSession = Depends(get_db),
@@ -22,7 +58,11 @@ async def get_screener_results(
     results = (await db.execute(q)).scalars().all()
     if min_score > 0:
         results = [r for r in results if r.score >= min_score]
-    return [_format_result(r) for r in results]
+
+    codes = [r.code for r in results]
+    stats = await _appearance_stats(codes, target_date, db) if codes else {}
+
+    return [_format_result(r, stats.get(r.code)) for r in results]
 
 
 @router.get("/api/price/{code}")
@@ -82,7 +122,9 @@ async def get_data_status(db: AsyncSession = Depends(get_db)):
     }
 
 
-def _format_result(r: ScreeningResult) -> dict:
+def _format_result(r: ScreeningResult, stats: dict | None = None) -> dict:
+    appearances_5d = stats["appearances_5d"] if stats else 1
+    streak = stats["streak"] if stats else 1
     return {
         "code": r.code,
         "name": r.name,
@@ -90,7 +132,7 @@ def _format_result(r: ScreeningResult) -> dict:
         "tags": r.tags.split() if r.tags else [],
         "bb_position": r.bb_position,
         "bb_peak": r.bb_peak,
-        "peak_days_ago": 0,
+        "peak_days_ago": r.peak_days_ago or 0,
         "is_squeeze": r.is_squeeze,
         "vol_ratio": r.vol_ratio,
         "foreign_6d_net": r.foreign_6d_net,
@@ -99,4 +141,6 @@ def _format_result(r: ScreeningResult) -> dict:
         "chip_ratio_12d": r.chip_ratio_12d,
         "margin_5d_chg": r.margin_5d_chg,
         "score": r.score,
+        "appearances_5d": appearances_5d,
+        "streak": streak,
     }
