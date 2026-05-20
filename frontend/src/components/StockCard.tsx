@@ -6,8 +6,7 @@ interface StockCardProps { stock: ScreenerResult }
 
 export function StockCard({ stock }: StockCardProps) {
   const scoreColor =
-    stock.score >= 70 ? 'text-green-400' :
-    stock.score >= 50 ? 'text-yellow-400' : 'text-gray-400'
+    stock.score >= 80 ? 'text-green-400' : 'text-yellow-400'
 
   return (
     <div className="bg-gray-900 border border-gray-700 rounded-xl p-4 hover:border-blue-500 transition-colors">
