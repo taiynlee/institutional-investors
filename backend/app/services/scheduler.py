@@ -159,7 +159,7 @@ async def job4_screener():
                 strategy_tag = "A"
             else:
                 strategy_tag = "B"
-            tags = " ".join(filter(None, [stock.tags, strategy_tag]))
+            tags = strategy_tag
             vol_ratio = calc_vol_ratio(volumes)
             score = calc_score(entry, chip, market_bb_drop)
             results.append(ScreeningResult(

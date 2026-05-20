@@ -16,8 +16,16 @@ export interface ScreenerResult {
   score: number
 }
 
+export interface JobStatus {
+  name: string
+  schedule: string
+  status: string
+  rows: number
+  updated_at: string | null
+}
+
 export interface DataStatus {
   date: string
-  jobs: { name: string; status: string; rows: number }[]
+  jobs: JobStatus[]
   is_reliable: boolean
 }
