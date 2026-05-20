@@ -65,6 +65,77 @@ async def get_screener_results(
     return [_format_result(r, stats.get(r.code)) for r in results]
 
 
+@router.get("/api/result")
+async def get_result_comparison(db: AsyncSession = Depends(get_db)):
+    """最近一次篩選結果 vs 次交易日收盤價比較。"""
+    # 最近一次篩選日（排除今天，確保已有次日價格）
+    pred_date_row = (await db.execute(
+        select(ScreeningResult.calc_date)
+        .distinct()
+        .where(ScreeningResult.calc_date < date.today())
+        .order_by(ScreeningResult.calc_date.desc())
+        .limit(1)
+    )).scalar_one_or_none()
+
+    if not pred_date_row:
+        return {"pred_date": None, "price_date": None, "rows": []}
+
+    pred_date = pred_date_row
+
+    # 取得那天的篩選結果
+    screened = (await db.execute(
+        select(ScreeningResult)
+        .where(ScreeningResult.calc_date == pred_date)
+        .order_by(ScreeningResult.score.desc())
+    )).scalars().all()
+
+    codes = [r.code for r in screened]
+    if not codes:
+        return {"pred_date": str(pred_date), "price_date": None, "rows": []}
+
+    # 篩選日收盤（昨收）
+    prev_prices = {r.code: r.close for r in (await db.execute(
+        select(DailyPrice)
+        .where(and_(DailyPrice.code.in_(codes), DailyPrice.trade_date == pred_date))
+    )).scalars().all()}
+
+    # 次交易日收盤（今收）— 找篩選日之後最近一天有資料的日期
+    next_price_row = (await db.execute(
+        select(DailyPrice.trade_date)
+        .where(and_(DailyPrice.code.in_(codes), DailyPrice.trade_date > pred_date))
+        .order_by(DailyPrice.trade_date)
+        .limit(1)
+    )).scalar_one_or_none()
+
+    if not next_price_row:
+        return {"pred_date": str(pred_date), "price_date": None, "rows": []}
+
+    price_date = next_price_row
+    next_prices = {r.code: r.close for r in (await db.execute(
+        select(DailyPrice)
+        .where(and_(DailyPrice.code.in_(codes), DailyPrice.trade_date == price_date))
+    )).scalars().all()}
+
+    rows = []
+    for s in screened:
+        prev = prev_prices.get(s.code)
+        nxt = next_prices.get(s.code)
+        if prev is None or nxt is None:
+            continue
+        chg = (nxt - prev) / prev * 100
+        rows.append({
+            "code": s.code,
+            "name": s.name,
+            "score": s.score,
+            "prev_close": prev,
+            "close": nxt,
+            "chg_pct": round(chg, 2),
+        })
+
+    rows.sort(key=lambda x: x["chg_pct"], reverse=True)
+    return {"pred_date": str(pred_date), "price_date": str(price_date), "rows": rows}
+
+
 @router.get("/api/price/{code}")
 async def get_price_history(code: str, db: AsyncSession = Depends(get_db)):
     cutoff = date.today() - timedelta(days=65)
