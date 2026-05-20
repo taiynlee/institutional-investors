@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react'
 import axios from 'axios'
-import { AreaChart, Area, ResponsiveContainer, Tooltip, ReferenceLine } from 'recharts'
 
 interface PricePoint { date: string; close: number }
 
@@ -15,48 +14,46 @@ export function PriceSparkline({ code }: { code: string }) {
 
   if (data.length < 5) return null
 
-  const min = Math.min(...data.map(d => d.close))
-  const max = Math.max(...data.map(d => d.close))
-  const last = data[data.length - 1].close
-  const first = data[0].close
+  const closes = data.map(d => d.close)
+  const min = Math.min(...closes)
+  const max = Math.max(...closes)
+  const range = max - min || 1
+  const first = closes[0]
+  const last = closes[closes.length - 1]
   const isUp = last >= first
   const color = isUp ? '#22c55e' : '#ef4444'
+  const pct = ((last - first) / first * 100).toFixed(1)
+
+  const W = 280
+  const H = 56
+  const points = closes.map((c, i) => {
+    const x = (i / (closes.length - 1)) * W
+    const y = H - ((c - min) / range) * H
+    return `${x.toFixed(1)},${y.toFixed(1)}`
+  }).join(' ')
+
+  const baseY = (H - ((first - min) / range) * H).toFixed(1)
 
   return (
     <div className="mt-3">
       <div className="flex justify-between text-[10px] text-gray-600 mb-0.5">
         <span>2M 走勢</span>
-        <span className={isUp ? 'text-green-400' : 'text-red-400'}>
-          {last.toFixed(1)} ({isUp ? '+' : ''}{((last - first) / first * 100).toFixed(1)}%)
-        </span>
+        <span style={{ color }}>{last.toFixed(1)} ({isUp ? '+' : ''}{pct}%)</span>
       </div>
-      <ResponsiveContainer width="100%" height={60}>
-        <AreaChart data={data} margin={{ top: 2, right: 0, left: 0, bottom: 2 }}>
-          <defs>
-            <linearGradient id={`grad-${code}`} x1="0" y1="0" x2="0" y2="1">
-              <stop offset="5%" stopColor={color} stopOpacity={0.3} />
-              <stop offset="95%" stopColor={color} stopOpacity={0} />
-            </linearGradient>
-          </defs>
-          <ReferenceLine y={first} stroke="#4b5563" strokeDasharray="2 2" />
-          <Area
-            type="monotone"
-            dataKey="close"
-            stroke={color}
-            strokeWidth={1.5}
-            fill={`url(#grad-${code})`}
-            dot={false}
-            isAnimationActive={false}
-          />
-          <Tooltip
-            contentStyle={{ background: '#111827', border: '1px solid #374151', fontSize: 11, padding: '2px 6px' }}
-            formatter={(v: number) => [v.toFixed(1), '']}
-            labelFormatter={(l: string) => l.slice(5)}
-          />
-        </AreaChart>
-      </ResponsiveContainer>
-      <div className="flex justify-between text-[10px] text-gray-700">
-        <span>{min.toFixed(0)}</span><span>{max.toFixed(0)}</span>
+      <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={H} preserveAspectRatio="none">
+        <line x1="0" y1={baseY} x2={W} y2={baseY} stroke="#374151" strokeWidth="1" strokeDasharray="3 3" />
+        <polyline
+          points={points}
+          fill="none"
+          stroke={color}
+          strokeWidth="1.5"
+          strokeLinejoin="round"
+          strokeLinecap="round"
+        />
+      </svg>
+      <div className="flex justify-between text-[10px] text-gray-700 mt-0.5">
+        <span>{data[0].date.slice(5)}</span>
+        <span>{data[data.length - 1].date.slice(5)}</span>
       </div>
     </div>
   )
