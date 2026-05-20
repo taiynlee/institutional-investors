@@ -20,7 +20,7 @@ export function StockCard({ stock }: StockCardProps) {
       </div>
 
       <div className="flex flex-wrap gap-1 mb-3">
-        {stock.tags.map(tag => (
+        {stock.tags.filter(t => ['A', 'B', 'A+B'].includes(t)).map(tag => (
           <span key={tag} className="px-2 py-0.5 bg-green-900 text-green-300 text-xs rounded-full font-semibold">策略 {tag}</span>
         ))}
         {stock.is_squeeze && (
