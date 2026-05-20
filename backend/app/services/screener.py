@@ -197,11 +197,12 @@ def calc_score(result: dict, chip: dict, market_bb_drop: float) -> float:
     """
     綜合評分 (0~100):
     - BB 位階接近 0~2 加分 (25%)
-    - 法人買超/股本 (6日+12日各滿1%加分) (25%)
-    - BB壓縮突破加分 (15%)
-    - RS 優於大盤加分 (15%)
+    - 法人買超/股本 6日+12日各滿1% (25%)
+    - BB壓縮突破 (20%)
+    - RS 優於大盤 (20%)
+    - 大戶千張人數增加 (10%)
     """
-    score = 50.0
+    score = 0.0
     bb = result["bb_position"]
 
     score += max(0, (5 - abs(bb - 1.5)) / 5 * 25)
@@ -211,14 +212,14 @@ def calc_score(result: dict, chip: dict, market_bb_drop: float) -> float:
     if chip.get("chip_ratio_12d", 0) >= 1.0:
         score += 12.5
 
-    if chip.get("holders_1000_chg", 0) > 0:
-        score += 5
-
     if result.get("is_squeeze"):
-        score += 15
+        score += 20
 
     stock_bb_drop = result["bb_peak"] - result["bb_position"]
     if market_bb_drop > 0 and stock_bb_drop < market_bb_drop * 1.2:
-        score += 15
+        score += 20
+
+    if chip.get("holders_1000_chg", 0) > 0:
+        score += 10
 
     return round(min(100, max(0, score)), 1)
