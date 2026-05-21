@@ -9,7 +9,7 @@ from app.db.models import (
     Shareholding, ScreeningResult, StockList,
 )
 from app.services.fetcher.twse import fetch_institutional, fetch_daily_price, fetch_margin, fetch_lending
-from app.services.fetcher.finmind import fetch_shareholding
+from app.services.fetcher.tdcc import fetch_shareholding_bulk
 from app.services.fetcher.market import fetch_twii_bb_stats
 from app.services.fetcher.stock_list import fetch_electronic_stocks
 from app.services.screener import check_entry_criteria, calc_vol_ratio, calc_chip_ratios, calc_score, calc_dip_buy_bonus
@@ -99,26 +99,28 @@ async def job2_margin():
 
 
 async def job3_shareholding():
-    """20:30 — FinMind 持股集中度（只在週五執行）"""
+    """20:30（週五）— TDCC 集保戶股權分散表，一次下載全市場 level 15（千張以上）"""
     today = date.today()
     if today.weekday() != 4:
         return
     if await _already_fetched("job3", today):
         return
     try:
+        from sqlalchemy.dialects.postgresql import insert as pg_insert
         async with AsyncSessionLocal() as db:
-            result = await db.execute(select(StockList.code))
-            codes = [r[0] for r in result.fetchall()]
-        total = 0
-        for code in codes:
-            rows = await fetch_shareholding(code, weeks=1)
+            stock_codes = {r[0] for r in (await db.execute(select(StockList.code))).all()}
+        rows = await fetch_shareholding_bulk()
+        rows = [r for r in rows if r["code"] in stock_codes]
+        if rows:
             async with AsyncSessionLocal() as db:
-                for r in rows:
-                    db.add(Shareholding(**r))
+                await db.execute(
+                    pg_insert(Shareholding).values(rows).on_conflict_do_nothing(
+                        index_elements=["code", "report_date"]
+                    )
+                )
                 await db.commit()
-            total += len(rows)
-            await asyncio.sleep(0.5)
-        await _log_fetch("job3", today, "success", total)
+        await _log_fetch("job3", today, "success", len(rows))
+        logger.info(f"job3 shareholding: {len(rows)} rows inserted")
     except Exception as e:
         await _log_fetch("job3", today, "failed")
         logger.error(f"job3 failed: {e}")
@@ -370,36 +372,30 @@ async def backfill_lending_90_days():
 
 
 async def backfill_shareholding_all():
-    """背景慢速補抓所有電子股大戶持股（Shareholding 表為空時執行，1.5s/檔避免封鎖）"""
+    """啟動時補填大戶持股（表為空時）— 從 TDCC 下載當週全市場資料"""
     from sqlalchemy.dialects.postgresql import insert as pg_insert
-    from app.services.fetcher.finmind import fetch_shareholding
     async with AsyncSessionLocal() as db:
         count = (await db.execute(select(Shareholding))).first()
     if count is not None:
         logger.info("Shareholding data exists, skipping backfill.")
         return
     async with AsyncSessionLocal() as db:
-        codes = [r[0] for r in (await db.execute(select(StockList.code))).all()]
-    logger.info(f"Starting shareholding backfill for {len(codes)} stocks...")
-    total = 0
-    for i, code in enumerate(codes):
-        try:
-            rows = await fetch_shareholding(code, weeks=8)
-            if rows:
-                async with AsyncSessionLocal() as db:
-                    await db.execute(
-                        pg_insert(Shareholding).values(rows).on_conflict_do_nothing(
-                            index_elements=["code", "report_date"]
-                        )
+        stock_codes = {r[0] for r in (await db.execute(select(StockList.code))).all()}
+    logger.info(f"Starting shareholding backfill from TDCC (bulk download)...")
+    try:
+        rows = await fetch_shareholding_bulk()
+        rows = [r for r in rows if r["code"] in stock_codes]
+        if rows:
+            async with AsyncSessionLocal() as db:
+                await db.execute(
+                    pg_insert(Shareholding).values(rows).on_conflict_do_nothing(
+                        index_elements=["code", "report_date"]
                     )
-                    await db.commit()
-                total += len(rows)
-        except Exception as e:
-            logger.warning(f"Shareholding backfill {code} failed: {e}")
-        if (i + 1) % 50 == 0:
-            logger.info(f"Shareholding backfill progress: {i+1}/{len(codes)}, stored {total} rows")
-        await asyncio.sleep(1.5)
-    logger.info(f"Shareholding backfill complete: {total} rows for {len(codes)} stocks.")
+                )
+                await db.commit()
+        logger.info(f"Shareholding backfill complete: {len(rows)} rows inserted.")
+    except Exception as e:
+        logger.error(f"Shareholding backfill failed: {e}")
 
 
 async def refresh_stock_list():
