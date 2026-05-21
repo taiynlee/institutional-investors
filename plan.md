@@ -48,7 +48,7 @@
 |-----|------|------|---------|
 | job1 | 16:05 | 三大法人買賣超 + 日K線量價 | TWSE T86 + MI_INDEX |
 | job2 | 18:30 | 融資融券 + 借券賣出 | TWSE TWT93U + TWT38U |
-| job3 | 20:30（週五）| 千張大戶持股比（週報） | FinMind TaiwanStockShareholding |
+| job3 | 20:30（週五）| 千張大戶持股比（週報） | TDCC 集保戶股權分散表 opendata CSV（level 15） |
 | job4 | 21:00 | 執行篩選計算，寫入 screening_result | 內部計算 |
 
 > TWT93U / TWT38U 僅 09:00~20:00 可抓，非交易時間回傳 307。
@@ -80,10 +80,10 @@
 
 | 事項 | 說明 |
 |------|------|
-| FinMind IP 限速 | 大量請求（1055檔）需控速 1.5s/檔，否則觸發 IP ban |
 | TWSE 夜間封鎖 | TWT93U、TWT38U 在 20:00 後回傳 HTTP 307，需交易時段才可抓 |
-| shareholding 補填 | 首次啟動若 shareholding 表為空，背景作業以 1.5s/檔速度補填 8 週資料 |
+| shareholding 補填 | 首次啟動若 shareholding 表為空，自動從 TDCC bulk CSV 下載當週全市場資料（一次請求，~988 筆） |
 | 大戶持股資加計算 | `holders_bonus` 依兩週 `pct_1000_lot` 差值計算；若缺少本週或上週資料則回傳 0 |
+| TDCC 歷史資料限制 | TDCC open data 只提供最新一週資料，歷史週報需透過每週 job3 累積 |
 | Docker 快取 | 前端程式碼更新後需 `--no-cache` 重建，否則 vite hash 相同導致舊快取被沿用 |
 
 ---
