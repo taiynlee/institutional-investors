@@ -1,10 +1,10 @@
 from datetime import date, timedelta
 from typing import Optional
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import select, and_
+from sqlalchemy import select, and_, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_db
-from app.db.models import ScreeningResult, FetchLog, DailyPrice
+from app.db.models import ScreeningResult, FetchLog, DailyPrice, SecuritiesLending
 
 router = APIRouter()
 
@@ -56,8 +56,6 @@ async def get_screener_results(
         and_(ScreeningResult.calc_date == target_date, ScreeningResult.passes == True)
     ).order_by(ScreeningResult.score.desc())
     results = (await db.execute(q)).scalars().all()
-    if min_score > 0:
-        results = [r for r in results if r.score >= min_score]
 
     codes = [r.code for r in results]
     stats = await _appearance_stats(codes, target_date, db) if codes else {}
@@ -186,10 +184,30 @@ async def get_data_status(db: AsyncSession = Depends(get_db)):
             "updated_at": updated_at,
         }
 
+    lending_count = (await db.execute(
+        select(func.count()).select_from(SecuritiesLending)
+    )).scalar_one()
+    lending_latest = (await db.execute(
+        select(SecuritiesLending.trade_date).order_by(SecuritiesLending.trade_date.desc()).limit(1)
+    )).scalar_one_or_none()
+
     return {
         "date": str(date.today()),
         "jobs": [_fmt_job(j) for j in ("job1", "job2", "job3", "job4")],
         "is_reliable": any(l.job_name == "job4" and l.status == "success" for l in logs),
+        "data_sources": {
+            "institutional": {"label": "法人買賣超", "source": "TWSE T86", "via": "job1 16:05"},
+            "price": {"label": "日收盤價", "source": "TWSE MI_INDEX", "via": "job1 16:05"},
+            "margin": {"label": "融資融券", "source": "TWSE TWT93U", "via": "job2 18:30"},
+            "lending": {
+                "label": "借券賣出",
+                "source": "TWSE TWT38U",
+                "via": "job2 18:30",
+                "rows": lending_count,
+                "latest_date": str(lending_latest) if lending_latest else None,
+            },
+            "shareholding": {"label": "持股集中度", "source": "FinMind", "via": "job3 週五 20:30"},
+        },
     }
 
 
@@ -211,7 +229,10 @@ def _format_result(r: ScreeningResult, stats: dict | None = None) -> dict:
         "chip_ratio_6d": r.chip_ratio_6d,
         "chip_ratio_12d": r.chip_ratio_12d,
         "margin_5d_chg": r.margin_5d_chg,
+        "lending_5d_chg": r.lending_5d_chg,
         "score": r.score,
+        "dip_bonus": r.dip_bonus,
+        "holders_bonus": r.holders_bonus,
         "appearances_5d": appearances_5d,
         "streak": streak,
     }

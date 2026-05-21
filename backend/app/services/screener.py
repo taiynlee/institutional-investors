@@ -144,6 +144,30 @@ def check_entry_criteria(
     }
 
 
+def calc_dip_buy_bonus(
+    closes: list[float],
+    price_dates: list,
+    inst_map: dict,
+    max_down_days: int = 5,
+    points_per_day: float = 1.0,
+) -> float:
+    """
+    資加：找最近5次下跌日（收盤低於前日），若法人當日淨買超 → 各加1分。
+    inst_map: {trade_date: foreign_net + trust_net}
+    上限 max_down_days * points_per_day = 5分
+    """
+    bonus = 0.0
+    found = 0
+    for i in range(len(closes) - 1, 0, -1):
+        if found >= max_down_days:
+            break
+        if closes[i] < closes[i - 1]:
+            found += 1
+            if inst_map.get(price_dates[i], 0) > 0:
+                bonus += points_per_day
+    return bonus
+
+
 def calc_vol_ratio(volumes: list[int]) -> float:
     """近5日均量 / 前5日均量"""
     if len(volumes) < 10:
@@ -193,31 +217,43 @@ def calc_chip_ratios(inst_rows: list, capital_lots: float) -> dict:
     }
 
 
-def calc_score(result: dict, chip: dict, market_bb_drop: float) -> float:
+def calc_score(result: dict, chip: dict, market_bb_drop: float, vol_ratio: float = 1.0) -> float:
     """
     綜合評分 (0~100):
-    - BB 位階接近 0~2 加分 (25%)
-    - 法人買超/股本 6日+12日各滿1% (25%)
-    - BB壓縮突破 (20%)
-    - RS 優於大盤 (20%)
+    - BB 位階接近 0~2 (20%)
+    - 法人籌碼 chip_ratio_6d ≥1% + chip_ratio_12d ≥1% (20%)
+    - BB壓縮突破 (15%)
+    - 拉回窒息量 vol_ratio ≤ 0.5 (10%)
+    - 融資5日不增（無散戶追漲壓力）(10%)
+    - 借券5日不增（無機構放空壓力）(10%)
     - 大戶千張人數增加 (10%)
+    - RS 優於大盤 (5%)
     """
     score = 0.0
     bb = result["bb_position"]
 
-    score += max(0, (5 - abs(bb - 1.5)) / 5 * 25)
+    score += max(0, (5 - abs(bb - 1.5)) / 5 * 20)
 
     if chip.get("chip_ratio_6d", 0) >= 1.0:
-        score += 12.5
+        score += 10
     if chip.get("chip_ratio_12d", 0) >= 1.0:
-        score += 12.5
+        score += 10
 
     if result.get("is_squeeze"):
-        score += 20
+        score += 15
+
+    if vol_ratio <= 0.5:
+        score += 10
 
     stock_bb_drop = result["bb_peak"] - result["bb_position"]
     if market_bb_drop > 0 and stock_bb_drop < market_bb_drop * 1.2:
-        score += 20
+        score += 5
+
+    if chip.get("margin_5d_chg", 1) <= 0:
+        score += 10
+
+    if chip.get("lending_5d_chg", 1) <= 0:
+        score += 10
 
     if chip.get("holders_1000_chg", 0) > 0:
         score += 10

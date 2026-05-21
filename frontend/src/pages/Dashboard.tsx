@@ -1,16 +1,16 @@
 import { useScreener } from '../hooks/useScreener'
 import { StockCard } from '../components/StockCard'
-import type { JobStatus } from '../types'
+import type { JobStatus, DataSourceInfo } from '../types'
 
 const JOB_LABELS: Record<string, string> = {
   job1: '法人+價量',
   job2: '融資融券',
-  job3: '持股集中',
+  job3: '大戶持股比',
   job4: '篩選完成',
 }
 
 function JobStatusBadge({ job }: { job: JobStatus }) {
-  const done = job.status === 'success'
+  const done = job.status === 'success' && (job.rows > 0 || job.name === 'job4')
   const failed = job.status === 'failed'
   return (
     <div className="flex flex-col items-center gap-0.5 min-w-[72px]">
@@ -20,6 +20,21 @@ function JobStatusBadge({ job }: { job: JobStatus }) {
         <span className="text-[10px] text-green-400">✓ {job.updated_at}</span>
       ) : failed ? (
         <span className="text-[10px] text-red-400">✗ 失敗</span>
+      ) : (
+        <span className="text-[10px] text-gray-600">等待中</span>
+      )}
+    </div>
+  )
+}
+
+function LendingBadge({ info }: { info: DataSourceInfo }) {
+  const hasData = (info.rows ?? 0) > 0
+  return (
+    <div className="flex flex-col items-center gap-0.5 min-w-[72px]">
+      <span className="text-xs text-gray-400 font-medium">借券賣出</span>
+      <span className="text-[10px] text-gray-600">18:30</span>
+      {hasData ? (
+        <span className="text-[10px] text-green-400">✓ {info.latest_date?.slice(5)}</span>
       ) : (
         <span className="text-[10px] text-gray-600">等待中</span>
       )}
@@ -47,13 +62,21 @@ export function Dashboard() {
         </div>
 
         {status && (
-          <div className="flex gap-6 mb-6 p-4 bg-gray-900 rounded-lg flex-wrap items-start justify-between">
-            <div className="flex gap-6 flex-wrap">
-              {status.jobs.map(job => (
-                <JobStatusBadge key={job.name} job={job} />
-              ))}
+          <div className="mb-6 p-4 bg-gray-900 rounded-lg">
+            <div className="flex gap-6 flex-wrap items-start justify-between">
+              <div className="flex gap-6 flex-wrap">
+                {status.jobs.slice(0, 2).map(job => (
+                  <JobStatusBadge key={job.name} job={job} />
+                ))}
+                {status.data_sources?.lending && (
+                  <LendingBadge info={status.data_sources.lending} />
+                )}
+                {status.jobs.slice(2).map(job => (
+                  <JobStatusBadge key={job.name} job={job} />
+                ))}
+              </div>
+              <span className="text-xs text-gray-500 self-center">篩出 {results.length} 檔</span>
             </div>
-            <span className="text-xs text-gray-500 self-center">篩出 {results.length} 檔</span>
           </div>
         )}
 

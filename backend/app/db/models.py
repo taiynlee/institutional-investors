@@ -63,6 +63,16 @@ class Shareholding(Base):
     pct_1000_lot: Mapped[float] = mapped_column(Float, default=0)
 
 
+class SecuritiesLending(Base):
+    __tablename__ = "securities_lending"
+    __table_args__ = (UniqueConstraint("code", "trade_date"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    code: Mapped[str] = mapped_column(String(10), index=True)
+    trade_date: Mapped[date] = mapped_column(Date, index=True)
+    lending_balance: Mapped[int] = mapped_column(BigInteger, default=0)   # 借券賣出今日餘額（股）
+    lending_change: Mapped[int] = mapped_column(BigInteger, default=0)    # 借券賣出增減（股）
+
+
 class ScreeningResult(Base):
     __tablename__ = "screening_result"
     __table_args__ = (UniqueConstraint("code", "calc_date"),)
@@ -85,12 +95,15 @@ class ScreeningResult(Base):
     chip_ratio_1d: Mapped[float] = mapped_column(Float, default=0)   # (外資+投信)當日/股本 %
     chip_ratio_6d: Mapped[float] = mapped_column(Float, default=0)   # (外資+投信)6日/股本 %
     chip_ratio_12d: Mapped[float] = mapped_column(Float, default=0)  # (外資+投信)12日/股本 %
-    margin_5d_chg: Mapped[float] = mapped_column(Float, default=0)
+    margin_5d_chg: Mapped[float] = mapped_column(Float, default=0)   # 融資5日增減%（負=減少=好）
+    lending_5d_chg: Mapped[float] = mapped_column(Float, default=0)  # 借券5日增減%（負=減少=好）
     holders_1000_chg: Mapped[float] = mapped_column(Float, default=0)
     # RS
     rs_vs_market: Mapped[float] = mapped_column(Float, default=0)
     # 綜合評分
-    score: Mapped[float] = mapped_column(Float, default=0)
+    score: Mapped[float] = mapped_column(Float, default=0)         # 基礎分
+    dip_bonus: Mapped[float] = mapped_column(Float, default=0)     # 資加：下跌日法人買超（每次+1，上限+5）
+    holders_bonus: Mapped[float] = mapped_column(Float, default=0) # 戶加：千張大戶週增減%（可負）
     passes: Mapped[bool] = mapped_column(Boolean, default=True)
 
 

@@ -103,6 +103,30 @@ async def fetch_margin(trade_date: date) -> list[dict]:
     return rows
 
 
+async def fetch_lending(trade_date: date) -> list[dict]:
+    """TWSE 借券賣出餘額 TWT38U"""
+    date_str = trade_date.strftime("%Y%m%d")
+    url = f"{BASE_TWSE}/marginTrading/TWT38U?response=json&date={date_str}&selectType=ALL"
+    data = _get(url)
+    if data.get("stat") != "OK":
+        return []
+    rows = []
+    # TWT38U fields: [代號, 名稱, 前日餘額, 當日賣出, 當日還券, 當日調整, 今日餘額, 次日限額]
+    for r in data.get("data", []):
+        try:
+            prev_bal = _parse_int(r[2])
+            today_bal = _parse_int(r[6])
+            rows.append({
+                "code": r[0].strip(),
+                "trade_date": trade_date,
+                "lending_balance": today_bal,
+                "lending_change": today_bal - prev_bal,
+            })
+        except (IndexError, ValueError, AttributeError):
+            continue
+    return rows
+
+
 def _parse_num(s) -> float:
     if isinstance(s, (int, float)):
         return float(s)
