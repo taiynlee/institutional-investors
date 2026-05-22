@@ -33,10 +33,10 @@ async def fetch_institutional(trade_date: date) -> list[dict]:
             rows.append({
                 "code": r[0].strip(),
                 "trade_date": trade_date,
-                "foreign_net": _parse_num(r[4]) / 1000,      # 股→張 (/1000)
-                "trust_net": _parse_num(r[7]) / 1000,
-                "dealer_net": _parse_num(r[10]) / 1000,
-                "three_major_net": _parse_num(r[11]) / 1000,
+                "foreign_net": _parse_num(r[4]) / 1000,       # 外陸資買賣超(不含外資自營商)
+                "trust_net": _parse_num(r[10]) / 1000,       # 投信買賣超
+                "dealer_net": _parse_num(r[11]) / 1000,      # 自營商買賣超(合計)
+                "three_major_net": _parse_num(r[18]) / 1000, # 三大法人買賣超
             })
         except (IndexError, ValueError):
             continue
