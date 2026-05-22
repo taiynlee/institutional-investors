@@ -1,6 +1,6 @@
 import { useScreener } from '../hooks/useScreener'
 import { StockCard } from '../components/StockCard'
-import type { JobStatus, DataSourceInfo } from '../types'
+import type { JobStatus } from '../types'
 
 const JOB_LABELS: Record<string, string> = {
   job1: '法人+價量',
@@ -27,20 +27,6 @@ function JobStatusBadge({ job }: { job: JobStatus }) {
   )
 }
 
-function LendingBadge({ info }: { info: DataSourceInfo }) {
-  const hasData = (info.rows ?? 0) > 0
-  return (
-    <div className="flex flex-col items-center gap-0.5 min-w-[72px]">
-      <span className="text-xs text-gray-400 font-medium">借券賣出</span>
-      <span className="text-[10px] text-gray-600">18:30</span>
-      {hasData ? (
-        <span className="text-[10px] text-green-400">✓ {info.latest_date?.slice(5)}</span>
-      ) : (
-        <span className="text-[10px] text-gray-600">等待中</span>
-      )}
-    </div>
-  )
-}
 
 export function Dashboard() {
   const { results, status, loading } = useScreener()
@@ -68,10 +54,7 @@ export function Dashboard() {
                 {status.jobs.slice(0, 2).map(job => (
                   <JobStatusBadge key={job.name} job={job} />
                 ))}
-                {status.data_sources?.lending && (
-                  <LendingBadge info={status.data_sources.lending} />
-                )}
-                {status.jobs.slice(2).map(job => (
+{status.jobs.slice(2).map(job => (
                   <JobStatusBadge key={job.name} job={job} />
                 ))}
               </div>
