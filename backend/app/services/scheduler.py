@@ -94,9 +94,9 @@ async def job2_margin():
 
 
 async def job3_shareholding():
-    """20:30（週五）— TDCC 集保戶股權分散表，一次下載全市場 level 15（千張以上）"""
+    """18:30（週日）— TDCC 集保戶股權分散表，一次下載全市場 level 15（千張以上）"""
     today = date.today()
-    if today.weekday() != 4:
+    if today.weekday() != 6:
         return
     if await _already_fetched("job3", today):
         return
@@ -379,6 +379,6 @@ def create_scheduler() -> AsyncIOScheduler:
     scheduler = AsyncIOScheduler(timezone="Asia/Taipei")
     scheduler.add_job(job1_institutional_price, "cron", hour=16, minute=5)
     scheduler.add_job(job2_margin, "cron", hour=20, minute=45)
-    scheduler.add_job(job3_shareholding, "cron", hour=20, minute=30)
+    scheduler.add_job(job3_shareholding, "cron", hour=18, minute=30)
     scheduler.add_job(job4_screener, "cron", hour=21, minute=0)
     return scheduler

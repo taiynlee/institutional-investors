@@ -157,7 +157,7 @@ async def get_stock_detail(code: str, db: AsyncSession = Depends(get_db)):
 _JOB_SCHEDULE = {
     "job1": "16:05",
     "job2": "20:45",
-    "job3": "20:30 (週五)",
+    "job3": "18:30 (週日)",
     "job4": "21:00",
 }
 
