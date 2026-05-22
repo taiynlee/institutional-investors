@@ -72,7 +72,7 @@ async def job1_institutional_price():
 
 
 async def job2_margin():
-    """18:30 — 融資 + 借券賣出餘額（TWT93U，含融資欄位2-7與借券欄位8-12）"""
+    """20:45 — 融資 + 借券賣出餘額（TWT93U，TWSE 約 20:30 更新，含融資欄位2-7與借券欄位8-12）"""
     from sqlalchemy.dialects.postgresql import insert as pg_insert
     today = date.today()
     if await _already_fetched("job2", today):
@@ -378,7 +378,7 @@ async def refresh_stock_list():
 def create_scheduler() -> AsyncIOScheduler:
     scheduler = AsyncIOScheduler(timezone="Asia/Taipei")
     scheduler.add_job(job1_institutional_price, "cron", hour=16, minute=5)
-    scheduler.add_job(job2_margin, "cron", hour=18, minute=30)
+    scheduler.add_job(job2_margin, "cron", hour=20, minute=45)
     scheduler.add_job(job3_shareholding, "cron", hour=20, minute=30)
     scheduler.add_job(job4_screener, "cron", hour=21, minute=0)
     return scheduler
