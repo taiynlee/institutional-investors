@@ -4,29 +4,33 @@ import type { ResultData, ResultRow } from '../types'
 
 function RowCard({ row }: { row: ResultRow }) {
   const up = row.chg_pct >= 0
+  const dot = row.score >= 80 ? 'text-green-400' : row.score >= 60 ? 'text-yellow-400' : 'text-red-400'
   const dipStr = row.dip_bonus > 0 ? ` +${row.dip_bonus}資` : ''
   const holderVal = Math.round(row.holders_bonus)
   const holderStr = holderVal !== 0 ? ` ${holderVal > 0 ? '+' : ''}${holderVal}戶` : ''
-  const streakStr = row.streak > 1 ? ` 連續${row.streak}日` : ''
+  const streakStr = row.streak > 1 ? `連續${row.streak}日` : `初次`
 
   return (
-    <div className="bg-gray-900 rounded-lg p-4">
-      <div className="flex justify-between items-start">
-        <div>
-          <span className="text-white font-bold">{row.code} {row.name}</span>
-          <span className="ml-2 text-gray-400 text-sm">
-            昨[{row.tags || '?'}] 分={row.score}
-            {dipStr}
-            {holderStr}
-            {streakStr}
+    <div className="bg-gray-900 rounded-lg p-4 flex gap-2 items-start">
+      <span className={`text-lg leading-none mt-0.5 ${dot}`}>●</span>
+      <div className="flex-1 min-w-0">
+        <div className="flex justify-between items-start">
+          <div className="text-white text-sm font-bold">
+            {row.code} {row.name}{' '}
+            <span className="text-gray-400 font-normal">
+              [{row.tags || '?'}] 分={row.score}{dipStr}{holderStr}
+            </span>
+          </div>
+          <span className={`text-sm font-bold ml-3 shrink-0 ${up ? 'text-red-400' : 'text-green-400'}`}>
+            {up ? '▲' : '▼'}{Math.abs(row.chg_pct)}%
           </span>
         </div>
-        <span className={`text-lg font-bold ${up ? 'text-red-400' : 'text-green-400'}`}>
-          {up ? '▲' : '▼'}{Math.abs(row.chg_pct)}%
-        </span>
-      </div>
-      <div className="text-gray-500 text-sm mt-1">
-        {row.prev_close} → {row.close}
+        <div className="text-gray-500 text-xs mt-0.5 flex gap-3">
+          <span>{streakStr}</span>
+          <span>BB={row.bb_position.toFixed(1)}</span>
+          <span>chip6d={row.chip_ratio_6d.toFixed(2)}%</span>
+          <span className="text-gray-600">{row.prev_close}→{row.close}</span>
+        </div>
       </div>
     </div>
   )

@@ -29,6 +29,8 @@ export interface ResultRow {
   dip_bonus: number
   holders_bonus: number
   streak: number
+  bb_position: number
+  chip_ratio_6d: number
   prev_close: number
   close: number
   chg_pct: number

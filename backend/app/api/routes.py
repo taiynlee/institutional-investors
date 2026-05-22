@@ -132,6 +132,8 @@ async def get_result_comparison(db: AsyncSession = Depends(get_db)):
             "dip_bonus": s.dip_bonus or 0,
             "holders_bonus": s.holders_bonus or 0,
             "streak": st.get("streak", 1),
+            "bb_position": s.bb_position or 0,
+            "chip_ratio_6d": s.chip_ratio_6d or 0,
             "prev_close": prev,
             "close": nxt,
             "chg_pct": round(chg, 2),
