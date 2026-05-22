@@ -191,7 +191,7 @@ vol_ratio = mean(volume[-5:]) / mean(volume[-10:-5])
 |------|------|------|------|
 | 法人買超比率（6 日） | (外資 + 投信 6 日淨買超) / 股本 ≥ 1% | TWSE T86 | 日 |
 | 法人買超比率（12 日） | (外資 + 投信 12 日淨買超) / 股本 ≥ 1% | TWSE T86 | 日 |
-| 大股東持股比例 | 持有 1,000 張以上股東持股比 | FinMind TaiwanStockShareholding | 週 |
+| 大股東持股比例 | 持有 1,000 張以上股東持股比 | TDCC 集保戶股權分散表（Level 15） | 週（週日 18:30 後） |
 
 > 法人買超比率兩個窗口都需 ≥ 1% 才算「籌碼好」（B 策略必要條件）。
 > 用股本正規化（而非成交量）：不同規模股票才能橫向比較。
@@ -257,8 +257,9 @@ institutional-investors/
 │   │   │   └── routes.py     # REST endpoints
 │   │   ├── services/
 │   │   │   ├── fetcher/
-│   │   │   │   ├── twse.py       # TWSE 三大法人 + 日成交 + 融資
-│   │   │   │   ├── finmind.py    # FinMind 持股集中度 + 股本
+│   │   │   │   ├── twse.py       # TWSE 三大法人 + 日成交 + 融資借券（TWT93U）
+│   │   │   │   ├── tdcc.py       # TDCC 集保戶股權分散表 bulk CSV（千張大戶）
+│   │   │   │   ├── finmind.py    # FinMind 股本查詢（股票清單用）
 │   │   │   │   ├── market.py     # yfinance 大盤指數（RS 基準）
 │   │   │   │   ├── price.py      # 歷史價格補抓
 │   │   │   │   └── stock_list.py # 電子股清單（FinMind）
@@ -278,7 +279,8 @@ institutional-investors/
 │   │   │   ├── StockCard.tsx     # 個股卡片（含hover動態解讀）
 │   │   │   └── Tooltip.tsx       # 通用 tooltip 元件
 │   │   ├── pages/
-│   │   │   └── Dashboard.tsx # 主儀表板頁面
+│   │   │   ├── Dashboard.tsx # 篩選結果頁
+│   │   │   └── Result.tsx    # 篩選績效頁（昨日結果 vs 次日收盤）
 │   │   ├── hooks/
 │   │   │   └── useScreener.ts # API 資料 hook
 │   │   ├── types/
@@ -303,9 +305,9 @@ institutional-investors/
 | 盤中即時股價 | TWSE / TPEx | 09:00 ~ 13:30 | 僅交易時段有效 |
 | 個股日收盤成交資料 | TWSE / TPEx | 15:30 後 | 收盤後約 30 分鐘 |
 | 三大法人買賣超 | TWSE / TPEx | **16:00 後** | 通常 3 點多出來，4 點前完整 |
-| 融資融券餘額 | TWSE / TPEx | **18:00 後** | 盤後結算較慢 |
+| 融資融券餘額（含借券） | TWSE | **20:30 後** | TWT93U 同時含融資（欄2-7）與借券（欄8-12），約 20:30 更新 |
 | 券商分點買賣明細 | TWSE | **18:00 ~ 20:00** | 每日下午發布，時間不固定 |
-| FinMind 同步 | FinMind API | **19:00 後** | 從 TWSE 同步，有延遲 |
+| 大戶持股集中度 | TDCC 集保戶股權分散表 | **週日 18:00 後** | 週五收盤 → 週六處理 → 週日晚間發布，opendata CSV 一次含全市場 |
 | WantGoo 八大官股 | 玩股網 | **18:00 後** | 手動整理，時間不固定 |
 | CMoney 分點前 5 大 | CMoney | **20:00 後** | 依 TWSE 分點檔更新 |
 | yfinance 歷史 K 線 | Yahoo Finance | **隔日 00:00 後** | 台股收盤當日通常晚間更新 |
@@ -317,8 +319,8 @@ institutional-investors/
 交易日自動執行流程：
 
 16:05  Job 1 — 抓三大法人 + 日成交資料
-18:30  Job 2 — 抓融資融券
-20:30  Job 3 — 抓 FinMind 持股集中度（僅週五）
+20:45  Job 2 — 抓融資融券（TWT93U 約 20:30 更新）
+18:30  Job 3 — 抓 TDCC 集保持股集中度（僅週日，TDCC 週六處理，週日晚間完成）
 21:00  Job 4 — 執行篩選計算，更新 screening_result
 ```
 
@@ -367,7 +369,7 @@ institutional-investors/
 | 三大法人買賣超（歷史） | FinMind | `TaiwanStockInstitutionalInvestorsBuySell` | ✅ 253 筆 |
 | 日 K 線量價（歷史） | FinMind | `TaiwanStockPrice` | ✅ 253 筆，空 token 可用 |
 | 融資融券餘額 | TWSE | `TWT93U` | ✅ 1275 筆 |
-| 借券賣出餘額 | TWSE | `TWT38U` | ✅ 白天（9:00~20:00）可抓 |
+| 借券賣出餘額 | TWSE | `TWT93U`（欄 8-12） | ✅ 與融資合併於同一表（TWT38U 已廢棄） |
 | 大盤加權指數（RS 計算） | yfinance | `^TWII` | ✅ 備援個股量價 |
 
 ### v2 預計新增（技術難度較高，v1 暫不實作）
@@ -479,7 +481,7 @@ docker compose up            # 全起（DB + 後端 + 前端）
 | `daily_price` | 個股日 K 線 OHLCV | `(code, trade_date)` |
 | `institutional` | 三大法人每日買賣超 | `(code, trade_date)` |
 | `margin_trading` | 融資融券每日餘額 | `(code, trade_date)` |
-| `shareholding` | 千張大戶持股（FinMind 週報） | `(code, report_date)` |
+| `shareholding` | 千張大戶持股（TDCC 週報） | `(code, report_date)` |
 | `screening_result` | 每日篩選結果與評分 | `(code, calc_date)` |
 | `fetch_log` | 爬取作業紀錄（防重複） | `(job_name, fetch_date)` |
 
