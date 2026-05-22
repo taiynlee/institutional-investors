@@ -28,7 +28,8 @@ function generateAnalysis(s: ScreenerResult): string {
   lines.push('')
 
   const chipOk = s.chip_ratio_6d >= 1
-  lines.push(`chip6d=${s.chip_ratio_6d.toFixed(2)}%：外資+投信近6日淨買超＝股本的${s.chip_ratio_6d.toFixed(2)}%，${chipOk ? '超過入場門檻（≥1%），代表主力持續在場' : '未達入場門檻（≥1%），籌碼集中度不足'}。`)
+  const fmtLots = (n: number) => Math.abs(n) >= 1000 ? `${n > 0 ? '+' : ''}${(n / 1000).toFixed(0)}K張` : `${n > 0 ? '+' : ''}${n.toFixed(0)}張`
+  lines.push(`chip6d=${s.chip_ratio_6d.toFixed(2)}%：（外資${fmtLots(s.foreign_6d_net)} + 投信${fmtLots(s.trust_6d_net)}）÷ 股本 × 100% = ${s.chip_ratio_6d.toFixed(2)}%，${chipOk ? '超過入場門檻（≥1%），代表主力持續在場' : '未達入場門檻（≥1%），籌碼集中度不足'}。`)
   lines.push('')
 
   const scoreLabel = s.score >= 80 ? '綠燈' : s.score >= 60 ? '黃燈' : '紅燈'
