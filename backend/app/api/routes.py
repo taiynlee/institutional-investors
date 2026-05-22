@@ -201,7 +201,7 @@ async def get_data_status(db: AsyncSession = Depends(get_db)):
                 "via": "job2 20:45",
                 "latest_date": str(margin_latest) if margin_latest else None,
             },
-            "shareholding": {"label": "持股集中度", "source": "TDCC 集保", "via": "job3 週五 20:30"},
+            "shareholding": {"label": "持股集中度", "source": "TDCC 集保", "via": "job3 週日 18:30"},
         },
     }
 
