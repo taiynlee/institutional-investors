@@ -21,6 +21,25 @@ export interface ScreenerResult {
   streak: number
 }
 
+export interface ResultRow {
+  code: string
+  name: string
+  tags: string
+  score: number
+  dip_bonus: number
+  holders_bonus: number
+  streak: number
+  prev_close: number
+  close: number
+  chg_pct: number
+}
+
+export interface ResultData {
+  pred_date: string | null
+  price_date: string | null
+  rows: ResultRow[]
+}
+
 export interface JobStatus {
   name: string
   schedule: string

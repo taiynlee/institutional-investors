@@ -114,6 +114,8 @@ async def get_result_comparison(db: AsyncSession = Depends(get_db)):
         .where(and_(DailyPrice.code.in_(codes), DailyPrice.trade_date == price_date))
     )).scalars().all()}
 
+    stats = await _appearance_stats(codes, pred_date, db)
+
     rows = []
     for s in screened:
         prev = prev_prices.get(s.code)
@@ -121,10 +123,15 @@ async def get_result_comparison(db: AsyncSession = Depends(get_db)):
         if prev is None or nxt is None:
             continue
         chg = (nxt - prev) / prev * 100
+        st = stats.get(s.code, {})
         rows.append({
             "code": s.code,
             "name": s.name,
+            "tags": s.tags or "",
             "score": s.score,
+            "dip_bonus": s.dip_bonus or 0,
+            "holders_bonus": s.holders_bonus or 0,
+            "streak": st.get("streak", 1),
             "prev_close": prev,
             "close": nxt,
             "chg_pct": round(chg, 2),

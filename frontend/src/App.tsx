@@ -1,6 +1,30 @@
+import { useState } from 'react'
 import { Dashboard } from './pages/Dashboard'
+import { Result } from './pages/Result'
 import './index.css'
 
+type Tab = 'screener' | 'result'
+
 export default function App() {
-  return <Dashboard />
+  const [tab, setTab] = useState<Tab>('screener')
+
+  return (
+    <div>
+      <div className="bg-gray-900 border-b border-gray-800 px-6 py-2 flex gap-4">
+        <button
+          onClick={() => setTab('screener')}
+          className={`text-sm font-medium px-3 py-1 rounded ${tab === 'screener' ? 'bg-gray-700 text-white' : 'text-gray-400 hover:text-white'}`}
+        >
+          篩選結果
+        </button>
+        <button
+          onClick={() => setTab('result')}
+          className={`text-sm font-medium px-3 py-1 rounded ${tab === 'result' ? 'bg-gray-700 text-white' : 'text-gray-400 hover:text-white'}`}
+        >
+          篩選績效
+        </button>
+      </div>
+      {tab === 'screener' ? <Dashboard /> : <Result />}
+    </div>
+  )
 }
