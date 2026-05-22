@@ -2,7 +2,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.api.routes import router
-from app.services.scheduler import create_scheduler, backfill_90_days, backfill_lending_90_days, backfill_shareholding_all, refresh_stock_list
+from app.services.scheduler import create_scheduler, backfill_90_days, backfill_shareholding_all, refresh_stock_list
 from app.db.base import engine, Base
 
 
@@ -28,7 +28,6 @@ async def lifespan(app: FastAPI):
         await conn.run_sync(Base.metadata.create_all)
     import asyncio as _asyncio
     await _apply_migrations()
-    await backfill_lending_90_days()
     if os.getenv("SKIP_STARTUP_SYNC", "").lower() not in ("1", "true"):
         await refresh_stock_list()
         await backfill_90_days()

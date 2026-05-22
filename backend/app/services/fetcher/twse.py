@@ -83,7 +83,7 @@ async def fetch_margin(trade_date: date) -> list[dict]:
         return []
     rows = []
     # TWT93U fields: [代號, 名稱, 融資前日餘額, 賣出, 買進, 現券, 融資今日餘額, 次日限額,
-    #                  融券前日餘額, 當日賣出, 當日還券, 當日調整, 融券今日餘額, 次日限額, 備註]
+    #                  借券前日餘額, 借券當日賣出, 借券還券, 借券調整, 借券今日餘額, 次日可限額, 備註]
     for r in data.get("data", []):
         try:
             mb = _parse_int(r[6])
@@ -104,9 +104,8 @@ async def fetch_margin(trade_date: date) -> list[dict]:
 
 
 async def fetch_lending(trade_date: date) -> list[dict]:
-    """TWSE 借券賣出餘額 TWT38U"""
-    date_str = trade_date.strftime("%Y%m%d")
-    url = f"{BASE_TWSE}/marginTrading/TWT38U?response=json&date={date_str}&selectType=ALL"
+    """TWSE 借券賣出餘額 TWT38U（已廢棄，資料已合併至 TWT93U，保留函式避免 import 錯誤）"""
+    return []
     data = _get(url)
     if data.get("stat") != "OK":
         return []

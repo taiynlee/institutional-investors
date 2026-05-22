@@ -5,10 +5,10 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import select, and_
 from app.db.base import AsyncSessionLocal
 from app.db.models import (
-    FetchLog, DailyPrice, Institutional, MarginTrading, SecuritiesLending,
+    FetchLog, DailyPrice, Institutional, MarginTrading,
     Shareholding, ScreeningResult, StockList,
 )
-from app.services.fetcher.twse import fetch_institutional, fetch_daily_price, fetch_margin, fetch_lending
+from app.services.fetcher.twse import fetch_institutional, fetch_daily_price, fetch_margin
 from app.services.fetcher.tdcc import fetch_shareholding_bulk
 from app.services.fetcher.market import fetch_twii_bb_stats
 from app.services.fetcher.stock_list import fetch_electronic_stocks
@@ -72,7 +72,7 @@ async def job1_institutional_price():
 
 
 async def job2_margin():
-    """18:30 — 融資融券 + 借券賣出（只存 stock_list 內的上市上櫃電子股）"""
+    """18:30 — 融資 + 借券賣出餘額（TWT93U，含融資欄位2-7與借券欄位8-12）"""
     from sqlalchemy.dialects.postgresql import insert as pg_insert
     today = date.today()
     if await _already_fetched("job2", today):
@@ -82,17 +82,12 @@ async def job2_margin():
             stock_codes = set(r[0] for r in (await db.execute(select(StockList.code))).all())
         all_margin = await fetch_margin(today)
         margin_rows = [r for r in all_margin if r["code"] in stock_codes]
-        all_lending = await fetch_lending(today)
-        lending_rows = [r for r in all_lending if r["code"] in stock_codes]
         async with AsyncSessionLocal() as db:
             if margin_rows:
                 stmt = pg_insert(MarginTrading).values(margin_rows)
                 await db.execute(stmt.on_conflict_do_nothing(index_elements=["code", "trade_date"]))
-            if lending_rows:
-                stmt = pg_insert(SecuritiesLending).values(lending_rows)
-                await db.execute(stmt.on_conflict_do_nothing(index_elements=["code", "trade_date"]))
             await db.commit()
-        await _log_fetch("job2", today, "success", len(margin_rows) + len(lending_rows))
+        await _log_fetch("job2", today, "success", len(margin_rows))
     except Exception as e:
         await _log_fetch("job2", today, "failed")
         logger.error(f"job2 failed: {e}")
@@ -273,25 +268,17 @@ async def _get_chip_summary(code: str, today: date, capital_lots: float) -> dict
             .where(and_(MarginTrading.code == code, MarginTrading.trade_date >= cutoff_5d))
             .order_by(MarginTrading.trade_date)
         )).scalars().all()
-        lending = (await db.execute(
-            select(SecuritiesLending)
-            .where(and_(SecuritiesLending.code == code, SecuritiesLending.trade_date >= cutoff_5d))
-            .order_by(SecuritiesLending.trade_date)
-        )).scalars().all()
-
     chip = calc_chip_ratios(list(inst), capital_lots)
 
     margin_chg = 0.0
-    if len(margin) >= 2:
-        old_bal = margin[0].margin_balance
-        new_bal = margin[-1].margin_balance
-        margin_chg = (new_bal - old_bal) / old_bal if old_bal > 0 else 0.0
-
     lending_chg = 0.0
-    if len(lending) >= 2:
-        old_bal = lending[0].lending_balance
-        new_bal = lending[-1].lending_balance
-        lending_chg = (new_bal - old_bal) / old_bal if old_bal > 0 else 0.0
+    if len(margin) >= 2:
+        old_m = margin[0].margin_balance
+        new_m = margin[-1].margin_balance
+        margin_chg = (new_m - old_m) / old_m if old_m > 0 else 0.0
+        old_l = margin[0].short_balance
+        new_l = margin[-1].short_balance
+        lending_chg = (new_l - old_l) / old_l if old_l > 0 else 0.0
 
     return {
         **chip,
@@ -319,7 +306,6 @@ async def backfill_90_days():
             rows_i = await fetch_institutional(d)
             price_rows = await fetch_daily_price(d)
             margin_rows = await fetch_margin(d)
-            lending_rows = await fetch_lending(d)
             from sqlalchemy.dialects.postgresql import insert as pg_insert
             async with AsyncSessionLocal() as db:
                 if rows_i:
@@ -328,8 +314,6 @@ async def backfill_90_days():
                     await db.execute(pg_insert(DailyPrice).values(price_rows).on_conflict_do_nothing(index_elements=["code", "trade_date"]))
                 if margin_rows:
                     await db.execute(pg_insert(MarginTrading).values(margin_rows).on_conflict_do_nothing(index_elements=["code", "trade_date"]))
-                if lending_rows:
-                    await db.execute(pg_insert(SecuritiesLending).values(lending_rows).on_conflict_do_nothing(index_elements=["code", "trade_date"]))
                 await db.commit()
         except Exception as e:
             logger.warning(f"Backfill {d} failed: {e}")
@@ -337,38 +321,6 @@ async def backfill_90_days():
     logger.info("Backfill complete.")
 
 
-async def backfill_lending_90_days():
-    """補抓 90 日借券賣出歷史（securities_lending 表為空時執行）"""
-    from sqlalchemy.dialects.postgresql import insert as pg_insert
-    async with AsyncSessionLocal() as db:
-        count = (await db.execute(select(SecuritiesLending))).first()
-    if count is not None:
-        logger.info("Lending data exists, skipping backfill.")
-        return
-    logger.info("Starting 90-day lending backfill...")
-    async with AsyncSessionLocal() as db:
-        stock_codes = set(r[0] for r in (await db.execute(select(StockList.code))).all())
-    today = date.today()
-    for i in range(90, -1, -1):
-        d = today - timedelta(days=i)
-        if d.weekday() >= 5:
-            continue
-        try:
-            all_rows = await fetch_lending(d)
-            rows = [r for r in all_rows if r["code"] in stock_codes]
-            if rows:
-                async with AsyncSessionLocal() as db:
-                    await db.execute(
-                        pg_insert(SecuritiesLending).values(rows).on_conflict_do_nothing(
-                            index_elements=["code", "trade_date"]
-                        )
-                    )
-                    await db.commit()
-            logger.info(f"Lending backfill {d}: {len(rows)} rows")
-        except Exception as e:
-            logger.warning(f"Lending backfill {d} failed: {e}")
-        await asyncio.sleep(0.3)
-    logger.info("Lending backfill complete.")
 
 
 async def backfill_shareholding_all():
