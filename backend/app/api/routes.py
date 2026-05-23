@@ -82,14 +82,25 @@ async def get_screener_results(
 @router.get("/api/result")
 async def get_result_comparison(db: AsyncSession = Depends(get_db)):
     """最近一次篩選結果 vs 次交易日收盤價比較。"""
-    # 最近一次篩選日（排除今天，確保已有次日價格）
-    pred_date_row = (await db.execute(
+    # 最近一次篩選日，且其次交易日已有收盤資料（不一定是今天）
+    candidate_dates = (await db.execute(
         select(ScreeningResult.calc_date)
         .distinct()
         .where(ScreeningResult.calc_date < date.today())
         .order_by(ScreeningResult.calc_date.desc())
-        .limit(1)
-    )).scalar_one_or_none()
+        .limit(10)
+    )).scalars().all()
+
+    pred_date_row = None
+    for cd in candidate_dates:
+        has_next = (await db.execute(
+            select(DailyPrice.trade_date)
+            .where(DailyPrice.trade_date > cd)
+            .limit(1)
+        )).scalar_one_or_none()
+        if has_next:
+            pred_date_row = cd
+            break
 
     if not pred_date_row:
         return {"pred_date": None, "price_date": None, "rows": []}
