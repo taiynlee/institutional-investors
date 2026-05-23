@@ -205,17 +205,102 @@ async def job4_screener():
         logger.error(f"job4 failed: {e}")
 
 
+def _fmt_lots(n: float) -> str:
+    sign = "+" if n > 0 else ""
+    if abs(n) >= 1000:
+        return f"{sign}{n/1000:.0f}K張"
+    return f"{sign}{n:.0f}張"
+
+
+def _stock_analysis(r) -> str:
+    """產生與前端 tooltip 一致的完整解讀文字，供 AI 精選使用。"""
+    lines = [f"【{r.code} {r.name}】"]
+
+    tags = (r.tags or "").split()
+    if "A" in tags or "A+B" in tags:
+        lines.append("策略A：今天放量創近30日新高，法人當天同步買超≥1%股本。主力帶動突破，非散戶追漲。")
+    if "B" in tags or "A+B" in tags:
+        lines.append(f"策略B：50日內曾創高，今日BB={r.bb_position:.1f}（≤5），法人6日+12日均買超≥1%。主力推過、拉回月線附近未出場。")
+
+    bb = r.bb_position or 0
+    bb_desc = (
+        "月線以下，已超賣" if bb <= 0 else
+        "月線附近，充分回測" if bb <= 3 else
+        "月線上方一點點，策略B切入點" if bb <= 5 else
+        "中段整理區" if bb <= 8 else
+        "靠近上軌，偏強勢" if bb <= 10 else "突破上軌，極強勢"
+    )
+    lines.append(f"BB={bb:.1f}：{bb_desc}")
+
+    foreign = r.foreign_6d_net or 0
+    trust = r.trust_6d_net or 0
+    chip6d = r.chip_ratio_6d or 0
+    chip_ok = chip6d >= 1
+    lines.append(
+        f"chip6d={chip6d:.2f}%：（外資{_fmt_lots(foreign)} + 投信{_fmt_lots(trust)}）÷ 股本 × 100% = {chip6d:.2f}%，"
+        + ("超過入場門檻（≥1%），主力持續在場" if chip_ok else "未達入場門檻（≥1%），籌碼集中度不足")
+    )
+
+    score = r.score or 0
+    score_label = "綠燈" if score >= 80 else "黃燈" if score >= 60 else "紅燈"
+    missing = []
+    if not r.is_squeeze:
+        missing.append("沒有BB壓縮→少15分")
+    vol = r.vol_ratio or 0
+    if vol > 0.5:
+        missing.append(f"量縮不夠（vol_ratio={vol:.2f}）→少10分")
+    margin_chg = r.margin_5d_chg or 0
+    if margin_chg > 0:
+        missing.append(f"融資5日增加（+{margin_chg*100:.1f}%）→扣分")
+    lending_chg = r.lending_5d_chg or 0
+    if lending_chg > 0:
+        missing.append(f"借券5日增加（+{lending_chg*100:.1f}%）→扣分")
+    if missing:
+        lines.append(f"基礎分{score}（{score_label}）低：" + "；".join(missing))
+    else:
+        lines.append(f"基礎分{score}（{score_label}）：各項條件均達標")
+
+    dip = r.dip_bonus or 0
+    if dip > 0:
+        full = dip >= 5
+        lines.append(
+            f"+{dip}資{'（滿分）' if full else ''}：最近{dip:.0f}次股價下跌日法人逆勢買超{'，一次不漏' if full else ''}，主力洗盤跡象{'強烈' if full else ''}。"
+        )
+
+    holders = r.holders_bonus or 0
+    if holders != 0:
+        dir_str = f"增加{holders}%" if holders > 0 else f"減少{abs(holders)}%"
+        lines.append(
+            f"{'+'if holders>0 else ''}{holders}戶：千張大戶本週{'加碼，籌碼向上集中，偏多' if holders>0 else '減倉，需注意'}（{dir_str}）"
+        )
+
+    if score >= 80:
+        lines.append("結論：各項條件強勢，優先觀察。")
+    elif dip >= 4 and score < 60:
+        lines.append("結論：基礎面普通，但籌碼沉澱訊號很強，等量縮或BB壓縮再考慮。")
+    elif dip >= 4:
+        lines.append("結論：籌碼沉澱訊號強，基礎面達標，可關注後續型態。")
+    else:
+        lines.append("結論：訊號醞釀中，持續觀察法人方向。")
+
+    return "\n".join(lines)
+
+
 async def _run_ai_pick(calc_date: date, results: list) -> None:
     """job4 完成後，呼叫 LINE bot claude 精選一檔，存入 ai_pick。"""
     import json, urllib.request
     from app.config import settings
     from sqlalchemy.dialects.postgresql import insert as pg_insert
 
-    lines = ["你是台股選股助手。以下是今日通過量化篩選的電子股清單，請精選「最值得關注的一檔」。",
-             "只回傳以下格式，不要其他文字：代號|股名|理由（30字以內）", "", "篩選清單："]
-    for r in results:
-        tags = r.tags or ""
-        lines.append(f"{r.code} {r.name} [{tags}] 分={r.score} BB={r.bb_position:.1f} chip6d={r.chip_ratio_6d:.2f}% dip=+{r.dip_bonus:.0f}")
+    header = [
+        "你是台股選股助手。以下是今日通過量化篩選的電子股，每檔附完整指標解讀。",
+        "請綜合所有資訊，精選「最值得關注的一檔」。",
+        "只回傳以下格式，不要其他文字：代號|股名|理由（30字以內）",
+        "",
+        "---",
+    ]
+    stock_blocks = [_stock_analysis(r) for r in results]
+    lines = header + stock_blocks + ["---"]
     prompt = "\n".join(lines)
 
     try:
