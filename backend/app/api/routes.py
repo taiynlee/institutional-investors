@@ -5,6 +5,7 @@ from sqlalchemy import select, and_, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_db
 from app.db.models import ScreeningResult, FetchLog, DailyPrice, MarginTrading, AIPick, StockList, Institutional
+from app.services.screener import calc_bb_position
 
 router = APIRouter()
 
@@ -335,9 +336,25 @@ async def get_exit_alerts(db: AsyncSession = Depends(get_db)):
             net = (row.foreign_net or 0) + (row.trust_net or 0)
             chip_3d[row.code] = chip_3d.get(row.code, 0) + net
 
+    # 為每檔從 DailyPrice 抓 65 天重算 BB
+    cutoff_bb = date.today() - timedelta(days=100)
+    price_rows = (await db.execute(
+        select(DailyPrice)
+        .where(and_(
+            DailyPrice.code.in_(codes),
+            DailyPrice.trade_date >= cutoff_bb,
+        ))
+        .order_by(DailyPrice.code, DailyPrice.trade_date)
+    )).scalars().all()
+
+    closes_by_code: dict = {}
+    for row in price_rows:
+        closes_by_code.setdefault(row.code, []).append(row.close)
+
     alerts = []
     for code, latest in stock_latest.items():
-        bb = latest.bb_position or 0
+        closes = closes_by_code.get(code, [])
+        bb = calc_bb_position(closes) if len(closes) >= 20 else (latest.bb_position or 0)
         peak_bb = stock_peak_bb.get(code, 0)
         capital = capitals.get(code) or 1
         chip_sum = chip_3d.get(code, 0)

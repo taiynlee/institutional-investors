@@ -47,25 +47,24 @@ function JobStatusBadge({ job }: { job: JobStatus }) {
 }
 
 const EXIT_COLORS: Record<string, string> = {
-  tech: 'bg-red-900 text-red-300',
-  momentum: 'bg-orange-900 text-orange-300',
-  chip: 'bg-yellow-900 text-yellow-300',
+  tech: 'bg-red-900 text-red-300 border-red-700',
+  momentum: 'bg-orange-900 text-orange-300 border-orange-700',
+  chip: 'bg-yellow-900 text-yellow-300 border-yellow-700',
 }
 
 function ExitAlertPanel({ alerts }: { alerts: ExitAlert[] }) {
   return (
-    <div className="p-3 bg-gray-900 border border-gray-700 rounded-lg flex-1">
-      <span className="text-gray-400 text-xs font-medium uppercase tracking-wide">退場止損</span>
+    <div className="flex-1 px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg flex items-center gap-2 min-w-0 overflow-x-auto">
+      <span className="text-gray-500 text-xs font-medium whitespace-nowrap shrink-0">退場止損</span>
       {alerts.length === 0 ? (
-        <span className="text-gray-600 text-sm ml-2">目前無退場訊號</span>
+        <span className="text-gray-600 text-xs">目前無退場訊號</span>
       ) : (
-        <div className="mt-2 flex flex-col gap-2">
+        <div className="flex gap-2 flex-wrap">
           {alerts.map(a => (
-            <div key={a.code} className="flex items-center gap-2 flex-wrap">
-              <span className="text-white font-bold text-sm">{a.code}</span>
-              <span className="text-gray-400 text-xs">{a.name}</span>
+            <div key={a.code} className="flex items-center gap-1">
+              <span className="text-gray-300 text-xs font-medium">{a.code}</span>
               {a.triggered.map(t => (
-                <span key={t.type} className={`px-2 py-0.5 rounded-full text-[11px] font-medium ${EXIT_COLORS[t.type] ?? 'bg-gray-700 text-gray-300'}`}>
+                <span key={t.type} className={`px-1.5 py-0.5 rounded text-[10px] font-medium border ${EXIT_COLORS[t.type] ?? 'bg-gray-700 text-gray-300 border-gray-600'}`}>
                   {t.label}
                 </span>
               ))}
