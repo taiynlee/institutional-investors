@@ -89,11 +89,11 @@ export function StockCard({ stock }: StockCardProps) {
   return (
     <div className="relative group bg-gray-900 border border-gray-700 rounded-xl p-4 hover:border-blue-500 transition-colors">
       <div className="invisible group-hover:visible opacity-0 group-hover:opacity-100 transition-opacity
-        absolute z-50 bottom-full left-1/2 -translate-x-1/2 mb-2 w-[380px]
+        absolute z-50 left-full top-0 ml-3 w-[380px]
         text-[11px] leading-relaxed bg-gray-950 border border-blue-500
         text-gray-200 rounded-lg p-3 shadow-2xl pointer-events-none whitespace-pre-wrap text-left">
         {analysis}
-        <span className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-blue-500" />
+        <span className="absolute top-3 right-full border-4 border-transparent border-r-blue-500" />
       </div>
 
       <div className="flex justify-between items-start mb-3">
