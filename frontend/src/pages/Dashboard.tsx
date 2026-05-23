@@ -59,10 +59,11 @@ function ExitAlertPanel({ alerts }: { alerts: ExitAlert[] }) {
       {alerts.length === 0 ? (
         <span className="text-gray-600 text-xs">目前無退場訊號</span>
       ) : (
-        <div className="flex gap-2 flex-wrap">
+        <div className="flex gap-4 flex-wrap">
           {alerts.map(a => (
-            <div key={a.code} className="flex items-center gap-1">
-              <span className="text-gray-300 text-xs font-medium">{a.code}</span>
+            <div key={a.code} className="flex items-center gap-1.5">
+              <span className="text-white text-xs font-bold">{a.code}</span>
+              <span className="text-gray-400 text-xs">{a.name}</span>
               {a.triggered.map(t => (
                 <span key={t.type} className={`px-1.5 py-0.5 rounded text-[10px] font-medium border ${EXIT_COLORS[t.type] ?? 'bg-gray-700 text-gray-300 border-gray-600'}`}>
                   {t.label}

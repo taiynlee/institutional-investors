@@ -287,6 +287,16 @@ async def get_exit_alerts(db: AsyncSession = Depends(get_db)):
     if not recent_dates:
         return []
 
+    # 最新一次篩選結果的股票代號（不顯示在退場欄）
+    latest_screener_date = recent_dates[0]
+    current_screener_codes = set((await db.execute(
+        select(ScreeningResult.code)
+        .where(and_(
+            ScreeningResult.calc_date == latest_screener_date,
+            ScreeningResult.passes == True,
+        ))
+    )).scalars().all())
+
     all_results = (await db.execute(
         select(ScreeningResult)
         .where(and_(
@@ -297,9 +307,12 @@ async def get_exit_alerts(db: AsyncSession = Depends(get_db)):
     )).scalars().all()
 
     # 每檔：取最新一筆（最新 bb_position）+ 歷史最高 bb_peak
+    # 排除目前仍在篩選結果中的股票（避免推薦 vs 退場矛盾）
     stock_latest: dict = {}
     stock_peak_bb: dict = {}
     for r in all_results:
+        if r.code in current_screener_codes:
+            continue
         if r.code not in stock_latest:
             stock_latest[r.code] = r
         peak = max(r.bb_peak or 0, r.bb_position or 0)

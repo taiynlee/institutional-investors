@@ -112,11 +112,11 @@ def check_entry_criteria(
             bb_peak_A, _ = result
             passes_A = True
 
-    # Strategy B: 歷史突破 + 目前拉回位階≤5
+    # Strategy B: 歷史突破 + 目前拉回位階 0~5（bb_now < 0 表示跌破月線，不入場）
     passes_B_price = False
     bb_peak_B = 0.0
     days_ago_B = 0
-    if trend_ok and bb_now <= 5:
+    if trend_ok and 0 <= bb_now <= 5:
         result = _find_30d_high_breakout(
             closes, volumes, lookback=50, require_volume=False,
             start_days_ago=1,
