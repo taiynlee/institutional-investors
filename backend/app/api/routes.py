@@ -363,8 +363,6 @@ async def get_exit_alerts(db: AsyncSession = Depends(get_db)):
         triggered = []
         if bb < 0:
             triggered.append({"type": "tech", "label": "跌破月線", "bb": round(bb, 1)})
-        if peak_bb > 10 and bb < 8:
-            triggered.append({"type": "momentum", "label": "動能停利", "peak_bb": round(peak_bb, 1), "bb": round(bb, 1)})
         if chip_pct <= -0.5:
             triggered.append({"type": "chip", "label": "籌碼出場", "chip_pct": round(chip_pct, 2)})
 
