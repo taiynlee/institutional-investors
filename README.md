@@ -652,6 +652,62 @@ fetch_log (job_name, fetch_date PK)  ← 獨立，不關聯其他表
 
 ---
 
+## 開機自動恢復機制
+
+電腦不預警關機後重開，系統會自動完整恢復，**不需人工介入**。
+
+### 恢復流程（按順序自動執行）
+
+```
+Windows 登入
+  ↓ Task Scheduler 觸發 wsl.exe -d Ubuntu
+WSL2 Ubuntu 啟動（systemd 接管）
+  ↓ systemd 啟動 docker.service（已 enable）
+Docker daemon 就緒
+  ↓ institutional-investors.service 執行 docker compose up -d
+  ├─ db（PostgreSQL）— pgdata volume 保有所有歷史資料
+  ├─ backend（FastAPI + APScheduler）— 排程自動恢復
+  └─ frontend（React）— 儀表板可存取
+  ↓ claude-line-bot.service 執行 start.sh（KEEP_MEMORY=1）
+  ├─ uvicorn 重新啟動（PORT 8001）
+  ├─ ngrok 重新建立 tunnel（URL 會變）
+  └─ 自動更新 LINE webhook → 新 ngrok URL
+系統恢復完畢，排程、儀表板、LINE bot 全數上線
+```
+
+### 已建立的機制
+
+| 元件 | 機制 | 說明 |
+|------|------|------|
+| **WSL2 自動啟動** | Windows Task Scheduler `WSL-Ubuntu-Autostart` | 使用者登入時觸發，喚醒 WSL/systemd |
+| **Docker daemon** | `systemctl enable docker`（已設定） | systemd 啟動時自動起 Docker |
+| **Docker 容器** | `restart: unless-stopped`（docker-compose.yml） | Docker daemon 啟動後容器自動恢復 |
+| **Docker Compose stack** | `institutional-investors.service`（systemd）| 確保 `docker compose up -d` 在開機時執行 |
+| **LINE bot** | `claude-line-bot.service`（systemd）| 開機自動執行 `start.sh`，含 webhook 更新 |
+| **資料庫資料** | `pgdata` Docker volume | 關機不會遺失，volume 永久掛載 |
+
+### 驗證方式
+
+```bash
+# 在 WSL 中確認 systemd 服務狀態
+systemctl status institutional-investors.service
+systemctl status claude-line-bot.service
+
+# 確認 Docker 容器正在運行
+docker compose ps -a
+
+# Windows 確認 Task Scheduler
+Get-ScheduledTask -TaskName "WSL-Ubuntu-Autostart"
+```
+
+### 注意事項
+
+- **ngrok URL 每次重啟會改變**，但 `start.sh` 會自動更新 LINE webhook，LINE bot 功能不受影響
+- **排程資料不補抓**：重啟期間錯過的排程（如交易日 16:05 job1）不會自動補跑，次日排程恢復正常
+- **pgdata volume 保護**：`docker compose down -v` 會刪除 volume（所有資料），正常維護請只用 `docker compose stop` 或 `docker compose down`（不加 `-v`）
+
+---
+
 ## 快速啟動
 
 ```bash
