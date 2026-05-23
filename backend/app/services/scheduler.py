@@ -163,11 +163,12 @@ async def job4_screener():
                 strategy_tag = "B"
             tags = strategy_tag
             vol_ratio = calc_vol_ratio(volumes)
-            base_score = calc_score(entry, chip, market_bb_drop, vol_ratio)
-            # 特別加分：資加（下跌日法人買超各+1，上限+5）+ 戶加（千張大戶週增減%）
+            # 資加、戶加需在 calc_score 前算，holders_1000_chg 要進 chip dict
             inst_map = await _get_inst_map(stock.code)
             dip_bonus = calc_dip_buy_bonus(closes, price_dates, inst_map)
             holders_bonus = await _get_holders_bonus(stock.code)
+            chip["holders_1000_chg"] = holders_bonus
+            base_score = calc_score(entry, chip, market_bb_drop, vol_ratio)
             chip_fields = {k: chip[k] for k in (
                 "foreign_6d_net", "trust_6d_net",
                 "chip_ratio_1d", "chip_ratio_6d", "chip_ratio_12d",
@@ -355,7 +356,7 @@ async def _get_price_series(code: str, days: int = 200) -> tuple[list, list, lis
 
 
 async def _get_holders_bonus(code: str) -> float:
-    """千張大戶本週 vs 上週增減%，1% = 1分（可負）"""
+    """千張大戶本週 vs 上週人數增減（人頭數差值，可負）"""
     async with AsyncSessionLocal() as db:
         rows = (await db.execute(
             select(Shareholding)
@@ -365,12 +366,7 @@ async def _get_holders_bonus(code: str) -> float:
         )).scalars().all()
     if len(rows) < 2:
         return 0.0
-    this_week = rows[0].holders_1000_lot
-    last_week = rows[1].holders_1000_lot
-    if last_week <= 0:
-        return 0.0
-    pct_change = (this_week - last_week) / last_week * 100
-    return round(pct_change, 1)
+    return float(rows[0].holders_1000_lot - rows[1].holders_1000_lot)
 
 
 async def _get_inst_map(code: str, days: int = 60) -> dict:

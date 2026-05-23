@@ -15,6 +15,9 @@ function generateAnalysis(s: ScreenerResult): string {
   }
   if (stratTags.includes('B') || stratTags.includes('A+B')) {
     lines.push(`策略 B：近50交易日內曾創30日新高，今日 BB位階${s.bb_position.toFixed(1)}（≤5門檻），法人6日+12日買超均≥1%。意思是：之前主力推出去過，現在拉回到月線附近，法人沒跑。`)
+    if (s.bb_peak > 0) {
+      lines.push(`  ↳ 突破當天位階 ${s.bb_peak.toFixed(1)}（突破有力度）→ 今日位階 ${s.bb_position.toFixed(1)}（已充分拉回）。兩者落差越大代表洗盤越乾淨。`)
+    }
   }
   if (stratTags.length > 0) lines.push('')
 
@@ -53,9 +56,11 @@ function generateAnalysis(s: ScreenerResult): string {
     lines.push('')
   }
 
-  if (s.holders_bonus !== 0) {
-    const dir = s.holders_bonus > 0 ? `增加${s.holders_bonus}%` : `減少${Math.abs(s.holders_bonus)}%`
-    lines.push(`${s.holders_bonus > 0 ? '+' : ''}${s.holders_bonus}戶：千張以上大戶本週持股比上週${dir}。${s.holders_bonus > 0 ? '大戶在加碼，籌碼向上集中，偏多訊號。' : '大戶在減倉，籌碼分散，需注意。'}`)
+  if (s.holders_bonus !== null && s.holders_bonus !== undefined) {
+    const absN = Math.abs(s.holders_bonus)
+    const dir = s.holders_bonus > 0 ? `增加 ${absN} 人` : s.holders_bonus < 0 ? `減少 ${absN} 人` : `與上週相同`
+    const comment = s.holders_bonus > 0 ? '大戶人數增加，籌碼向上集中，偏多訊號。' : s.holders_bonus < 0 ? '大戶人數減少，籌碼分散，需注意。' : '大戶人數無增減，籌碼穩定維持。'
+    lines.push(`${s.holders_bonus > 0 ? '+' : ''}${s.holders_bonus}戶加：千張以上大戶人數本週比上週${dir}。${comment}`)
     lines.push('')
   }
 
@@ -101,18 +106,18 @@ export function StockCard({ stock }: StockCardProps) {
           <span className="text-white font-bold text-lg">{stock.code}</span>
           <span className="text-gray-400 text-sm ml-2">{stock.name}</span>
         </div>
-        <div className="flex items-baseline gap-1">
-          <span className={`text-2xl font-black ${scoreColor}`}>{stock.score}</span>
-          {stock.dip_bonus !== 0 && (
-            <span className="text-orange-400 text-sm font-bold">
+        <div className="flex items-stretch gap-1.5">
+          <span className={`text-2xl font-black leading-none self-center ${scoreColor}`}>{stock.score}</span>
+          <div className="flex flex-col justify-between text-xs font-bold leading-none py-0.5">
+            <span className={`${stock.dip_bonus !== 0 ? 'text-orange-400' : 'text-gray-600'}`}>
               {stock.dip_bonus > 0 ? '+' : ''}{stock.dip_bonus}資
             </span>
-          )}
-          {stock.holders_bonus !== 0 && (
-            <span className={`text-sm font-bold ${stock.holders_bonus > 0 ? 'text-green-400' : 'text-red-400'}`}>
-              {stock.holders_bonus > 0 ? '+' : ''}{stock.holders_bonus}戶
-            </span>
-          )}
+            {stock.holders_bonus !== null && stock.holders_bonus !== undefined && (
+              <span className={`${stock.holders_bonus > 0 ? 'text-green-400' : stock.holders_bonus < 0 ? 'text-red-400' : 'text-gray-500'}`}>
+                {stock.holders_bonus > 0 ? '+' : ''}{stock.holders_bonus}戶
+              </span>
+            )}
+          </div>
         </div>
       </div>
 
