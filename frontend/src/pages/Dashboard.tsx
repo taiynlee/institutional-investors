@@ -112,12 +112,41 @@ export function Dashboard() {
         )}
 
         <div className="mb-6 flex gap-3">
-          {pick?.code && (
-            <div className="p-3 bg-blue-950 border border-blue-700 rounded-lg flex items-center gap-2 shrink-0">
-              <span className="text-blue-300 text-xs font-medium uppercase tracking-wide whitespace-nowrap">AI 精選</span>
-              <span className="text-white font-bold">{pick.code} {pick.name}</span>
-            </div>
-          )}
+          {pick?.code && (() => {
+            const rank1 = results[0]
+            const sameStock = rank1 && rank1.code === pick.code
+            const tipLines: string[] = sameStock
+              ? [
+                  `分數排名第一，同時也是 AI 精選第一。`,
+                  `${pick.code} ${pick.name} 在量化評分與 AI 綜合判斷上雙料第一。`,
+                  `精選理由：${pick.reason}`,
+                ]
+              : [
+                  `分數排名第一：${rank1?.code ?? ''} ${rank1?.name ?? ''}（基礎分 ${rank1?.score ?? ''}，策略 ${rank1?.tags?.join('+') ?? ''}）`,
+                  `AI 精選第一：${pick.code} ${pick.name}`,
+                  ``,
+                  `精選理由：${pick.reason}`,
+                  ``,
+                  `為何排名第一不是精選第一？`,
+                  `AI 不以量化分數排序，而是綜合策略解讀、籌碼質量與洗盤訊號進行判斷。`,
+                  `分數最高代表「量化條件最達標」；AI 精選代表「最值得關注的入場機會」，兩者視角不同。`,
+                ]
+            const tip = tipLines.join('\n')
+            return (
+              <div className="relative group shrink-0">
+                <div className="p-3 bg-blue-950 border border-blue-700 rounded-lg flex items-center gap-2 cursor-default">
+                  <span className="text-blue-300 text-xs font-medium uppercase tracking-wide whitespace-nowrap">AI 精選</span>
+                  <span className="text-white font-bold">{pick.code} {pick.name}</span>
+                </div>
+                <div className="invisible group-hover:visible opacity-0 group-hover:opacity-100 transition-opacity
+                  absolute z-50 top-full left-0 mt-2 w-[420px]
+                  text-[11px] leading-relaxed bg-gray-950 border border-blue-500
+                  text-gray-200 rounded-lg p-3 shadow-2xl pointer-events-none whitespace-pre-wrap">
+                  {tip}
+                </div>
+              </div>
+            )
+          })()}
           <ExitAlertPanel alerts={exitAlerts} />
         </div>
 
