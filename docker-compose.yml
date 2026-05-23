@@ -28,6 +28,7 @@ services:
       DATABASE_URL: postgresql+asyncpg://stock:secret@db:5432/stock_force
       FINMIND_TOKEN: ""
       SKIP_STARTUP_SYNC: "1"
+      LINE_BOT_URL: "http://172.17.0.1:8001"
     volumes:
       - ./config:/app/config:ro
 

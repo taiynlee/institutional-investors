@@ -107,6 +107,16 @@ class ScreeningResult(Base):
     passes: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
+class AIPick(Base):
+    __tablename__ = "ai_pick"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    calc_date: Mapped[date] = mapped_column(Date, unique=True, index=True)
+    code: Mapped[str] = mapped_column(String(10))
+    name: Mapped[str] = mapped_column(String(50))
+    reason: Mapped[str] = mapped_column(String(300))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class FetchLog(Base):
     __tablename__ = "fetch_log"
     __table_args__ = (UniqueConstraint("job_name", "fetch_date"),)

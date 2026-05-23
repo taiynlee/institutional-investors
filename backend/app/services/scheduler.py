@@ -6,7 +6,7 @@ from sqlalchemy import select, and_
 from app.db.base import AsyncSessionLocal
 from app.db.models import (
     FetchLog, DailyPrice, Institutional, MarginTrading,
-    Shareholding, ScreeningResult, StockList,
+    Shareholding, ScreeningResult, StockList, AIPick,
 )
 from app.services.fetcher.twse import fetch_institutional, fetch_daily_price, fetch_margin
 from app.services.fetcher.tdcc import fetch_shareholding_bulk
@@ -198,9 +198,55 @@ async def job4_screener():
             await db.commit()
         await _log_fetch("job4", today, "success", len(results))
         logger.info(f"Screener found {len(results)} stocks")
+        if results:
+            asyncio.create_task(_run_ai_pick(today, results))
     except Exception as e:
         await _log_fetch("job4", today, "failed")
         logger.error(f"job4 failed: {e}")
+
+
+async def _run_ai_pick(calc_date: date, results: list) -> None:
+    """job4 完成後，呼叫 LINE bot claude 精選一檔，存入 ai_pick。"""
+    import json, urllib.request
+    from app.config import settings
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+    lines = ["你是台股選股助手。以下是今日通過量化篩選的電子股清單，請精選「最值得關注的一檔」。",
+             "只回傳以下格式，不要其他文字：代號|股名|理由（30字以內）", "", "篩選清單："]
+    for r in results:
+        tags = r.tags or ""
+        lines.append(f"{r.code} {r.name} [{tags}] 分={r.score} BB={r.bb_position:.1f} chip6d={r.chip_ratio_6d:.2f}% dip=+{r.dip_bonus:.0f}")
+    prompt = "\n".join(lines)
+
+    try:
+        payload = json.dumps({"prompt": prompt}).encode("utf-8")
+        req = urllib.request.Request(
+            f"{settings.line_bot_url}/internal/ask",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            data = json.loads(resp.read())
+        reply = data.get("reply", "").strip()
+        parts = reply.split("|")
+        if len(parts) < 3:
+            logger.warning(f"AI pick parse fail: {reply!r}")
+            return
+        code, name, reason = parts[0].strip(), parts[1].strip(), "|".join(parts[2:]).strip()
+        async with AsyncSessionLocal() as db:
+            stmt = pg_insert(AIPick).values(
+                calc_date=calc_date, code=code, name=name, reason=reason,
+                created_at=date.today(),
+            ).on_conflict_do_update(
+                index_elements=["calc_date"],
+                set_={"code": code, "name": name, "reason": reason},
+            )
+            await db.execute(stmt)
+            await db.commit()
+        logger.info(f"AI pick {calc_date}: {code} {name} — {reason}")
+    except Exception as e:
+        logger.error(f"AI pick failed: {e}")
 
 
 async def _get_price_series(code: str, days: int = 200) -> tuple[list, list, list, list, list, list]:

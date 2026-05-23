@@ -1,6 +1,17 @@
 import { useScreener } from '../hooks/useScreener'
 import { StockCard } from '../components/StockCard'
 import type { JobStatus } from '../types'
+import { useEffect, useState } from 'react'
+
+interface AIPick { calc_date: string | null; code: string | null; name: string | null; reason: string | null }
+
+function useAIPick() {
+  const [pick, setPick] = useState<AIPick | null>(null)
+  useEffect(() => {
+    fetch('/api/ai-pick').then(r => r.json()).then(setPick).catch(() => {})
+  }, [])
+  return pick
+}
 
 const JOB_LABELS: Record<string, string> = {
   job1: '法人+價量',
@@ -30,6 +41,7 @@ function JobStatusBadge({ job }: { job: JobStatus }) {
 
 export function Dashboard() {
   const { results, status, loading } = useScreener()
+  const pick = useAIPick()
 
   return (
     <div className="min-h-screen bg-gray-950 text-white p-6">
@@ -59,6 +71,18 @@ export function Dashboard() {
                 ))}
               </div>
               <span className="text-xs text-gray-500 self-center">篩出 {results.length} 檔</span>
+            </div>
+          </div>
+        )}
+
+        {pick?.code && (
+          <div className="mb-4 p-3 bg-blue-950 border border-blue-700 rounded-lg flex items-start gap-3">
+            <span className="text-blue-400 text-lg shrink-0">🤖</span>
+            <div>
+              <span className="text-blue-300 text-xs font-medium uppercase tracking-wide">AI 精選</span>
+              <div className="text-white font-bold">{pick.code} {pick.name}</div>
+              <div className="text-blue-200 text-sm">{pick.reason}</div>
+              {pick.calc_date && <div className="text-blue-500 text-xs mt-0.5">{pick.calc_date}</div>}
             </div>
           </div>
         )}

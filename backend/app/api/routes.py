@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select, and_, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_db
-from app.db.models import ScreeningResult, FetchLog, DailyPrice, MarginTrading
+from app.db.models import ScreeningResult, FetchLog, DailyPrice, MarginTrading, AIPick
 
 router = APIRouter()
 
@@ -266,4 +266,20 @@ def _format_result(r: ScreeningResult, stats: dict | None = None) -> dict:
         "holders_bonus": r.holders_bonus,
         "appearances_5d": appearances_5d,
         "streak": streak,
+    }
+
+
+@router.get("/api/ai-pick")
+async def get_ai_pick(db: AsyncSession = Depends(get_db)):
+    """回傳最近一筆 AI 精選結果。"""
+    row = (await db.execute(
+        select(AIPick).order_by(AIPick.calc_date.desc()).limit(1)
+    )).scalar_one_or_none()
+    if not row:
+        return {"calc_date": None, "code": None, "name": None, "reason": None}
+    return {
+        "calc_date": str(row.calc_date),
+        "code": row.code,
+        "name": row.name,
+        "reason": row.reason,
     }
