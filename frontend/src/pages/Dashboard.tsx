@@ -1,6 +1,6 @@
 import { useScreener } from '../hooks/useScreener'
 import { StockCard } from '../components/StockCard'
-import type { JobStatus } from '../types'
+import type { JobStatus, ExitAlert } from '../types'
 import { useEffect, useState } from 'react'
 
 interface AIPick { calc_date: string | null; code: string | null; name: string | null; reason: string | null }
@@ -11,6 +11,14 @@ function useAIPick() {
     fetch('/api/ai-pick').then(r => r.json()).then(setPick).catch(() => {})
   }, [])
   return pick
+}
+
+function useExitAlerts() {
+  const [alerts, setAlerts] = useState<ExitAlert[]>([])
+  useEffect(() => {
+    fetch('/api/exit-alerts').then(r => r.json()).then(setAlerts).catch(() => {})
+  }, [])
+  return alerts
 }
 
 const JOB_LABELS: Record<string, string> = {
@@ -38,10 +46,41 @@ function JobStatusBadge({ job }: { job: JobStatus }) {
   )
 }
 
+const EXIT_COLORS: Record<string, string> = {
+  tech: 'bg-red-900 text-red-300',
+  momentum: 'bg-orange-900 text-orange-300',
+  chip: 'bg-yellow-900 text-yellow-300',
+}
+
+function ExitAlertPanel({ alerts }: { alerts: ExitAlert[] }) {
+  return (
+    <div className="p-3 bg-gray-900 border border-gray-700 rounded-lg flex-1">
+      <span className="text-gray-400 text-xs font-medium uppercase tracking-wide">退場止損</span>
+      {alerts.length === 0 ? (
+        <span className="text-gray-600 text-sm ml-2">目前無退場訊號</span>
+      ) : (
+        <div className="mt-2 flex flex-col gap-2">
+          {alerts.map(a => (
+            <div key={a.code} className="flex items-center gap-2 flex-wrap">
+              <span className="text-white font-bold text-sm">{a.code}</span>
+              <span className="text-gray-400 text-xs">{a.name}</span>
+              {a.triggered.map(t => (
+                <span key={t.type} className={`px-2 py-0.5 rounded-full text-[11px] font-medium ${EXIT_COLORS[t.type] ?? 'bg-gray-700 text-gray-300'}`}>
+                  {t.label}
+                </span>
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
 
 export function Dashboard() {
   const { results, status, loading } = useScreener()
   const pick = useAIPick()
+  const exitAlerts = useExitAlerts()
 
   return (
     <div className="min-h-screen bg-gray-950 text-white p-6">
@@ -60,13 +99,10 @@ export function Dashboard() {
         </div>
 
         {status && (
-          <div className="mb-6 p-4 bg-gray-900 rounded-lg">
+          <div className="mb-4 p-4 bg-gray-900 rounded-lg">
             <div className="flex gap-6 flex-wrap items-start justify-between">
               <div className="flex gap-6 flex-wrap">
-                {status.jobs.slice(0, 2).map(job => (
-                  <JobStatusBadge key={job.name} job={job} />
-                ))}
-{status.jobs.slice(2).map(job => (
+                {status.jobs.map(job => (
                   <JobStatusBadge key={job.name} job={job} />
                 ))}
               </div>
@@ -75,17 +111,15 @@ export function Dashboard() {
           </div>
         )}
 
-        {pick?.code && (
-          <div className="mb-4 p-3 bg-blue-950 border border-blue-700 rounded-lg flex items-start gap-3">
-            <span className="text-blue-400 text-lg shrink-0">🤖</span>
-            <div>
-              <span className="text-blue-300 text-xs font-medium uppercase tracking-wide">AI 精選</span>
-              <div className="text-white font-bold">{pick.code} {pick.name}</div>
-              <div className="text-blue-200 text-sm">{pick.reason}</div>
-              {pick.calc_date && <div className="text-blue-500 text-xs mt-0.5">{pick.calc_date}</div>}
+        <div className="mb-6 flex gap-3">
+          {pick?.code && (
+            <div className="p-3 bg-blue-950 border border-blue-700 rounded-lg flex items-center gap-2 shrink-0">
+              <span className="text-blue-300 text-xs font-medium uppercase tracking-wide whitespace-nowrap">AI 精選</span>
+              <span className="text-white font-bold">{pick.code} {pick.name}</span>
             </div>
-          </div>
-        )}
+          )}
+          <ExitAlertPanel alerts={exitAlerts} />
+        </div>
 
         {loading ? (
           <div className="text-center text-gray-500 py-20">載入中...</div>

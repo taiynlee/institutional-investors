@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select, and_, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_db
-from app.db.models import ScreeningResult, FetchLog, DailyPrice, MarginTrading, AIPick
+from app.db.models import ScreeningResult, FetchLog, DailyPrice, MarginTrading, AIPick, StockList, Institutional
 
 router = APIRouter()
 
@@ -267,6 +267,101 @@ def _format_result(r: ScreeningResult, stats: dict | None = None) -> dict:
         "appearances_5d": appearances_5d,
         "streak": streak,
     }
+
+
+@router.get("/api/exit-alerts")
+async def get_exit_alerts(db: AsyncSession = Depends(get_db)):
+    """過去 10 交易日篩出的股票，檢查技術/動能/籌碼退場條件。"""
+    cutoff = date.today() - timedelta(days=20)
+
+    # 最近 10 個有篩選結果的交易日
+    recent_dates = (await db.execute(
+        select(ScreeningResult.calc_date)
+        .distinct()
+        .where(and_(ScreeningResult.calc_date >= cutoff, ScreeningResult.passes == True))
+        .order_by(ScreeningResult.calc_date.desc())
+        .limit(10)
+    )).scalars().all()
+
+    if not recent_dates:
+        return []
+
+    all_results = (await db.execute(
+        select(ScreeningResult)
+        .where(and_(
+            ScreeningResult.calc_date.in_(recent_dates),
+            ScreeningResult.passes == True,
+        ))
+        .order_by(ScreeningResult.code, ScreeningResult.calc_date.desc())
+    )).scalars().all()
+
+    # 每檔：取最新一筆（最新 bb_position）+ 歷史最高 bb_peak
+    stock_latest: dict = {}
+    stock_peak_bb: dict = {}
+    for r in all_results:
+        if r.code not in stock_latest:
+            stock_latest[r.code] = r
+        peak = max(r.bb_peak or 0, r.bb_position or 0)
+        stock_peak_bb[r.code] = max(stock_peak_bb.get(r.code, 0), peak)
+
+    codes = list(stock_latest.keys())
+    if not codes:
+        return []
+
+    # 股本
+    capitals = {r.code: r.capital for r in (await db.execute(
+        select(StockList).where(StockList.code.in_(codes))
+    )).scalars().all()}
+
+    # 近 3 個有資料的交易日法人資料
+    inst_dates = (await db.execute(
+        select(Institutional.trade_date)
+        .distinct()
+        .where(Institutional.trade_date >= date.today() - timedelta(days=10))
+        .order_by(Institutional.trade_date.desc())
+        .limit(3)
+    )).scalars().all()
+
+    chip_3d: dict = {}
+    if inst_dates:
+        inst_rows = (await db.execute(
+            select(Institutional)
+            .where(and_(
+                Institutional.code.in_(codes),
+                Institutional.trade_date.in_(inst_dates),
+            ))
+        )).scalars().all()
+        for row in inst_rows:
+            net = (row.foreign_net or 0) + (row.trust_net or 0)
+            chip_3d[row.code] = chip_3d.get(row.code, 0) + net
+
+    alerts = []
+    for code, latest in stock_latest.items():
+        bb = latest.bb_position or 0
+        peak_bb = stock_peak_bb.get(code, 0)
+        capital = capitals.get(code) or 1
+        chip_sum = chip_3d.get(code, 0)
+        chip_pct = chip_sum / capital * 100
+
+        triggered = []
+        if bb < 0:
+            triggered.append({"type": "tech", "label": "跌破月線", "bb": round(bb, 1)})
+        if peak_bb > 10 and bb < 8:
+            triggered.append({"type": "momentum", "label": "動能停利", "peak_bb": round(peak_bb, 1), "bb": round(bb, 1)})
+        if chip_pct <= -0.5:
+            triggered.append({"type": "chip", "label": "籌碼出場", "chip_pct": round(chip_pct, 2)})
+
+        if triggered:
+            alerts.append({
+                "code": code,
+                "name": latest.name,
+                "bb": round(bb, 1),
+                "peak_bb": round(peak_bb, 1),
+                "chip_3d_pct": round(chip_pct, 2),
+                "triggered": triggered,
+            })
+
+    return alerts
 
 
 @router.get("/api/ai-pick")

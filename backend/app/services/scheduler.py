@@ -241,47 +241,47 @@ def _stock_analysis(r) -> str:
         + ("超過入場門檻（≥1%），主力持續在場" if chip_ok else "未達入場門檻（≥1%），籌碼集中度不足")
     )
 
-    score = r.score or 0
-    score_label = "綠燈" if score >= 80 else "黃燈" if score >= 60 else "紅燈"
-    missing = []
+    conds = []
     if not r.is_squeeze:
-        missing.append("沒有BB壓縮→少15分")
+        conds.append("BB尚未壓縮（型態未蓄積）")
     vol = r.vol_ratio or 0
     if vol > 0.5:
-        missing.append(f"量縮不夠（vol_ratio={vol:.2f}）→少10分")
+        conds.append(f"量縮不足（vol_ratio={vol:.2f}，拉回量仍偏大）")
     margin_chg = r.margin_5d_chg or 0
     if margin_chg > 0:
-        missing.append(f"融資5日增加（+{margin_chg*100:.1f}%）→扣分")
+        conds.append(f"融資5日增加（+{margin_chg*100:.1f}%，散戶追進）")
     lending_chg = r.lending_5d_chg or 0
     if lending_chg > 0:
-        missing.append(f"借券5日增加（+{lending_chg*100:.1f}%）→扣分")
-    if missing:
-        lines.append(f"基礎分{score}（{score_label}）低：" + "；".join(missing))
+        conds.append(f"借券5日增加（+{lending_chg*100:.1f}%，空方增加）")
+    if conds:
+        lines.append("技術條件不足：" + "；".join(conds))
     else:
-        lines.append(f"基礎分{score}（{score_label}）：各項條件均達標")
+        lines.append("技術條件：BB壓縮、量縮、融資借券均健康")
 
     dip = r.dip_bonus or 0
     if dip > 0:
         full = dip >= 5
         lines.append(
-            f"+{dip}資{'（滿分）' if full else ''}：最近{dip:.0f}次股價下跌日法人逆勢買超{'，一次不漏' if full else ''}，主力洗盤跡象{'強烈' if full else ''}。"
+            f"下跌日買超：最近{dip:.0f}次股價下跌日法人逆勢買超{'，一次不漏（滿分）' if full else ''}，主力洗盤跡象{'強烈' if full else '明顯'}。"
         )
+    else:
+        lines.append("下跌日買超：無特別洗盤訊號")
 
     holders = r.holders_bonus or 0
     if holders != 0:
         dir_str = f"增加{holders}%" if holders > 0 else f"減少{abs(holders)}%"
         lines.append(
-            f"{'+'if holders>0 else ''}{holders}戶：千張大戶本週{'加碼，籌碼向上集中，偏多' if holders>0 else '減倉，需注意'}（{dir_str}）"
+            f"千張大戶：本週{'加碼，籌碼向上集中，偏多' if holders > 0 else '減倉，籌碼分散，偏空'}（{dir_str}）"
         )
 
-    if score >= 80:
-        lines.append("結論：各項條件強勢，優先觀察。")
-    elif dip >= 4 and score < 60:
-        lines.append("結論：基礎面普通，但籌碼沉澱訊號很強，等量縮或BB壓縮再考慮。")
+    if dip >= 4 and not conds:
+        lines.append("綜合：籌碼沉澱訊號強、技術條件健康，值得重點關注。")
     elif dip >= 4:
-        lines.append("結論：籌碼沉澱訊號強，基礎面達標，可關注後續型態。")
+        lines.append("綜合：籌碼沉澱訊號強，但技術條件尚不完整，需等待型態確認。")
+    elif not conds:
+        lines.append("綜合：技術條件到位，籌碼訊號待觀察。")
     else:
-        lines.append("結論：訊號醞釀中，持續觀察法人方向。")
+        lines.append("綜合：技術與籌碼條件均待改善，持續觀察。")
 
     return "\n".join(lines)
 

@@ -42,6 +42,23 @@ export interface ResultData {
   rows: ResultRow[]
 }
 
+export interface ExitSignal {
+  type: string
+  label: string
+  bb?: number
+  peak_bb?: number
+  chip_pct?: number
+}
+
+export interface ExitAlert {
+  code: string
+  name: string
+  bb: number
+  peak_bb: number
+  chip_3d_pct: number
+  triggered: ExitSignal[]
+}
+
 export interface JobStatus {
   name: string
   schedule: string
