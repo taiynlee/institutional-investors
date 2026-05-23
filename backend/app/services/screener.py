@@ -40,6 +40,8 @@ def is_squeeze(closes: list[float]) -> bool:
 
 def _find_30d_high_breakout(
     closes: list[float],
+    highs: list[float],
+    lows: list[float],
     volumes: list[int],
     lookback: int = 50,
     require_volume: bool = False,
@@ -51,6 +53,7 @@ def _find_30d_high_breakout(
     條件：
       - closes[idx] > 前30日最高 且 closes[idx-1] < 前30日最高（突破當天）
       - BB 位階 > 8（確認突破布林上軌附近）
+      - 收盤在當日高低區間的上 70%（排除長上影線假突破）
       - require_volume=True 時，額外要求成交量 >= MA20 × vol_multiplier
     回傳 (bb_peak_at_event, days_ago) 或 None
     """
@@ -61,6 +64,10 @@ def _find_30d_high_breakout(
             break
         high_30d = max(closes[idx - 30:idx])
         if closes[idx] <= high_30d or closes[idx - 1] >= high_30d:
+            continue
+        # 收盤位置：當日收盤在高低區間上 70% 以上（過濾長上影線假突破）
+        h, l = highs[idx], lows[idx]
+        if h > l and (closes[idx] - l) / (h - l) < 0.7:
             continue
         if require_volume:
             ma20_vol = float(np.mean(volumes[max(0, idx - 20):idx])) if idx >= 20 else 0.0
@@ -105,7 +112,7 @@ def check_entry_criteria(
     bb_peak_A = 0.0
     if squeeze and trend_ok:
         result = _find_30d_high_breakout(
-            closes, volumes, lookback=1, require_volume=True,
+            closes, highs, lows, volumes, lookback=1, require_volume=True,
             vol_multiplier=1.5, start_days_ago=0,
         )
         if result:
@@ -118,7 +125,7 @@ def check_entry_criteria(
     days_ago_B = 0
     if trend_ok and 0 <= bb_now <= 5:
         result = _find_30d_high_breakout(
-            closes, volumes, lookback=50, require_volume=False,
+            closes, highs, lows, volumes, lookback=50, require_volume=False,
             start_days_ago=1,
         )
         if result:

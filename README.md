@@ -19,13 +19,11 @@
 
 ## UI
 
-![dashboard](docs/screenshots/dashboard.png)
+![dashboard](docs/screenshots/dashboard1.png)
 
----
+![dashboard](docs/screenshots/dashboard2.jpg)
 
-## 可結合 Line 通知，當然你也可以外掛券商 API 直接下單 
-
-![dashboard](docs/screenshots/line.png)
+![dashboard](docs/screenshots/dashboard3.jpg)
 
 ---
 
@@ -142,7 +140,7 @@
 全部條件同日成立：
 
 1. **BB 帶寬壓縮**：最近 5 日中有 ≥ 3 日帶寬低於 20 日均帶寬的 85%（代表股價盤整蓄勢）
-2. **今日創 30 日新高**：今日收盤突破前 30 日最高收盤，且昨日尚未突破（只抓突破當天）
+2. **今日創 30 日新高**：今日收盤突破前 30 日最高收盤，且昨日尚未突破（只抓突破當天）；收盤須在當日高低區間的上 70% 以上（過濾長上影線假突破，即 `(close - low) / (high - low) ≥ 0.7`）
 3. **今日出量**：今日成交量 ≥ 20 日均量 × 1.5 倍
 4. **突破有動能**：突破當日的布林位階 > 8（排除弱勢假突破）
 5. **籌碼條件**：突破當日外資 + 投信淨買超 ÷ 股本 ≥ 1%（當日主力積極進場），且近 12 日累積淨買超方向為正（未反手賣出）
