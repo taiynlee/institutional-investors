@@ -57,6 +57,22 @@ async def get_screener_results(
     ).order_by(ScreeningResult.score.desc())
     results = (await db.execute(q)).scalars().all()
 
+    # 今天沒資料時 fallback 最近一筆
+    if not results and calc_date is None:
+        latest = (await db.execute(
+            select(ScreeningResult.calc_date)
+            .where(ScreeningResult.passes == True)
+            .order_by(ScreeningResult.calc_date.desc())
+            .limit(1)
+        )).scalar_one_or_none()
+        if latest:
+            target_date = latest
+            results = (await db.execute(
+                select(ScreeningResult).where(
+                    and_(ScreeningResult.calc_date == latest, ScreeningResult.passes == True)
+                ).order_by(ScreeningResult.score.desc())
+            )).scalars().all()
+
     codes = [r.code for r in results]
     stats = await _appearance_stats(codes, target_date, db) if codes else {}
 
