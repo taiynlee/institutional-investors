@@ -79,7 +79,7 @@ function generateAnalysis(s: ScreenerResult): string {
 
 function AppearanceBadge({ appearances, streak }: { appearances: number; streak: number }) {
   if (streak >= 2)
-    return <span className="px-2 py-0.5 bg-blue-900 text-blue-300 text-xs rounded-full">連續 {streak} 日</span>
+    return <span className="px-2 py-0.5 bg-purple-900 text-purple-300 text-xs rounded-full">連續 {streak} 日</span>
   if (appearances === 1)
     return <span className="px-2 py-0.5 bg-orange-900 text-orange-300 text-xs rounded-full">五日首次</span>
   return <span className="px-2 py-0.5 bg-gray-700 text-gray-300 text-xs rounded-full">5日 {appearances} 次</span>
