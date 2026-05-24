@@ -80,19 +80,18 @@ async def get_screener_results(
     return [_format_result(r, stats.get(r.code)) for r in results]
 
 
-@router.get("/api/result")
-async def get_result_comparison(db: AsyncSession = Depends(get_db)):
-    """最近一次篩選結果 vs 次交易日收盤價比較。"""
-    # 最近一次篩選日，且其次交易日已有收盤資料（不一定是今天）
+@router.get("/api/result/dates")
+async def get_result_dates(db: AsyncSession = Depends(get_db)):
+    """回傳過去 10 個有篩選結果且之後有價格資料的交易日，供下拉選單使用。"""
     candidate_dates = (await db.execute(
         select(ScreeningResult.calc_date)
         .distinct()
         .where(ScreeningResult.calc_date < date.today())
         .order_by(ScreeningResult.calc_date.desc())
-        .limit(10)
+        .limit(20)
     )).scalars().all()
 
-    pred_date_row = None
+    valid = []
     for cd in candidate_dates:
         has_next = (await db.execute(
             select(DailyPrice.trade_date)
@@ -100,52 +99,83 @@ async def get_result_comparison(db: AsyncSession = Depends(get_db)):
             .limit(1)
         )).scalar_one_or_none()
         if has_next:
-            pred_date_row = cd
+            valid.append(str(cd))
+        if len(valid) >= 10:
             break
+    return valid
 
-    if not pred_date_row:
+
+@router.get("/api/result")
+async def get_result_comparison(
+    db: AsyncSession = Depends(get_db),
+    pred_date: Optional[date] = Query(None),
+):
+    """篩選結果 vs 最後一個有資料交易日收盤比較。"""
+    # 取得所有可用日期
+    candidate_dates = (await db.execute(
+        select(ScreeningResult.calc_date)
+        .distinct()
+        .where(ScreeningResult.calc_date < date.today())
+        .order_by(ScreeningResult.calc_date.desc())
+        .limit(20)
+    )).scalars().all()
+
+    # 找最後一個有價格資料的日期（基準收盤日）
+    latest_price_date = (await db.execute(
+        select(DailyPrice.trade_date)
+        .order_by(DailyPrice.trade_date.desc())
+        .limit(1)
+    )).scalar_one_or_none()
+
+    if not latest_price_date:
         return {"pred_date": None, "price_date": None, "rows": []}
 
-    pred_date = pred_date_row
+    # 選定 pred_date：若未指定則用最近一個有資料的日期
+    if pred_date:
+        chosen = pred_date if pred_date in candidate_dates else None
+    else:
+        chosen = None
+        for cd in candidate_dates:
+            if cd < latest_price_date:
+                chosen = cd
+                break
+
+    if not chosen:
+        return {"pred_date": None, "price_date": None, "rows": []}
 
     # 取得那天的篩選結果
     screened = (await db.execute(
         select(ScreeningResult)
-        .where(ScreeningResult.calc_date == pred_date)
+        .where(ScreeningResult.calc_date == chosen)
         .order_by(ScreeningResult.score.desc())
     )).scalars().all()
 
     codes = [r.code for r in screened]
     if not codes:
-        return {"pred_date": str(pred_date), "price_date": None, "rows": []}
+        return {"pred_date": str(chosen), "price_date": None, "rows": []}
 
-    # 篩選日收盤（昨收）
+    # 篩選日收盤
     prev_prices = {r.code: r.close for r in (await db.execute(
         select(DailyPrice)
-        .where(and_(DailyPrice.code.in_(codes), DailyPrice.trade_date == pred_date))
+        .where(and_(DailyPrice.code.in_(codes), DailyPrice.trade_date == chosen))
     )).scalars().all()}
 
-    # 次交易日收盤（今收）— 找篩選日之後最近一天有資料的日期
-    next_price_row = (await db.execute(
-        select(DailyPrice.trade_date)
-        .where(and_(DailyPrice.code.in_(codes), DailyPrice.trade_date > pred_date))
-        .order_by(DailyPrice.trade_date)
-        .limit(1)
-    )).scalar_one_or_none()
-
-    if not next_price_row:
-        return {"pred_date": str(pred_date), "price_date": None, "rows": []}
-
-    price_date = next_price_row
+    # 最後一個有資料交易日收盤
     next_prices = {r.code: r.close for r in (await db.execute(
         select(DailyPrice)
-        .where(and_(DailyPrice.code.in_(codes), DailyPrice.trade_date == price_date))
+        .where(and_(DailyPrice.code.in_(codes), DailyPrice.trade_date == latest_price_date))
     )).scalars().all()}
 
-    stats = await _appearance_stats(codes, pred_date, db)
+    # AI 精選
+    ai_pick_row = (await db.execute(
+        select(AIPick).where(AIPick.calc_date == chosen)
+    )).scalar_one_or_none()
+    ai_pick_code = ai_pick_row.code if ai_pick_row else None
+
+    stats = await _appearance_stats(codes, chosen, db)
 
     rows = []
-    for s in screened:
+    for i, s in enumerate(screened):
         prev = prev_prices.get(s.code)
         nxt = next_prices.get(s.code)
         if prev is None or nxt is None:
@@ -165,10 +195,12 @@ async def get_result_comparison(db: AsyncSession = Depends(get_db)):
             "prev_close": prev,
             "close": nxt,
             "chg_pct": round(chg, 2),
+            "is_top_score": i == 0,
+            "is_ai_pick": s.code == ai_pick_code,
         })
 
     rows.sort(key=lambda x: x["chg_pct"], reverse=True)
-    return {"pred_date": str(pred_date), "price_date": str(price_date), "rows": rows}
+    return {"pred_date": str(chosen), "price_date": str(latest_price_date), "rows": rows}
 
 
 @router.get("/api/price/{code}")

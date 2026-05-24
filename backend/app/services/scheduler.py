@@ -126,6 +126,9 @@ async def job4_screener():
     today = date.today()
     if await _already_fetched("job4", today):
         return
+    if not await _already_fetched("job1", today):
+        logger.warning("job4 skipped: job1 not yet successful for today (institutional data missing)")
+        return
     try:
         market_bb_peak, market_bb_now = fetch_twii_bb_stats()
         market_bb_drop = max(0, market_bb_peak - market_bb_now)
@@ -504,7 +507,7 @@ async def refresh_stock_list():
 
 def create_scheduler() -> AsyncIOScheduler:
     scheduler = AsyncIOScheduler(timezone="Asia/Taipei")
-    scheduler.add_job(job1_institutional_price, "cron", hour=16, minute=5)
+    scheduler.add_job(job1_institutional_price, "cron", hour=18, minute=0)
     scheduler.add_job(job2_margin, "cron", hour=20, minute=45)
     scheduler.add_job(job3_shareholding, "cron", hour=18, minute=30)
     scheduler.add_job(job4_screener, "cron", hour=21, minute=0)

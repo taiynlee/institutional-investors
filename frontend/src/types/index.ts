@@ -34,6 +34,8 @@ export interface ResultRow {
   prev_close: number
   close: number
   chg_pct: number
+  is_top_score: boolean
+  is_ai_pick: boolean
 }
 
 export interface ResultData {

@@ -104,7 +104,7 @@ export function StockCard({ stock }: StockCardProps) {
       <div className="flex justify-between items-start mb-3">
         <div>
           <span className="text-white font-bold text-lg">{stock.code}</span>
-          <span className="text-gray-400 text-sm ml-2">{stock.name}</span>
+          <span className="text-gray-400 text-lg ml-2">{stock.name}</span>
         </div>
         <div className="flex items-stretch gap-1.5">
           <span className={`text-2xl font-black leading-none self-center ${scoreColor}`}>{stock.score}</span>
