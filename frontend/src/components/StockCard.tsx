@@ -129,7 +129,7 @@ export function StockCard({ stock }: StockCardProps) {
           <span key={tag} className={`px-2 py-0.5 text-xs rounded-full font-semibold ${tag === 'B' ? 'bg-blue-900 text-blue-300' : 'bg-green-900 text-green-300'}`}>策略 {tag}</span>
         ))}
         {stock.is_squeeze && (
-          <span className="px-2 py-0.5 bg-purple-900 text-purple-300 text-xs rounded-full">盤整</span>
+          <span className="px-2 py-0.5 bg-gray-700 text-gray-300 text-xs rounded-full">盤整</span>
         )}
         <AppearanceBadge appearances={stock.appearances_5d} streak={stock.streak} />
       </div>
