@@ -105,6 +105,7 @@ export function StockCard({ stock }: StockCardProps) {
         <div>
           <span className="text-white font-bold text-lg">{stock.code}</span>
           <span className="text-gray-400 text-lg ml-2">{stock.name}</span>
+          <span className="text-gray-600 text-[10px] ml-2">{stock.calc_date.slice(5)} 篩選</span>
         </div>
         <div className="flex items-stretch gap-1.5">
           <span className={`text-2xl font-black leading-none self-center ${scoreColor}`}>{stock.score}</span>

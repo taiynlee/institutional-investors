@@ -53,7 +53,7 @@ export function PriceSparkline({ code }: { code: string }) {
       </svg>
       <div className="flex justify-between text-[10px] text-gray-700 mt-0.5">
         <span>{data[0].date.slice(5)}</span>
-        <span>{data[data.length - 1].date.slice(5)}</span>
+        <span className="text-gray-500">最新收盤 {data[data.length - 1].date.slice(5)}</span>
       </div>
     </div>
   )
