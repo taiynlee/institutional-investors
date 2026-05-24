@@ -21,7 +21,7 @@ export function PriceSparkline({ code }: { code: string }) {
   const first = closes[0]
   const last = closes[closes.length - 1]
   const isUp = last >= first
-  const color = isUp ? '#22c55e' : '#ef4444'
+  const color = isUp ? '#f87171' : '#4ade80'
   const pct = ((last - first) / first * 100).toFixed(1)
 
   const W = 280
