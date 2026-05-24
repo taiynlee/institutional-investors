@@ -113,7 +113,7 @@ export function StockCard({ stock }: StockCardProps) {
               {stock.dip_bonus > 0 ? '+' : ''}{stock.dip_bonus}資
             </span>
             {stock.holders_bonus !== null && stock.holders_bonus !== undefined && (
-              <span className={`${stock.holders_bonus > 0 ? 'text-green-400' : stock.holders_bonus < 0 ? 'text-red-400' : 'text-gray-500'}`}>
+              <span className={`${stock.holders_bonus > 0 ? 'text-sky-400' : stock.holders_bonus < 0 ? 'text-pink-400' : 'text-gray-500'}`}>
                 {stock.holders_bonus > 0 ? '+' : ''}{stock.holders_bonus}戶
               </span>
             )}
