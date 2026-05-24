@@ -126,8 +126,12 @@ async def job4_screener():
     today = date.today()
     if await _already_fetched("job4", today):
         return
-    if not await _already_fetched("job1", today):
-        logger.warning("job4 skipped: job1 not yet successful for today (institutional data missing)")
+    async with AsyncSessionLocal() as db:
+        inst_today = (await db.execute(
+            select(Institutional.trade_date).where(Institutional.trade_date == today).limit(1)
+        )).scalar_one_or_none()
+    if inst_today is None:
+        logger.warning("job4 skipped: no institutional data for today in DB (job1 may have run before T86 published)")
         return
     try:
         market_bb_peak, market_bb_now = fetch_twii_bb_stats()
