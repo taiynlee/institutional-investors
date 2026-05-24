@@ -18,6 +18,9 @@ function generateAnalysis(s: ScreenerResult): string {
     if (s.bb_peak > 0) {
       lines.push(`  ↳ 突破當天位階 ${s.bb_peak.toFixed(1)}（突破有力度）→ 今日位階 ${s.bb_position.toFixed(1)}（已充分拉回）。兩者落差越大代表洗盤越乾淨。`)
     }
+    if (s.is_squeeze) {
+      lines.push(`  ↳ 【盤整加成】目前布林帶寬再度收窄——股價在月線附近橫盤蓄力，是「第二次蓄力」訊號。若再度放量突破，爆發力比單純 B 訊號更強。`)
+    }
   }
   if (stratTags.length > 0) lines.push('')
 
@@ -128,9 +131,12 @@ export function StockCard({ stock }: StockCardProps) {
         {stock.tags.filter(t => ['A', 'B', 'A+B'].includes(t)).map(tag => (
           <span key={tag} className={`px-2 py-0.5 text-xs rounded-full font-semibold ${tag === 'B' ? 'bg-blue-900 text-blue-300' : 'bg-green-900 text-green-300'}`}>策略 {tag}</span>
         ))}
-        {stock.is_squeeze && (
-          <span className="px-2 py-0.5 bg-gray-700 text-gray-300 text-xs rounded-full">盤整</span>
-        )}
+        {stock.is_squeeze && (() => {
+          const hasB = stock.tags.some(t => t === 'B' || t === 'A+B')
+          return hasB
+            ? <span className="px-2 py-0.5 bg-teal-900 text-teal-300 text-xs rounded-full font-semibold">盤整⚡</span>
+            : <span className="px-2 py-0.5 bg-gray-700 text-gray-300 text-xs rounded-full">盤整</span>
+        })()}
         <AppearanceBadge appearances={stock.appearances_5d} streak={stock.streak} />
       </div>
 
