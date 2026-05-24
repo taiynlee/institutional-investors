@@ -7,7 +7,7 @@ export function BBGauge({ position }: BBGaugeProps) {
   const pct = ((clamped + 10) / 20) * 100
   const color =
     position > 5 ? '#22c55e' :
-    position > 0 ? '#eab308' :
+    position > 0 ? '#3b82f6' :
     position > -3 ? '#f97316' : '#ef4444'
 
   return (
