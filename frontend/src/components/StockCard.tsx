@@ -90,6 +90,8 @@ interface StockCardProps { stock: ScreenerResult }
 export function StockCard({ stock }: StockCardProps) {
   const scoreColor = stock.score >= 80 ? 'text-green-400' : stock.score >= 60 ? 'text-yellow-400' : 'text-red-400'
   const analysis = generateAnalysis(stock)
+  const daysSinceCalc = Math.floor((Date.now() - new Date(stock.calc_date).getTime()) / 86400000)
+  const dateColor = daysSinceCalc <= 3 ? 'text-green-400' : 'text-gray-600'
 
   return (
     <div className="relative group bg-gray-900 border border-gray-700 rounded-xl p-4 hover:border-blue-500 transition-colors">
@@ -105,7 +107,7 @@ export function StockCard({ stock }: StockCardProps) {
         <div>
           <span className="text-white font-bold text-lg">{stock.code}</span>
           <span className="text-gray-400 text-lg ml-2">{stock.name}</span>
-          <span className="text-gray-600 text-[10px] ml-2">{stock.calc_date.slice(5)} 篩選</span>
+          <span className={`text-[10px] ml-2 ${dateColor}`}>{stock.calc_date.slice(5)} 篩選</span>
         </div>
         <div className="flex items-stretch gap-1.5">
           <span className={`text-2xl font-black leading-none self-center ${scoreColor}`}>{stock.score}</span>
