@@ -224,7 +224,7 @@ async def get_stock_detail(code: str, db: AsyncSession = Depends(get_db)):
 
 
 _JOB_SCHEDULE = {
-    "job1": "16:05",
+    "job1": "18:00",
     "job2": "20:45",
     "job3": "18:30 (週日)",
     "job4": "21:00",
@@ -262,8 +262,8 @@ async def get_data_status(db: AsyncSession = Depends(get_db)):
         "jobs": [_fmt_job(j) for j in ("job1", "job2", "job3", "job4")],
         "is_reliable": any(l.job_name == "job4" and l.status == "success" for l in logs),
         "data_sources": {
-            "institutional": {"label": "法人買賣超", "source": "TWSE T86", "via": "job1 16:05"},
-            "price": {"label": "日收盤價", "source": "TWSE MI_INDEX", "via": "job1 16:05"},
+            "institutional": {"label": "法人買賣超", "source": "TWSE T86", "via": "job1 18:00"},
+            "price": {"label": "日收盤價", "source": "TWSE MI_INDEX", "via": "job1 18:00"},
             "margin": {
                 "label": "融資+借券",
                 "source": "TWSE TWT93U",
