@@ -32,10 +32,9 @@ async def lifespan(app: FastAPI):
         await refresh_stock_list()
         await backfill_90_days()
     _asyncio.create_task(backfill_shareholding_all())
-    scheduler = create_scheduler()
-    scheduler.start()
+    scheduler_task = create_scheduler()
     yield
-    scheduler.shutdown()
+    scheduler_task.cancel()
 
 
 app = FastAPI(title="股票主力篩選", lifespan=lifespan)

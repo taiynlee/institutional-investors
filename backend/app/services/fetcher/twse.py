@@ -1,3 +1,4 @@
+import asyncio
 import requests
 from datetime import date
 
@@ -24,7 +25,7 @@ async def fetch_institutional(trade_date: date) -> list[dict]:
     """TWSE 三大法人 T86（全市場上市）"""
     date_str = trade_date.strftime("%Y%m%d")
     url = f"{BASE_TWSE}/fund/T86?response=json&date={date_str}&selectType=ALLBUT0999"
-    data = _get(url)
+    data = await asyncio.to_thread(_get, url)
     if data.get("stat") != "OK":
         return []
     rows = []
@@ -47,7 +48,7 @@ async def fetch_daily_price(trade_date: date, codes: set[str] | None = None) -> 
     """TWSE 個股日成交 MI_INDEX（全市場，可傳 codes 過濾只存目標股）"""
     date_str = trade_date.strftime("%Y%m%d")
     url = f"{BASE_TWSE}/afterTrading/MI_INDEX?response=json&date={date_str}&type=ALLBUT0999"
-    data = _get(url)
+    data = await asyncio.to_thread(_get, url)
     rows = []
     for table in data.get("tables", []):
         fields = table.get("fields", [])
@@ -78,7 +79,7 @@ async def fetch_margin(trade_date: date) -> list[dict]:
     """TWSE 融資融券 TWT93U"""
     date_str = trade_date.strftime("%Y%m%d")
     url = f"{BASE_TWSE}/marginTrading/TWT93U?response=json&date={date_str}&selectType=ALL"
-    data = _get(url)
+    data = await asyncio.to_thread(_get, url)
     if data.get("stat") != "OK":
         return []
     rows = []

@@ -1,8 +1,7 @@
 import asyncio
 import logging
-from datetime import date, timedelta
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from sqlalchemy import select, and_
+from datetime import date, timedelta, datetime
+from sqlalchemy import select, and_, func
 from app.db.base import AsyncSessionLocal
 from app.db.models import (
     FetchLog, DailyPrice, Institutional, MarginTrading,
@@ -45,27 +44,45 @@ async def _log_fetch(job_name: str, fetch_date: date, status: str, rows: int = 0
         await db.commit()
 
 
+async def _fetch_and_store_institutional(today: date, stock_codes: set) -> int:
+    """從 T86 抓法人資料並寫入 DB，回傳寫入筆數（0 = T86 尚未發布）。"""
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+    all_inst = await fetch_institutional(today)
+    rows = [r for r in all_inst if r["code"] in stock_codes]
+    if rows:
+        async with AsyncSessionLocal() as db:
+            stmt = pg_insert(Institutional).values(rows)
+            await db.execute(stmt.on_conflict_do_update(
+                index_elements=["code", "trade_date"],
+                set_={"foreign_net": stmt.excluded.foreign_net, "trust_net": stmt.excluded.trust_net},
+            ))
+            await db.commit()
+    return len(rows)
+
+
 async def job1_institutional_price():
-    """16:05 — 三大法人 + 日成交（只存 stock_list 內的上市上櫃電子股）"""
+    """18:00 — 三大法人 + 日成交（只存 stock_list 內的上市上櫃電子股）"""
     from sqlalchemy.dialects.postgresql import insert as pg_insert
     today = date.today()
-    if await _already_fetched("job1", today):
-        return
     try:
+        if await _already_fetched("job1", today):
+            return
         async with AsyncSessionLocal() as db:
             stock_codes = set(r[0] for r in (await db.execute(select(StockList.code))).all())
-        all_inst = await fetch_institutional(today)
-        rows = [r for r in all_inst if r["code"] in stock_codes]
+        inst_count = await _fetch_and_store_institutional(today, stock_codes)
         price_rows = await fetch_daily_price(today, codes=stock_codes)
         async with AsyncSessionLocal() as db:
-            if rows:
-                stmt = pg_insert(Institutional).values(rows)
-                await db.execute(stmt.on_conflict_do_nothing(index_elements=["code", "trade_date"]))
             if price_rows:
                 stmt = pg_insert(DailyPrice).values(price_rows)
                 await db.execute(stmt.on_conflict_do_nothing(index_elements=["code", "trade_date"]))
             await db.commit()
-        await _log_fetch("job1", today, "success", len(rows) + len(price_rows))
+        # 只有法人資料也有才標 success；否則標 partial（讓 job4 可補抓）
+        if inst_count > 0:
+            await _log_fetch("job1", today, "success", inst_count + len(price_rows))
+            logger.info(f"job1 done: inst={inst_count}, price={len(price_rows)}")
+        else:
+            await _log_fetch("job1", today, "partial", len(price_rows))
+            logger.warning(f"job1 partial: T86 not yet published, price={len(price_rows)} stored")
     except Exception as e:
         await _log_fetch("job1", today, "failed")
         logger.error(f"job1 failed: {e}")
@@ -75,9 +92,9 @@ async def job2_margin():
     """20:45 — 融資 + 借券賣出餘額（TWT93U，TWSE 約 20:30 更新，含融資欄位2-7與借券欄位8-12）"""
     from sqlalchemy.dialects.postgresql import insert as pg_insert
     today = date.today()
-    if await _already_fetched("job2", today):
-        return
     try:
+        if await _already_fetched("job2", today):
+            return
         async with AsyncSessionLocal() as db:
             stock_codes = set(r[0] for r in (await db.execute(select(StockList.code))).all())
         all_margin = await fetch_margin(today)
@@ -87,7 +104,12 @@ async def job2_margin():
                 stmt = pg_insert(MarginTrading).values(margin_rows)
                 await db.execute(stmt.on_conflict_do_nothing(index_elements=["code", "trade_date"]))
             await db.commit()
-        await _log_fetch("job2", today, "success", len(margin_rows))
+        if margin_rows:
+            await _log_fetch("job2", today, "success", len(margin_rows))
+            logger.info(f"job2 done: margin={len(margin_rows)}")
+        else:
+            await _log_fetch("job2", today, "partial", 0)
+            logger.warning("job2 partial: TWT93U not yet published, will retry next run")
     except Exception as e:
         await _log_fetch("job2", today, "failed")
         logger.error(f"job2 failed: {e}")
@@ -123,15 +145,63 @@ async def job3_shareholding():
 
 async def job4_screener():
     """21:00 — 執行篩選，更新 screening_result"""
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
     today = date.today()
-    if await _already_fetched("job4", today):
-        return
-    async with AsyncSessionLocal() as db:
-        inst_today = (await db.execute(
-            select(Institutional.trade_date).where(Institutional.trade_date == today).limit(1)
-        )).scalar_one_or_none()
-    if inst_today is None:
-        logger.warning("job4 skipped: no institutional data for today in DB (job1 may have run before T86 published)")
+    try:
+        if await _already_fetched("job4", today):
+            return
+
+        async with AsyncSessionLocal() as db:
+            inst_count_today = (await db.execute(
+                select(func.count()).select_from(Institutional).where(Institutional.trade_date == today)
+            )).scalar_one()
+        async with AsyncSessionLocal() as db:
+            stock_codes = set(r[0] for r in (await db.execute(select(StockList.code))).all())
+
+        if inst_count_today == 0:
+            logger.warning("job4: no institutional data for today, attempting T86 re-fetch...")
+            refetched = await _fetch_and_store_institutional(today, stock_codes)
+            if refetched == 0:
+                # 非交易日（週末/假日）：改用 DB 最新交易日
+                async with AsyncSessionLocal() as db:
+                    last_trade_date = (await db.execute(
+                        select(func.max(Institutional.trade_date))
+                    )).scalar_one()
+                if last_trade_date is None:
+                    logger.warning("job4 skipped: no institutional data in DB at all")
+                    return
+                if await _already_fetched("job4", last_trade_date):
+                    logger.info(f"job4 already done for last trade date {last_trade_date}")
+                    return
+                logger.info(f"job4: using last trade date {last_trade_date} instead of today")
+                today = last_trade_date
+            else:
+                logger.info(f"job4: re-fetched {refetched} institutional rows")
+                await _log_fetch("job1", today, "success", refetched)
+
+        # 確保 margin 資料也到位，否則補抓
+        async with AsyncSessionLocal() as db:
+            margin_count_today = (await db.execute(
+                select(func.count()).select_from(MarginTrading).where(MarginTrading.trade_date == today)
+            )).scalar_one()
+        if margin_count_today == 0:
+            logger.warning("job4: no margin data for today, attempting TWT93U re-fetch...")
+            all_margin = await fetch_margin(today)
+            margin_rows = [r for r in all_margin if r["code"] in stock_codes]
+            if margin_rows:
+                async with AsyncSessionLocal() as db:
+                    stmt = pg_insert(MarginTrading).values(margin_rows)
+                    await db.execute(stmt.on_conflict_do_update(
+                        index_elements=["code", "trade_date"],
+                        set_={"margin_balance": stmt.excluded.margin_balance, "margin_change": stmt.excluded.margin_change},
+                    ))
+                    await db.commit()
+                await _log_fetch("job2", today, "success", len(margin_rows))
+                logger.info(f"job4: re-fetched {len(margin_rows)} margin rows")
+            else:
+                logger.warning("job4: TWT93U still not available, screening will use previous margin data")
+    except Exception as e:
+        logger.error(f"job4 pre-screen setup failed: {e}")
         return
     try:
         market_bb_peak, market_bb_now = fetch_twii_bb_stats()
@@ -509,10 +579,43 @@ async def refresh_stock_list():
     logger.info(f"Stock list updated: {len(rows)} stocks")
 
 
-def create_scheduler() -> AsyncIOScheduler:
-    scheduler = AsyncIOScheduler(timezone="Asia/Taipei")
-    scheduler.add_job(job1_institutional_price, "cron", hour=18, minute=0)
-    scheduler.add_job(job2_margin, "cron", hour=20, minute=45)
-    scheduler.add_job(job3_shareholding, "cron", hour=18, minute=30)
-    scheduler.add_job(job4_screener, "cron", hour=21, minute=0)
-    return scheduler
+async def _run_job(name: str, coro) -> None:
+    """包裝 job 執行，確保 exception 會被 log。"""
+    try:
+        await coro
+    except Exception as e:
+        logger.error(f"{name} raised unhandled exception: {e}", exc_info=True)
+
+
+async def _scheduler_loop() -> None:
+    """每分鐘檢查台北時間，觸發對應 job。用 _already_fetched 防重複執行。"""
+    from zoneinfo import ZoneInfo
+    TAIPEI = ZoneInfo("Asia/Taipei")
+    logger.warning("Scheduler loop started")
+    print("SCHEDULER LOOP STARTED", flush=True)
+    while True:
+        await asyncio.sleep(60)
+        now = datetime.now(tz=TAIPEI)
+        h, m = now.hour, now.minute
+        logger.debug(f"Scheduler tick: {now.strftime('%H:%M')} (weekday={now.weekday()})")
+        # job1: 18:00–18:14
+        if h == 18 and m < 15:
+            logger.info(f"Scheduler: triggering job1 at {now.strftime('%H:%M')}")
+            asyncio.create_task(_run_job("job1", job1_institutional_price()))
+        # job2: 20:45–20:59
+        if h == 20 and m >= 45:
+            logger.info(f"Scheduler: triggering job2 at {now.strftime('%H:%M')}")
+            asyncio.create_task(_run_job("job2", job2_margin()))
+        # job3: Sunday 18:30–18:44
+        if now.weekday() == 6 and h == 18 and 30 <= m < 45:
+            logger.info(f"Scheduler: triggering job3 at {now.strftime('%H:%M')}")
+            asyncio.create_task(_run_job("job3", job3_shareholding()))
+        # job4: 21:00–21:14
+        if h == 21 and m < 15:
+            logger.info(f"Scheduler: triggering job4 at {now.strftime('%H:%M')}")
+            asyncio.create_task(_run_job("job4", job4_screener()))
+
+
+def create_scheduler() -> asyncio.Task:
+    """啟動排程 loop，回傳 Task（供 lifespan 取消用）。"""
+    return asyncio.create_task(_scheduler_loop())

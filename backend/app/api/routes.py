@@ -154,10 +154,18 @@ async def get_result_comparison(
     if not codes:
         return {"pred_date": str(chosen), "price_date": None, "rows": []}
 
-    # 篩選日收盤
+    # 篩選日收盤：找最近一個 ≤ chosen 的交易日（避免篩選日是假日無價格資料）
+    prev_price_date = (await db.execute(
+        select(func.max(DailyPrice.trade_date))
+        .where(and_(DailyPrice.code.in_(codes), DailyPrice.trade_date <= chosen))
+    )).scalar_one_or_none()
+
+    if not prev_price_date:
+        return {"pred_date": str(chosen), "price_date": None, "rows": []}
+
     prev_prices = {r.code: r.close for r in (await db.execute(
         select(DailyPrice)
-        .where(and_(DailyPrice.code.in_(codes), DailyPrice.trade_date == chosen))
+        .where(and_(DailyPrice.code.in_(codes), DailyPrice.trade_date == prev_price_date))
     )).scalars().all()}
 
     # 最後一個有資料交易日收盤
@@ -426,9 +434,19 @@ async def get_exit_alerts(db: AsyncSession = Depends(get_db)):
 
 @router.get("/api/ai-pick")
 async def get_ai_pick(db: AsyncSession = Depends(get_db)):
-    """回傳最近一筆 AI 精選結果。"""
+    """回傳最近一筆 AI 精選結果，只回傳與最新篩選同日的結果。"""
+    latest_screen_date = (await db.execute(
+        select(ScreeningResult.calc_date)
+        .where(ScreeningResult.passes == True)
+        .order_by(ScreeningResult.calc_date.desc())
+        .limit(1)
+    )).scalar_one_or_none()
+
+    if not latest_screen_date:
+        return {"calc_date": None, "code": None, "name": None, "reason": None}
+
     row = (await db.execute(
-        select(AIPick).order_by(AIPick.calc_date.desc()).limit(1)
+        select(AIPick).where(AIPick.calc_date == latest_screen_date)
     )).scalar_one_or_none()
     if not row:
         return {"calc_date": None, "code": None, "name": None, "reason": None}
