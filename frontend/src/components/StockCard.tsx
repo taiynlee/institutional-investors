@@ -101,8 +101,14 @@ export function StockCard({ stock }: StockCardProps) {
       <div className="invisible group-hover:visible opacity-0 group-hover:opacity-100 transition-opacity
         absolute z-50 left-full top-0 ml-3 w-[380px]
         text-[11px] leading-relaxed bg-gray-950 border border-blue-500
-        text-gray-200 rounded-lg p-3 shadow-2xl pointer-events-none whitespace-pre-wrap text-left">
+        text-gray-200 rounded-lg p-3 shadow-2xl pointer-events-auto whitespace-pre-wrap text-left select-text">
         {analysis}
+        <div
+          className="mt-2 pt-2 border-t border-blue-800 text-blue-400 text-[10px] cursor-pointer hover:text-blue-300 select-none"
+          onClick={() => navigator.clipboard.writeText(analysis)}
+        >
+          點擊複製全文
+        </div>
         <span className="absolute top-3 right-full border-4 border-transparent border-r-blue-500" />
       </div>
 
@@ -111,6 +117,11 @@ export function StockCard({ stock }: StockCardProps) {
           <span className="text-white font-bold text-lg">{stock.code}</span>
           <span className="text-gray-400 text-lg ml-2">{stock.name}</span>
           <span className={`text-[10px] ml-2 ${dateColor}`}>{stock.calc_date.slice(5)} 篩選</span>
+          <button
+            className="ml-2 text-gray-600 hover:text-blue-400 text-xs transition-colors"
+            title="複製解讀"
+            onClick={e => { e.stopPropagation(); navigator.clipboard.writeText(analysis) }}
+          >⎘</button>
         </div>
         <div className="flex items-stretch gap-1.5">
           <span className={`text-2xl font-black leading-none self-center ${scoreColor}`}>{stock.score}</span>

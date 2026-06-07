@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select, and_, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_db
-from app.db.models import ScreeningResult, FetchLog, DailyPrice, MarginTrading, AIPick, StockList, Institutional
+from app.db.models import ScreeningResult, FetchLog, DailyPrice, MarginTrading, AIPick, StockList, Institutional, Shareholding
 from app.services.screener import calc_bb_position
 
 router = APIRouter()
@@ -430,6 +430,57 @@ async def get_exit_alerts(db: AsyncSession = Depends(get_db)):
             })
 
     return alerts
+
+
+@router.get("/api/holders")
+async def get_holders(
+    db: AsyncSession = Depends(get_db),
+):
+    """千張大戶占比排行，含週增減。"""
+    latest_date = (await db.execute(
+        select(func.max(Shareholding.report_date))
+    )).scalar_one_or_none()
+
+    if not latest_date:
+        return []
+
+    prev_date = (await db.execute(
+        select(func.max(Shareholding.report_date)).where(Shareholding.report_date < latest_date)
+    )).scalar_one_or_none()
+
+    latest_rows = {r.code: r for r in (await db.execute(
+        select(Shareholding).where(Shareholding.report_date == latest_date)
+    )).scalars().all()}
+
+    prev_rows = {}
+    if prev_date:
+        prev_rows = {r.code: r for r in (await db.execute(
+            select(Shareholding).where(Shareholding.report_date == prev_date)
+        )).scalars().all()}
+
+    stocks = {r.code: r for r in (await db.execute(
+        select(StockList).where(StockList.code.in_(list(latest_rows.keys())))
+    )).scalars().all()}
+
+    result = []
+    for code, sh in latest_rows.items():
+        sl = stocks.get(code)
+        prev = prev_rows.get(code)
+        result.append({
+            "code": code,
+            "name": sl.name if sl else code,
+            "sector": sl.sector if sl else "",
+            "report_date": str(sh.report_date),
+            "holders": sh.holders_1000_lot,
+            "pct": sh.pct_1000_lot,
+            "prev_holders": prev.holders_1000_lot if prev else None,
+            "prev_pct": prev.pct_1000_lot if prev else None,
+            "holders_chg": (sh.holders_1000_lot - prev.holders_1000_lot) if prev else None,
+            "pct_chg": round(sh.pct_1000_lot - prev.pct_1000_lot, 2) if prev else None,
+        })
+
+    result.sort(key=lambda x: x["pct_chg"] if x["pct_chg"] is not None else -999, reverse=True)
+    return result
 
 
 @router.get("/api/ai-pick")

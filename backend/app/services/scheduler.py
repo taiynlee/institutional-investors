@@ -199,7 +199,8 @@ async def job4_screener():
                 await _log_fetch("job2", today, "success", len(margin_rows))
                 logger.info(f"job4: re-fetched {len(margin_rows)} margin rows")
             else:
-                logger.warning("job4: TWT93U still not available, screening will use previous margin data")
+                logger.warning("job4: TWT93U still not available, skipping screening until margin data arrives")
+                return
     except Exception as e:
         logger.error(f"job4 pre-screen setup failed: {e}")
         return
@@ -610,8 +611,8 @@ async def _scheduler_loop() -> None:
         if now.weekday() == 6 and h == 18 and 30 <= m < 45:
             logger.info(f"Scheduler: triggering job3 at {now.strftime('%H:%M')}")
             asyncio.create_task(_run_job("job3", job3_shareholding()))
-        # job4: 21:00–21:14
-        if h == 21 and m < 15:
+        # job4: 21:00–21:44（每分鐘重試直到融資資料到位）
+        if h == 21 and m < 45:
             logger.info(f"Scheduler: triggering job4 at {now.strftime('%H:%M')}")
             asyncio.create_task(_run_job("job4", job4_screener()))
 

@@ -1,9 +1,10 @@
 import { useState } from 'react'
 import { Dashboard } from './pages/Dashboard'
 import { Result } from './pages/Result'
+import { Holders } from './pages/Holders'
 import './index.css'
 
-type Tab = 'screener' | 'result'
+type Tab = 'screener' | 'result' | 'holders'
 
 export default function App() {
   const [tab, setTab] = useState<Tab>('screener')
@@ -23,8 +24,14 @@ export default function App() {
         >
           篩選績效
         </button>
+        <button
+          onClick={() => setTab('holders')}
+          className={`text-sm font-medium px-3 py-1 rounded ${tab === 'holders' ? 'bg-gray-700 text-white' : 'text-gray-400 hover:text-white'}`}
+        >
+          千張大戶
+        </button>
       </div>
-      {tab === 'screener' ? <Dashboard /> : <Result />}
+      {tab === 'screener' ? <Dashboard /> : tab === 'result' ? <Result /> : <Holders />}
     </div>
   )
 }

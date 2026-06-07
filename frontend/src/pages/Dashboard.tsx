@@ -134,15 +134,26 @@ export function Dashboard() {
             const tip = tipLines.join('\n')
             return (
               <div className="relative group shrink-0">
-                <div className="p-3 bg-blue-950 border border-blue-700 rounded-lg flex items-center gap-2 cursor-default">
+                <div
+                  className="p-3 bg-blue-950 border border-blue-700 rounded-lg flex items-center gap-2 cursor-pointer select-none"
+                  onClick={() => navigator.clipboard.writeText(tip)}
+                  title="點擊複製"
+                >
                   <span className="text-blue-300 text-xs font-medium uppercase tracking-wide whitespace-nowrap">AI 精選</span>
                   <span className="text-white font-bold">{pick.code} {pick.name}</span>
+                  <span className="text-blue-400 text-xs ml-1 opacity-60">⎘</span>
                 </div>
                 <div className="invisible group-hover:visible opacity-0 group-hover:opacity-100 transition-opacity
                   absolute z-50 top-full left-0 mt-2 w-[420px]
                   text-[11px] leading-relaxed bg-gray-950 border border-blue-500
-                  text-gray-200 rounded-lg p-3 shadow-2xl pointer-events-none whitespace-pre-wrap">
+                  text-gray-200 rounded-lg p-3 shadow-2xl pointer-events-auto whitespace-pre-wrap select-text">
                   {tip}
+                  <div
+                    className="mt-2 pt-2 border-t border-blue-800 text-blue-400 text-[10px] cursor-pointer hover:text-blue-300"
+                    onClick={() => navigator.clipboard.writeText(tip)}
+                  >
+                    點擊複製全文
+                  </div>
                 </div>
               </div>
             )

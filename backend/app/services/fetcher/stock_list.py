@@ -4,6 +4,7 @@ from app.config import settings
 ELECTRONIC_INDUSTRIES = {
     "電子工業", "電子零組件業", "其他電子業", "其他電子類",
     "光電業", "電腦及週邊設備業", "電子通路業", "半導體業",
+    "通信網路業",
 }
 
 
