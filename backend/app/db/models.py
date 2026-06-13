@@ -201,6 +201,14 @@ class StockPool(Base):
     added_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class UsWatchlist(Base):
+    __tablename__ = "us_watchlist"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    symbol: Mapped[str] = mapped_column(String(20), unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(100), default="")
+    added_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class FetchLog(Base):
     __tablename__ = "fetch_log"
     __table_args__ = (UniqueConstraint("job_name", "fetch_date"),)

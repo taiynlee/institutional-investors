@@ -84,6 +84,24 @@ async def _apply_migrations():
                     " ON CONFLICT (code) DO NOTHING"
                 ), {"c": code, "n": name, "t": now})
 
+        # seed us_watchlist with default symbols if empty
+        us_count = (await conn.execute(text("SELECT COUNT(*) FROM us_watchlist"))).scalar()
+        if us_count == 0:
+            _US_DEFAULT = [
+                ("TSM",  "台積電ADR"), ("NVDA", "輝達"), ("LITE", "Lumentum"),
+                ("AAOI", "Applied Opt"), ("MRVL", "Marvell"), ("SPCX", "SpaceX"),
+                ("MU",   "美光"), ("WDC",  "威騰"), ("TSLA", "特斯拉"),
+                ("GOOGL","Alphabet"), ("MSFT", "微軟"), ("AMZN", "亞馬遜"),
+                ("AAPL", "蘋果"),
+            ]
+            from datetime import datetime as _dt
+            now = _dt.utcnow()
+            for sym, name in _US_DEFAULT:
+                await conn.execute(text(
+                    "INSERT INTO us_watchlist (symbol, name, added_at) VALUES (:s, :n, :t)"
+                    " ON CONFLICT (symbol) DO NOTHING"
+                ), {"s": sym, "n": name, "t": now})
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):

@@ -10,7 +10,7 @@ from app.db.base import engine
 from app.db.models import (
     ScreeningResult, FetchLog, DailyPrice, MarginTrading, AIPick,
     StockList, Institutional, Shareholding, IcClassification,
-    CompanyTag, MonthlyRevenue, QuarterlyEps, WatchlistA, StockPool,
+    CompanyTag, MonthlyRevenue, QuarterlyEps, WatchlistA, StockPool, UsWatchlist,
 )
 from app.services.screener import calc_bb_position
 
@@ -694,28 +694,61 @@ async def is_trading_day():
     return {"trading": True}
 
 
+@router.get("/api/us-watchlist")
+async def get_us_watchlist(db: AsyncSession = Depends(get_db)):
+    """美股追蹤清單"""
+    rows = (await db.execute(
+        select(UsWatchlist).order_by(UsWatchlist.added_at)
+    )).scalars().all()
+    return [{"id": r.id, "symbol": r.symbol, "name": r.name, "added_at": r.added_at.isoformat()} for r in rows]
+
+
+class UsWatchlistAdd(BaseModel):
+    symbol: str
+    name: str = ""
+
+
+@router.post("/api/us-watchlist")
+async def add_us_watchlist(body: UsWatchlistAdd, db: AsyncSession = Depends(get_db)):
+    sym = body.symbol.strip().upper()
+    if not sym:
+        raise HTTPException(status_code=400, detail="symbol 不可為空")
+    existing = (await db.execute(
+        select(UsWatchlist).where(UsWatchlist.symbol == sym)
+    )).scalar_one_or_none()
+    if existing:
+        raise HTTPException(status_code=409, detail=f"{sym} 已在清單中")
+    item = UsWatchlist(symbol=sym, name=body.name.strip())
+    db.add(item)
+    await db.commit()
+    await db.refresh(item)
+    return {"ok": True, "id": item.id, "symbol": item.symbol, "name": item.name}
+
+
+@router.delete("/api/us-watchlist/{symbol}")
+async def delete_us_watchlist(symbol: str, db: AsyncSession = Depends(get_db)):
+    sym = symbol.strip().upper()
+    item = (await db.execute(
+        select(UsWatchlist).where(UsWatchlist.symbol == sym)
+    )).scalar_one_or_none()
+    if not item:
+        raise HTTPException(status_code=404, detail=f"{sym} 不在清單中")
+    await db.delete(item)
+    await db.commit()
+    return {"ok": True, "symbol": sym}
+
+
 @router.get("/api/us-stocks")
-async def get_us_stocks():
+async def get_us_stocks(db: AsyncSession = Depends(get_db)):
     """美股追蹤清單（收盤價＋盤後價）"""
     import yfinance as yf
     import asyncio
     from concurrent.futures import ThreadPoolExecutor
 
-    watchlist = [
-        ("TSM",  "台積電ADR"),
-        ("NVDA", "輝達"),
-        ("LITE", "Lumentum"),
-        ("AAOI", "Applied Opt"),
-        ("MRVL", "Marvell"),
-        ("SPCX", "SpaceX"),
-        ("MU",   "美光"),
-        ("WDC",  "威騰"),
-        ("TSLA", "特斯拉"),
-        ("GOOGL","Alphabet"),
-        ("MSFT", "微軟"),
-        ("AMZN", "亞馬遜"),
-        ("AAPL", "蘋果"),
-    ]
+    rows = (await db.execute(
+        select(UsWatchlist).order_by(UsWatchlist.added_at)
+    )).scalars().all()
+    watchlist = [(r.symbol, r.name) for r in rows]
 
     def fetch_one(sym: str, name: str):
         try:

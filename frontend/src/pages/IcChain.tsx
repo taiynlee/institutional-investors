@@ -106,11 +106,8 @@ export function IcChain({ onResearchStock }: { onResearchStock?: (code: string) 
           />
         </div>
 
-        <div className="flex gap-3 mb-4 flex-wrap">
-          {Object.entries(NODE_COLORS).map(([pos, cls]) => (
-            <span key={pos} className={`text-xs px-2.5 py-1 rounded-lg border ${cls}`}>{pos}</span>
-          ))}
-          <span className="text-xs text-gray-500 self-center ml-2">{filtered.length} 個產業鏈</span>
+        <div className="mb-4">
+          <span className="text-xs text-gray-500">{filtered.length} 個產業鏈</span>
         </div>
 
         {loading ? (

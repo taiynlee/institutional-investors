@@ -11,6 +11,12 @@ interface UsStock {
   post_chg_pct: number | null
 }
 
+interface WatchItem {
+  id: number
+  symbol: string
+  name: string
+}
+
 function ChgBadge({ val }: { val: number | null }) {
   if (val === null) return <span className="text-gray-600">—</span>
   const color = val > 0 ? 'text-red-400' : val < 0 ? 'text-green-400' : 'text-gray-400'
@@ -19,9 +25,19 @@ function ChgBadge({ val }: { val: number | null }) {
 
 export function UsStocksPage() {
   const [stocks, setStocks] = useState<UsStock[]>([])
+  const [watchlist, setWatchlist] = useState<WatchItem[]>([])
   const [loading, setLoading] = useState(true)
   const [updatedAt, setUpdatedAt] = useState<string | null>(null)
+  const [showManage, setShowManage] = useState(false)
+  const [addSymbol, setAddSymbol] = useState('')
+  const [addName, setAddName] = useState('')
+  const [addError, setAddError] = useState('')
+  const [adding, setAdding] = useState(false)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const loadWatchlist = () => {
+    axios.get<WatchItem[]>('/api/us-watchlist').then(r => setWatchlist(r.data)).catch(() => {})
+  }
 
   const load = () => {
     setLoading(true)
@@ -35,7 +51,6 @@ export function UsStocksPage() {
   }
 
   const scheduledLoad = async () => {
-    // only fetch on Taiwan trading days
     try {
       const r = await axios.get<{ trading: boolean }>('/api/is-trading-day')
       if (!r.data.trading) return
@@ -45,7 +60,7 @@ export function UsStocksPage() {
 
   useEffect(() => {
     load()
-    // schedule next fetch at 08:55 Taiwan time daily
+    loadWatchlist()
     const scheduleNext = () => {
       const ms = msUntilNextTaiwanTime(8, 55)
       timerRef.current = setTimeout(() => {
@@ -56,6 +71,35 @@ export function UsStocksPage() {
     scheduleNext()
     return () => { if (timerRef.current) clearTimeout(timerRef.current) }
   }, [])
+
+  const handleAdd = async () => {
+    const sym = addSymbol.trim().toUpperCase()
+    if (!sym) { setAddError('請輸入代號'); return }
+    setAdding(true)
+    setAddError('')
+    try {
+      await axios.post('/api/us-watchlist', { symbol: sym, name: addName.trim() })
+      setAddSymbol('')
+      setAddName('')
+      loadWatchlist()
+      load()
+    } catch (e: any) {
+      setAddError(e.response?.data?.detail ?? '新增失敗')
+    } finally {
+      setAdding(false)
+    }
+  }
+
+  const handleDelete = async (symbol: string) => {
+    try {
+      await axios.delete(`/api/us-watchlist/${symbol}`)
+      loadWatchlist()
+      setStocks(prev => prev.filter(s => s.symbol !== symbol))
+    } catch {}
+  }
+
+  // Merge watchlist order with price data
+  const stockMap = Object.fromEntries(stocks.map(s => [s.symbol, s]))
 
   return (
     <div className="min-h-screen bg-gray-950 text-white p-6">
@@ -68,6 +112,16 @@ export function UsStocksPage() {
           <div className="flex items-center gap-3">
             {updatedAt && <span className="text-xs text-gray-500">更新 {updatedAt}</span>}
             <button
+              onClick={() => setShowManage(v => !v)}
+              className={`text-xs px-3 py-1.5 rounded border transition-colors ${
+                showManage
+                  ? 'bg-blue-900 border-blue-600 text-blue-200'
+                  : 'bg-gray-800 hover:bg-gray-700 text-gray-300 border-gray-700'
+              }`}
+            >
+              {showManage ? '✕ 關閉管理' : '✏ 管理清單'}
+            </button>
+            <button
               onClick={load}
               className="text-xs px-3 py-1.5 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded border border-gray-700"
             >
@@ -76,10 +130,73 @@ export function UsStocksPage() {
           </div>
         </div>
 
+        {/* Management panel */}
+        {showManage && (
+          <div className="bg-gray-900 rounded-xl border border-gray-800 p-5 mb-5 space-y-4">
+            <div className="text-sm font-semibold text-gray-300 mb-3">管理美股追蹤清單</div>
+
+            {/* Add form */}
+            <div className="flex gap-2 items-end flex-wrap">
+              <div>
+                <label className="text-xs text-gray-500 block mb-1">代號（必填）</label>
+                <input
+                  type="text"
+                  value={addSymbol}
+                  onChange={e => setAddSymbol(e.target.value.toUpperCase())}
+                  onKeyDown={e => e.key === 'Enter' && handleAdd()}
+                  placeholder="NVDA"
+                  className="bg-gray-800 border border-gray-700 text-white rounded px-3 py-1.5 text-sm w-28 focus:outline-none focus:border-blue-500"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-gray-500 block mb-1">名稱（可選）</label>
+                <input
+                  type="text"
+                  value={addName}
+                  onChange={e => setAddName(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && handleAdd()}
+                  placeholder="輝達"
+                  className="bg-gray-800 border border-gray-700 text-white rounded px-3 py-1.5 text-sm w-36 focus:outline-none focus:border-blue-500"
+                />
+              </div>
+              <button
+                onClick={handleAdd}
+                disabled={adding}
+                className="px-4 py-1.5 bg-blue-700 hover:bg-blue-600 text-white text-sm rounded disabled:opacity-50"
+              >
+                {adding ? '加入中...' : '+ 加入'}
+              </button>
+            </div>
+            {addError && <div className="text-red-400 text-xs">{addError}</div>}
+
+            {/* Current watchlist */}
+            <div className="border-t border-gray-800 pt-3">
+              <div className="text-xs text-gray-500 mb-2">目前清單（{watchlist.length} 檔）</div>
+              <div className="flex flex-wrap gap-2">
+                {watchlist.map(w => (
+                  <div key={w.symbol} className="flex items-center gap-1.5 bg-gray-800 border border-gray-700 rounded-lg px-3 py-1">
+                    <span className="text-blue-300 font-mono text-sm font-bold">{w.symbol}</span>
+                    {w.name && <span className="text-gray-400 text-xs">{w.name}</span>}
+                    <button
+                      onClick={() => handleDelete(w.symbol)}
+                      className="text-gray-600 hover:text-red-400 text-xs ml-1 transition-colors"
+                      title="移除"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
         {loading ? (
           <div className="text-center text-gray-500 py-20">抓取中（約 10–20 秒）...</div>
+        ) : stocks.length === 0 && watchlist.length === 0 ? (
+          <div className="text-center text-gray-500 py-20">清單為空，請點「管理清單」新增</div>
         ) : stocks.length === 0 ? (
-          <div className="text-center text-gray-500 py-20">無資料</div>
+          <div className="text-center text-gray-500 py-20">無價格資料，請點「重新整理」</div>
         ) : (
           <div className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
             <table className="w-full text-sm">
@@ -92,29 +209,41 @@ export function UsStocksPage() {
                   <th className="px-4 py-3 text-right">盤後價</th>
                   <th className="px-4 py-3 text-right">盤後漲跌</th>
                   <th className="px-4 py-3 text-right">盤後-收盤</th>
+                  {showManage && <th className="px-4 py-3 w-8"></th>}
                 </tr>
               </thead>
               <tbody>
                 {stocks.map(s => {
                   const highlight = s.chg_pct > 0 && s.post_chg_pct != null && s.post_chg_pct > 3
                   return (
-                  <tr key={s.symbol} className={`border-b border-gray-800 transition-colors ${highlight ? 'bg-amber-950 hover:bg-amber-900' : 'hover:bg-gray-800'}`}>
-                    <td className="px-4 py-3 font-mono text-blue-300 font-bold">{s.symbol}</td>
-                    <td className="px-4 py-3 text-gray-300">{s.name}</td>
-                    <td className="px-4 py-3 text-right text-white font-mono">{s.close.toFixed(2)}</td>
-                    <td className="px-4 py-3 text-right"><ChgBadge val={s.chg_pct} /></td>
-                    <td className="px-4 py-3 text-right font-mono text-gray-300">
-                      {s.post_price != null ? s.post_price.toFixed(2) : <span className="text-gray-600">—</span>}
-                    </td>
-                    <td className="px-4 py-3 text-right"><ChgBadge val={s.post_chg_pct} /></td>
-                    <td className="px-4 py-3 text-right font-mono">
-                      {s.post_price != null ? (() => {
-                        const diff = s.post_price - s.close
-                        const color = diff > 0 ? 'text-red-400' : diff < 0 ? 'text-green-400' : 'text-gray-400'
-                        return <span className={color}>{diff > 0 ? '+' : ''}{diff.toFixed(2)}</span>
-                      })() : <span className="text-gray-600">—</span>}
-                    </td>
-                  </tr>
+                    <tr key={s.symbol} className={`border-b border-gray-800 transition-colors ${highlight ? 'bg-amber-950 hover:bg-amber-900' : 'hover:bg-gray-800'}`}>
+                      <td className="px-4 py-3 font-mono text-blue-300 font-bold">{s.symbol}</td>
+                      <td className="px-4 py-3 text-gray-300">{s.name}</td>
+                      <td className="px-4 py-3 text-right text-white font-mono">{s.close.toFixed(2)}</td>
+                      <td className="px-4 py-3 text-right"><ChgBadge val={s.chg_pct} /></td>
+                      <td className="px-4 py-3 text-right font-mono text-gray-300">
+                        {s.post_price != null ? s.post_price.toFixed(2) : <span className="text-gray-600">—</span>}
+                      </td>
+                      <td className="px-4 py-3 text-right"><ChgBadge val={s.post_chg_pct} /></td>
+                      <td className="px-4 py-3 text-right font-mono">
+                        {s.post_price != null ? (() => {
+                          const diff = s.post_price - s.close
+                          const color = diff > 0 ? 'text-red-400' : diff < 0 ? 'text-green-400' : 'text-gray-400'
+                          return <span className={color}>{diff > 0 ? '+' : ''}{diff.toFixed(2)}</span>
+                        })() : <span className="text-gray-600">—</span>}
+                      </td>
+                      {showManage && (
+                        <td className="px-4 py-3 text-center">
+                          <button
+                            onClick={() => handleDelete(s.symbol)}
+                            className="text-gray-600 hover:text-red-400 text-xs transition-colors"
+                            title="移除"
+                          >
+                            ✕
+                          </button>
+                        </td>
+                      )}
+                    </tr>
                   )
                 })}
               </tbody>
