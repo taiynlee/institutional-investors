@@ -39,6 +39,19 @@ services:
       - "6174:80"
     depends_on:
       - backend
+      - fubon-dashboard
+
+  fubon-dashboard:
+    build: ./services/fubon-dashboard
+    restart: unless-stopped
+    environment:
+      FUBON_DATA_DIR: /fubon-data
+      FUBON_LOG_DIR: /fubon-logs
+      FUBON_CONFIG: /fubon-config/config.yaml
+    volumes:
+      - /home/tommy0322/fubon/data:/fubon-data
+      - /home/tommy0322/fubon/logs:/fubon-logs:ro
+      - /home/tommy0322/fubon/config.yaml:/fubon-config/config.yaml:ro
 
 volumes:
   pgdata:

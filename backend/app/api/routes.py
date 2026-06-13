@@ -576,7 +576,6 @@ async def get_market_overview():
             "^TWII":  "台灣加權",
             "^GSPC":  "S&P 500",
             "^IXIC":  "Nasdaq",
-            "^HSI":   "恆生",
             "^N225":  "日經225",
             "^KS11":  "韓國綜合",
         }
@@ -615,47 +614,58 @@ async def server_time():
 
 @router.get("/api/taifex-futures")
 async def taifex_futures():
-    """台指期最新報價（TAIFEX 公開 API）— 日盤 / 夜盤均適用，僅回傳漲跌點"""
-    import httpx
+    """台指期最新報價（TAIFEX 公開 API）
+    MarketType=1 → 夜盤（-M suffix）；MarketType=0 → 日盤（-F suffix）
+    優先夜盤，無資料 fallback 日盤。
+    """
+    import httpx, re
     url = "https://mis.taifex.com.tw/futures/api/getQuoteList"
-    payload = {
-        "SymbolType": "F",
-        "MarketType": "0",
-        "SymbolCode": "TX",
-        "ContractYear": "",
-        "ContractMonth": "",
-        "SettlementMonth": "0",
-        "Settlement": "",
-        "Status": "0",
-    }
+    headers = {"Referer": "https://mis.taifex.com.tw/"}
+
+    def _extract(items: list, suffix: str) -> dict | None:
+        pattern = re.compile(rf"^TXF[A-L]\d+-{suffix}$")
+        for item in items:
+            if not pattern.match(item.get("SymbolID", "")):
+                continue
+            vol = item.get("CTotalVolume", "")
+            last_str = item.get("CLastPrice", "")
+            diff_str = item.get("CDiff", "")
+            if not vol or not last_str or not diff_str:
+                continue
+            rate_str = item.get("CDiffRate", "")
+            return {
+                "symbol": item["SymbolID"],
+                "session": "night" if suffix == "M" else "day",
+                "last": float(last_str),
+                "diff": float(diff_str),
+                "diff_pct": float(rate_str) if rate_str else None,
+                "volume": int(vol),
+                "date": item.get("CDate", ""),
+                "time": item.get("CTime", ""),
+            }
+        return None
+
     try:
         async with httpx.AsyncClient(timeout=5) as client:
-            r = await client.post(url, json=payload, headers={"Referer": "https://mis.taifex.com.tw/"})
-            items = (r.json().get("RtData") or {}).get("QuoteList") or []
-            import re
-            # Near-month TX (大台指) only: e.g. TXFF6-F, TXFG6-F
-            # Exclude: TXF-S (spot), TXPF (after-hours), MTX (mini), weekly
-            for item in items:
-                sym = item.get("SymbolID", "")
-                if not re.match(r"^TXF[A-L]\d+-F$", sym):
-                    continue
-                vol = item.get("CTotalVolume", "")
-                if not vol:
-                    continue
-                diff_str = item.get("CDiff", "")
-                rate_str = item.get("CDiffRate", "")
-                last_str = item.get("CLastPrice", "")
-                if not diff_str or not last_str:
-                    continue
-                return {
-                    "symbol": item["SymbolID"],
-                    "last": float(last_str),
-                    "diff": float(diff_str),
-                    "diff_pct": float(rate_str) if rate_str else None,
-                    "volume": int(vol),
-                    "date": item.get("CDate", ""),
-                    "time": item.get("CTime", ""),
-                }
+            # Try night session first (MarketType=1, SymbolID suffix -M)
+            r1 = await client.post(url, json={
+                "SymbolType": "F", "MarketType": "1", "SymbolCode": "TX",
+                "ContractYear": "", "ContractMonth": "", "SettlementMonth": "0",
+                "Settlement": "", "Status": "0",
+            }, headers=headers)
+            night_items = (r1.json().get("RtData") or {}).get("QuoteList") or []
+            result = _extract(night_items, "M")
+            if result:
+                return result
+
+            # Fallback: day session (MarketType=0, SymbolID suffix -F)
+            r0 = await client.post(url, json={
+                "SymbolType": "F", "MarketType": "0", "SymbolCode": "TX",
+                "ContractYear": "", "ContractMonth": "", "SettlementMonth": "0",
+                "Settlement": "", "Status": "0",
+            }, headers=headers)
+            day_items = (r0.json().get("RtData") or {}).get("QuoteList") or []
+            return _extract(day_items, "F")
     except Exception:
         pass
     return None

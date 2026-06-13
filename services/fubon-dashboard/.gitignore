@@ -1,0 +1,12 @@
+# Never commit credentials or data
+*.db
+*.db-wal
+*.db-shm
+config.yaml
+*.pfx
+*.p12
+*.key
+*.pem
+__pycache__/
+*.pyc
+.env

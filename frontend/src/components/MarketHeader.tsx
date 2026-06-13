@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react'
 import axios from 'axios'
-import { useServerClock } from '../hooks/useServerTime'
 
 interface MarketIndex {
   symbol: string
@@ -11,6 +10,7 @@ interface MarketIndex {
 }
 
 interface TaifexFutures {
+  session: 'night' | 'day'
   diff: number
   diff_pct: number | null
   last: number
@@ -21,7 +21,6 @@ interface TaifexFutures {
 export function MarketHeader() {
   const [indices, setIndices] = useState<MarketIndex[]>([])
   const [futures, setFutures] = useState<TaifexFutures | null>(null)
-  const clock = useServerClock()
 
   useEffect(() => {
     const loadIndices = () => {
@@ -41,48 +40,37 @@ export function MarketHeader() {
     return () => { clearInterval(t1); clearInterval(t2) }
   }, [])
 
-  if (indices.length === 0 && !clock) return null
+  if (indices.length === 0) return null
 
   return (
     <div className="bg-gray-900 border-b border-gray-800 px-4 py-1">
-      {/* Row 1: market indices + futures — wrap instead of scroll */}
       <div className="flex flex-wrap gap-x-4 gap-y-0.5 items-center">
         {indices.map(idx => (
           <div key={idx.symbol} className="flex items-center gap-1.5 shrink-0">
-            <span className="text-gray-400 text-[11px]">{idx.name}</span>
-            <span className="text-white text-[11px] font-bold">{idx.close.toLocaleString()}</span>
-            <span className={`text-[11px] font-medium ${idx.chg_pct >= 0 ? 'text-red-400' : 'text-green-400'}`}>
+            <span className="text-gray-400 text-xs">{idx.name}</span>
+            <span className="text-white text-xs font-bold">{idx.close.toLocaleString()}</span>
+            <span className={`text-xs font-medium ${idx.chg_pct >= 0 ? 'text-red-400' : 'text-green-400'}`}>
               {idx.chg_pts >= 0 ? '+' : ''}{idx.chg_pts.toLocaleString()}
             </span>
-            <span className={`text-[11px] font-medium ${idx.chg_pct >= 0 ? 'text-red-400' : 'text-green-400'}`}>
+            <span className={`text-xs font-medium ${idx.chg_pct >= 0 ? 'text-red-400' : 'text-green-400'}`}>
               {idx.chg_pct >= 0 ? '+' : ''}{idx.chg_pct.toFixed(2)}%
             </span>
           </div>
         ))}
         {futures && (
           <div className="flex items-center gap-1.5 shrink-0">
-            <span className="text-gray-400 text-[11px]">台指期</span>
-            <span className={`text-[11px] font-bold font-mono ${futures.diff >= 0 ? 'text-red-400' : 'text-green-400'}`}>
+            <span className="text-gray-400 text-xs">{futures.session === 'night' ? '台指夜' : '台指期'}</span>
+            <span className={`text-xs font-medium ${futures.diff >= 0 ? 'text-red-400' : 'text-green-400'}`}>
               {futures.diff >= 0 ? '+' : ''}{futures.diff.toFixed(0)}
             </span>
             {futures.diff_pct != null && (
-              <span className={`text-[11px] ${futures.diff >= 0 ? 'text-red-400' : 'text-green-400'}`}>
-                ({futures.diff >= 0 ? '+' : ''}{futures.diff_pct.toFixed(2)}%)
+              <span className={`text-xs font-medium ${futures.diff >= 0 ? 'text-red-400' : 'text-green-400'}`}>
+                {futures.diff >= 0 ? '+' : ''}{futures.diff_pct.toFixed(2)}%
               </span>
             )}
           </div>
         )}
       </div>
-      {/* Row 2: clock right-aligned */}
-      {clock && (
-        <div className="flex justify-end -mt-0.5">
-          <div className="flex items-center gap-1.5 px-2 py-0.5 rounded border border-gray-700 bg-gray-800">
-            <span className="text-gray-500 text-[10px]">台灣</span>
-            <span className="text-gray-400 text-[10px]">{clock.date}</span>
-            <span className="text-white text-[11px] font-mono font-bold tabular-nums">{clock.time}</span>
-          </div>
-        </div>
-      )}
     </div>
   )
 }

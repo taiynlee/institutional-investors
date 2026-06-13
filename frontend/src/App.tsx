@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useServerClock } from './hooks/useServerTime'
 import { Dashboard } from './pages/Dashboard'
 import { ScoreA } from './pages/ScoreA'
 import { ScoreB } from './pages/ScoreB'
@@ -12,13 +13,15 @@ import { ExitAlertsPage } from './pages/ExitAlertsPage'
 import { StockResearch } from './pages/StockResearch'
 import { StockPoolPage } from './pages/StockPool'
 import { UsStocksPage } from './pages/UsStocksPage'
+import { DayTradePage } from './pages/DayTradePage'
 import { MarketHeader } from './components/MarketHeader'
 import './index.css'
 
-type Tab = 'screener' | 'score-a' | 'score-b' | 'score-c' | 'watchlist-a' | 'result' | 'exit-alerts' | 'sector' | 'ic-chain' | 'holders' | 'pool' | 'us-stocks'
+type Tab = 'screener' | 'score-a' | 'score-b' | 'score-c' | 'watchlist-a' | 'result' | 'exit-alerts' | 'sector' | 'ic-chain' | 'holders' | 'pool' | 'us-stocks' | 'day-trade'
 
 const TABS: { id: Tab; label: string; sub?: string }[] = [
   { id: 'screener',    label: '篩選總覽' },
+  { id: 'day-trade',   label: '台股當沖' },
   { id: 'score-a',    label: '策略A',   sub: '最新' },
   { id: 'score-b',    label: '策略B',   sub: '近3日≥60' },
   { id: 'score-c',    label: '策略C' },
@@ -29,19 +32,20 @@ const TABS: { id: Tab; label: string; sub?: string }[] = [
   { id: 'ic-chain',   label: '產業鏈' },
   { id: 'holders',    label: '千張大戶' },
   { id: 'pool',       label: '股票池' },
-  { id: 'us-stocks',  label: '美股' },
+  { id: 'us-stocks',  label: '美股追蹤' },
 ]
 
 export default function App() {
   const [tab, setTab] = useState<Tab>('screener')
   const [researchCode, setResearchCode] = useState<string | null>(null)
+  const clock = useServerClock()
 
   const goResearch = (code: string) => setResearchCode(code)
 
   return (
     <div className="min-h-screen bg-gray-950">
       <MarketHeader />
-      <div className="bg-gray-900 border-b border-gray-800 px-4 py-1 flex gap-1 overflow-x-auto">
+      <div className="bg-gray-900 border-b border-gray-800 px-4 py-1 flex items-center gap-1 overflow-x-auto">
         {TABS.map(t => (
           <button
             key={t.id}
@@ -56,6 +60,13 @@ export default function App() {
             {t.sub && <span className="text-[9px] text-gray-500 font-normal">{t.sub}</span>}
           </button>
         ))}
+        {clock && (
+          <div className="ml-auto shrink-0 flex items-center gap-1.5 px-2 py-0.5 rounded border border-gray-700 bg-gray-800">
+            <span className="text-gray-500 text-[10px]">台灣</span>
+            <span className="text-gray-400 text-[10px]">{clock.date}</span>
+            <span className="text-white text-[11px] font-mono font-bold tabular-nums">{clock.time}</span>
+          </div>
+        )}
       </div>
       <div>
         {tab === 'screener'    && <Dashboard onResearchStock={goResearch} />}
@@ -70,6 +81,7 @@ export default function App() {
         {tab === 'holders'    && <Holders onResearchStock={goResearch} />}
         {tab === 'pool'       && <StockPoolPage />}
         {tab === 'us-stocks'  && <UsStocksPage />}
+        {tab === 'day-trade'  && <DayTradePage />}
       </div>
       {researchCode && (
         <StockResearch code={researchCode} onClose={() => setResearchCode(null)} />

@@ -279,6 +279,7 @@ institutional-investors/
 │   │   │   └── Tooltip.tsx        # 通用 tooltip 元件
 │   │   ├── pages/
 │   │   │   ├── Dashboard.tsx      # 篩選結果（含AI精選狀態列 + job badges）
+│   │   │   ├── DayTradePage.tsx   # 台股當沖（6子頁：今日交易/交易紀錄/盤前狀況/交易設定/系統設定/系統健診）
 │   │   │   ├── Result.tsx         # 篩選績效頁（昨日結果 vs 次日收盤）
 │   │   │   ├── ExitAlertsPage.tsx # 退場止損（完整 list，技術/籌碼觸發）
 │   │   │   ├── Holders.tsx        # 千張大戶占比排行頁（週增減%排序）
@@ -295,9 +296,16 @@ institutional-investors/
 │   │   │   └── useServerTime.ts   # 全域 server-synced 時間 hook（clock + msUntilNextTaiwanTime）
 │   │   ├── types/
 │   │   │   └── index.ts           # TypeScript 型別定義
-│   │   └── App.tsx                # Tab 路由（12 個 tab）
+│   │   └── App.tsx                # Tab 路由（13 個 tab）
 │   ├── package.json
 │   └── vite.config.ts
+├── services/
+│   └── fubon-dashboard/      # 台股當沖 Dashboard 服務（Fubon 引擎的 API 代理）
+│       ├── Dockerfile
+│       ├── requirements.txt  # fastapi, uvicorn, pyyaml
+│       ├── main.py           # uvicorn 進入點
+│       ├── monitor/dashboard/app.py  # FastAPI endpoints（修改版：SQLite fallback）
+│       └── data/storage/daily_store.py   # 盤前資料 SQLite 存取
 ├── scripts/
 │   ├── backup-db.sh          # PostgreSQL pg_dump 備份腳本（保留最近 7 份）
 │   ├── db-backup.service     # systemd service unit（手動安裝用）
@@ -475,13 +483,26 @@ services:
     build: ./frontend
     ports:
       - "6174:80"
-    depends_on: [backend]
+    depends_on: [backend, fubon-dashboard]
+
+  fubon-dashboard:
+    build: ./services/fubon-dashboard
+    restart: unless-stopped
+    environment:
+      FUBON_DATA_DIR: /fubon-data
+      FUBON_LOG_DIR: /fubon-logs
+      FUBON_CONFIG: /fubon-config/config.yaml
+    volumes:
+      - /home/tommy0322/fubon/data:/fubon-data           # ticks.db + daily.db (rw for WAL)
+      - /home/tommy0322/fubon/logs:/fubon-logs:ro        # 今日 log 檔
+      - /home/tommy0322/fubon/config.yaml:/fubon-config/config.yaml:ro  # 交易設定（唯讀）
 
 volumes:
   pgdata:
 ```
 
 > ⚠️ **安全提醒**：`POSTGRES_PASSWORD: secret` 僅供本地開發。生產環境請改用 `.env` 搭配 `env_file` 或 Docker Secrets，並確保 `.env` 已加入 `.gitignore`。
+> `config.yaml`（含富邦帳密）透過 volume mount 注入容器，**不可提交至 git**。
 
 ```bash
 docker compose up -d db      # 開發時只啟動 DB
@@ -687,6 +708,49 @@ LINE Bot 連結透過 ngrok tunnel 對外，開機自動重建 webhook URL。
 | `/重啟保留` | 重啟 Claude session，保留記憶 |
 | `/重啟清除` | 重啟 Claude session，清除記憶 |
 | 其他 `/` 開頭 | 轉發給 Claude AI 處理（一般問答） |
+
+---
+
+## 台股當沖（Fubon 整合）
+
+### 架構說明
+
+原始 Fubon 交易引擎（`/home/tommy0322/fubon/`）以 systemd service 形式常駐，完全獨立不受影響。`services/fubon-dashboard/` 是最小化的 Dashboard API 服務（複製版），透過 Docker volume 掛載讀取 SQLite 資料。
+
+```
+[原始 Fubon systemd - 完全不動]
+  fubon-trading.service → python -m main
+    └─ 寫入 data/ticks.db（交易記錄、即時報價）
+    └─ 寫入 data/daily.db（股票池、盤前資料）
+    └─ 寫入 logs/dry_run_YYYY-MM-DD.log
+
+[institutional-investors Docker]
+  fubon-dashboard:8090 （內部）
+    └─ 掛載 /home/tommy0322/fubon/data → /fubon-data
+    └─ 掛載 /home/tommy0322/fubon/logs → /fubon-logs (ro)
+    └─ 掛載 /home/tommy0322/fubon/config.yaml (ro)
+
+  nginx → /fubon-api/* → fubon-dashboard:8090/*
+```
+
+### 前端 Tab：台股當沖
+
+位於篩選總覽之後，包含 6 個子頁面：
+
+| 子頁 | 資料來源 | 說明 |
+|-----|---------|------|
+| 今日交易 | SSE `/fubon-api/stream` + `/fubon-api/positions` | 即時持倉 + 盤中損益 |
+| 交易紀錄 | `/fubon-api/trades` | 今日成交記錄（from ticks.db） |
+| 盤前狀況 | `/fubon-api/pre-session/logs` | 盤前跑批紀錄 |
+| 交易設定 | `/fubon-api/trading-params` | 資金限額、持倉數、dry run 開關 |
+| 系統設定 | `/fubon-api/config` | 讀取 config.yaml（密碼遮蔽） |
+| 系統健診 | `/fubon-api/health` + `/fubon-api/logs/today` | API 狀態 + 今日 log |
+
+### 安全注意
+
+- `config.yaml`（含帳密）已加入 `.gitignore`，透過 volume mount 注入，不進 git
+- `*.pfx` 憑證已加入 `.gitignore`
+- `/fubon-api/` 只能從本機 6174 port 存取，不對外暴露
 
 ---
 
