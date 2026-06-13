@@ -10,22 +10,36 @@ export interface ScreenerResult {
   vol_ratio: number
   foreign_6d_net: number
   trust_6d_net: number
+  chip_ratio_1d: number
   chip_ratio_6d: number
   chip_ratio_12d: number
+  chip_ratio_20d: number
   margin_5d_chg: number
   lending_5d_chg: number
-  score: number
+  score_a: number
+  score_b: number
   dip_bonus: number
   holders_bonus: number
+  holders_w2?: number | null
+  holders_w3?: number | null
+  ma5_days: number
+  upper_slope: number
+  ma20_slope: number
+  close_position: number
+  change_pct: number
   appearances_5d: number
   streak: number
+  ic_names?: string[]
+  volume?: number
+  rs_vs_market?: number
 }
 
 export interface ResultRow {
   code: string
   name: string
   tags: string
-  score: number
+  score_a: number
+  score_b: number
   dip_bonus: number
   holders_bonus: number
   streak: number
@@ -82,4 +96,62 @@ export interface DataStatus {
   jobs: JobStatus[]
   is_reliable: boolean
   data_sources: Record<string, DataSourceInfo>
+}
+
+export interface SectorFlow {
+  sector: string
+  net: number
+  stock_count: number
+}
+
+export interface WatchlistAItem {
+  id: number
+  code: string
+  name: string
+  added_date: string
+  added_close: number
+  added_bb_position: number
+  added_score_a: number
+  status: string
+  triggered_date: string | null
+  triggered_close: number | null
+  triggered_bb_position: number | null
+  current_close: number | null
+  chg_pct: number | null
+}
+
+export interface ScoreCResult {
+  calc_date: string
+  code: string
+  name: string
+  score_c: number
+  rev_yoy: number
+  rev_mom: number
+  rev_month: number
+  rev_year: number
+  eps_q1: number | null
+  eps_q2: number | null
+  eps_q3: number | null
+  eps_q4: number | null
+}
+
+export interface IcChainGroup {
+  ic_code: string
+  ic_name: string
+  ic_parent: string | null
+  companies: { code: string; name: string; ic_node: string | null }[]
+}
+
+export interface HolderRow {
+  code: string
+  name: string
+  sector: string
+  report_date: string
+  holders: number
+  pct: number
+  pct_400_lot: number | null
+  prev_holders: number | null
+  prev_pct: number | null
+  holders_chg: number | null
+  pct_chg: number | null
 }

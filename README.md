@@ -248,21 +248,21 @@ vol_ratio = mean(volume[-5:]) / mean(volume[-10:-5])
 institutional-investors/
 ├── backend/                  # FastAPI 後端
 │   ├── app/
-│   │   ├── main.py           # FastAPI 進入點（lifespan + CORS）
+│   │   ├── main.py           # FastAPI 進入點（lifespan + CORS + DB migration）
 │   │   ├── config.py         # 環境變數設定
 │   │   ├── api/
 │   │   │   ├── deps.py       # DB session 依賴
-│   │   │   └── routes.py     # REST endpoints
+│   │   │   └── routes.py     # REST endpoints（含 /api/server-time, /api/taifex-futures, /api/us-stocks）
 │   │   ├── services/
 │   │   │   ├── fetcher/
 │   │   │   │   ├── twse.py       # TWSE 三大法人 + 日成交 + 融資借券（TWT93U）
 │   │   │   │   ├── tdcc.py       # TDCC 集保戶股權分散表 bulk CSV（千張大戶）
-│   │   │   │   ├── finmind.py    # FinMind 股本查詢（股票清單用）
+│   │   │   │   ├── finmind.py    # FinMind 股本 + 季報EPS + 產業鏈
 │   │   │   │   ├── market.py     # yfinance 大盤指數（RS 基準）
 │   │   │   │   ├── price.py      # 歷史價格補抓
 │   │   │   │   └── stock_list.py # 電子股清單（FinMind）
-│   │   │   ├── screener.py       # BB 計算 + A/B 篩選邏輯 + 評分
-│   │   │   └── scheduler.py      # 自製 asyncio 排程迴圈 + 4 個 Job + 非交易日 fallback
+│   │   │   ├── screener.py       # BB 計算 + A/B/C 篩選邏輯 + 評分
+│   │   │   └── scheduler.py      # asyncio 排程迴圈（7 Jobs + 非交易日 fallback）
 │   │   └── db/
 │   │       ├── base.py       # SQLAlchemy engine + session
 │   │       └── models.py     # ORM 資料模型
@@ -271,25 +271,39 @@ institutional-investors/
 ├── frontend/                 # React 前端儀表板
 │   ├── src/
 │   │   ├── components/
-│   │   │   ├── BBGauge.tsx       # 布林位階進度條
-│   │   │   ├── ChipBar.tsx       # 法人籌碼欄位
-│   │   │   ├── PriceSparkline.tsx# 近2月走勢小圖
-│   │   │   ├── StockCard.tsx     # 個股卡片（含hover動態解讀）
-│   │   │   └── Tooltip.tsx       # 通用 tooltip 元件
+│   │   │   ├── BBGauge.tsx        # 布林位階進度條
+│   │   │   ├── ChipBar.tsx        # 法人籌碼欄位
+│   │   │   ├── PriceSparkline.tsx # 近2月走勢小圖
+│   │   │   ├── StockCard.tsx      # 個股卡片（含hover動態解讀、大戶週增減）
+│   │   │   ├── MarketHeader.tsx   # 頂部大盤指數 + 台指期 + server-synced 時鐘
+│   │   │   └── Tooltip.tsx        # 通用 tooltip 元件
 │   │   ├── pages/
-│   │   │   ├── Dashboard.tsx # 篩選結果頁
-│   │   │   ├── Result.tsx    # 篩選績效頁（昨日結果 vs 次日收盤）
-│   │   │   └── Holders.tsx   # 千張大戶占比排行頁（週增減%排序）
+│   │   │   ├── Dashboard.tsx      # 篩選結果（含AI精選狀態列 + job badges）
+│   │   │   ├── Result.tsx         # 篩選績效頁（昨日結果 vs 次日收盤）
+│   │   │   ├── ExitAlertsPage.tsx # 退場止損（完整 list，技術/籌碼觸發）
+│   │   │   ├── Holders.tsx        # 千張大戶占比排行頁（週增減%排序）
+│   │   │   ├── UsStocksPage.tsx   # 美股追蹤（收盤+盤後，08:55 台股開盤日自動更新）
+│   │   │   ├── ScoreA.tsx         # 策略A最新分頁
+│   │   │   ├── ScoreB.tsx         # 策略B近3日≥60分頁
+│   │   │   ├── ScoreC.tsx         # 策略C基本面加速頁
+│   │   │   ├── WatchlistAPage.tsx # A追蹤清單頁
+│   │   │   ├── SectorFlow.tsx     # 類股資金流向頁
+│   │   │   ├── IcChain.tsx        # 產業鏈頁
+│   │   │   └── StockPoolPage.tsx  # 股票池頁
 │   │   ├── hooks/
-│   │   │   └── useScreener.ts # API 資料 hook
+│   │   │   ├── useScreener.ts     # API 資料 hook
+│   │   │   └── useServerTime.ts   # 全域 server-synced 時間 hook（clock + msUntilNextTaiwanTime）
 │   │   ├── types/
-│   │   │   └── index.ts      # TypeScript 型別定義
-│   │   └── App.tsx
+│   │   │   └── index.ts           # TypeScript 型別定義
+│   │   └── App.tsx                # Tab 路由（12 個 tab）
 │   ├── package.json
 │   └── vite.config.ts
+├── scripts/
+│   ├── backup-db.sh          # PostgreSQL pg_dump 備份腳本（保留最近 7 份）
+│   ├── db-backup.service     # systemd service unit（手動安裝用）
+│   └── db-backup.timer       # systemd timer unit（每日 02:00）
 ├── config/
-├── plan.md                   # 實作計劃（階段性任務）
-└── README.md                 # 本文件
+└── README.md
 ```
 
 ---
@@ -317,15 +331,20 @@ institutional-investors/
 非交易日（週六、週日、國定假日）→ 跳過，不執行
 交易日自動執行流程：
 
-18:00  Job 1 — 抓三大法人 + 日成交資料（18:00 後 T86 已穩定發布）
-20:45  Job 2 — 抓融資融券（TWT93U 約 20:30 更新）
-18:30  Job 3 — 抓 TDCC 集保持股集中度（僅週日，TDCC 週六處理，週日晚間完成）
-21:00  Job 4 — 執行篩選計算，更新 screening_result
+18:00  Job 1 — 抓三大法人 + 日成交資料（TWSE T86，18:00 後穩定發布）
+20:45  Job 2 — 抓融資借券（TWSE TWT93U，約 20:30 更新）
+18:30  Job 3 — 抓 TDCC 集保持股集中度（僅週日，週日晚間完成）
+21:00  Job 4 — 執行篩選計算，更新 screening_result，呼叫 Claude API 產生 AI 精選
+每月10-25日 12:00  Job 5 — 抓月營收（MOPS）
+每季（3/1, 5/16, 8/15, 11/15）  Job 6 — 抓季報 EPS（FinMind TaiwanStockFinancialStatements）
+每半年（1/1, 7/1）  Job 7 — 抓產業鏈分類（IC Chain），更新 ic_classification
 ```
 
-> **Job 4 資料完整性防護：** Job 4 執行前會直接查詢 DB 確認當日 `institutional` 資料已入庫；若尚無資料（例如系統重啟導致 Job 1 在 T86 發布前提早執行）則跳過篩選並記錄警告，避免用舊資料計算 chip_ratio_6d。
+> **排程引擎：** asyncio 自製 `_scheduler_loop`，每分鐘比對台北時間觸發對應 Job，取代 APScheduler，無外部依賴。
 
-儀表板頂部顯示 4 個排程的執行狀態，完成後顯示台北時間更新時刻（如 `✓ 18:02`），尚未執行顯示「等待中」。
+> **Job 4 資料完整性防護：** Job 4 執行前查詢 DB 確認當日 `institutional` 資料已入庫；若無資料則跳過篩選並記錄警告，避免用舊資料計算 chip_ratio_6d。
+
+儀表板頂部狀態列顯示 7 個排程的執行狀態，完成後顯示台北時間更新時刻（如 `✓ 18:02`），尚未執行顯示「等待中」。Job5/6/7 使用動態 log key（如 `job5_202605`、`job6_q2_2026`、`job7_2026H1`）以支援多期紀錄。
 
 > **注意：** yfinance 台股歷史資料通常當日晚間更新，若需當日收盤價建議優先用 TWSE API，yfinance 僅作備援。
 
@@ -402,11 +421,12 @@ institutional-investors/
 | FastAPI | latest | REST API 框架 |
 | SQLAlchemy 2.0 (async) | latest | ORM |
 | asyncpg | latest | PostgreSQL async driver |
-| alembic | — | 未使用；migration 透過 main.py `ALTER TABLE ADD COLUMN IF NOT EXISTS` 執行 |
-| Scrapling | latest | 反爬蟲爬蟲 |
-| yfinance | latest | 大盤指數（^TWII）備援 |
+| httpx | latest | async HTTP（TWSE、TDCC、TAIFEX API） |
+| yfinance | latest | 大盤指數（^TWII）+ 美股收盤/盤後價 |
 | pandas / numpy | latest | 資料處理、布林帶計算 |
-| asyncio（內建） | — | 自製 `_scheduler_loop`，每分鐘檢查時間觸發 4 個排程 Job（取代 APScheduler） |
+| anthropic | latest | Claude API（AI 精選，job4 後呼叫） |
+| asyncio（內建） | — | 自製 `_scheduler_loop`，每分鐘比對台北時間觸發 7 個排程 Job（取代 APScheduler） |
+| alembic | — | 未使用；migration 透過 main.py `ALTER TABLE ADD COLUMN IF NOT EXISTS` 執行 |
 
 ### 前端
 
@@ -655,6 +675,78 @@ fetch_log (job_name, fetch_date PK)  ← 獨立，不關聯其他表
 
 ---
 
+## Line Bot 指令
+
+LINE Bot 連結透過 ngrok tunnel 對外，開機自動重建 webhook URL。
+
+| 指令 | 說明 |
+|------|------|
+| `/stocks` | 傳回當日篩選結果 |
+| `/result` | 傳回最新篩選績效 |
+| `/reset` | 清除對話記憶（保留 function context） |
+| `/重啟保留` | 重啟 Claude session，保留記憶 |
+| `/重啟清除` | 重啟 Claude session，清除記憶 |
+| 其他 `/` 開頭 | 轉發給 Claude AI 處理（一般問答） |
+
+---
+
+## PostgreSQL 備份
+
+### 備份腳本
+
+```bash
+scripts/backup-db.sh        # 執行 pg_dump → /home/tommy0322/institutional-investors/backups/
+                            # 自動保留最近 7 份，舊的自動刪除
+```
+
+### 安裝 systemd 自動備份（每日 02:00）
+
+```bash
+# 在 WSL Ubuntu 中執行（需 sudo）：
+sudo cp scripts/db-backup.service /etc/systemd/system/institutional-investors-db-backup.service
+sudo cp scripts/db-backup.timer   /etc/systemd/system/institutional-investors-db-backup.timer
+sudo systemctl daemon-reload
+sudo systemctl enable institutional-investors-db-backup.timer
+sudo systemctl start  institutional-investors-db-backup.timer
+
+# 確認 timer 狀態
+systemctl status institutional-investors-db-backup.timer
+```
+
+### 手動備份 / 還原
+
+```bash
+# 手動備份
+bash scripts/backup-db.sh
+
+# 還原（選擇備份檔）
+gunzip -c backups/stock_force_20260614_020001.sql.gz \
+  | docker exec -i institutional-investors-db-1 psql -U stock -d stock_force
+```
+
+---
+
+## 程式碼快速恢復
+
+```bash
+# 確認目前 git 狀態
+git log --oneline -5
+git status
+
+# 回到任一 commit（程式碼層面）
+git checkout <commit-hash>
+
+# 或回到最新 main
+git checkout main && git pull
+
+# 重新 build + 啟動
+docker compose build --no-cache && docker compose up -d
+```
+
+資料庫資料透過 `pgdata` volume 持久化，程式碼回滾**不影響** DB 資料。
+
+---
+
 ## 開機自動恢復機制
 
 電腦不預警關機後重開，系統會自動完整恢復，**不需人工介入**。
@@ -688,6 +780,7 @@ Docker daemon 就緒
 | **Docker Compose stack** | `institutional-investors.service`（systemd）| 確保 `docker compose up -d` 在開機時執行 |
 | **LINE bot** | `claude-line-bot.service`（systemd）| 開機自動執行 `start.sh`，含 webhook 更新 |
 | **資料庫資料** | `pgdata` Docker volume | 關機不會遺失，volume 永久掛載 |
+| **DB 備份** | `institutional-investors-db-backup.timer`（systemd） | 每日 02:00 自動 pg_dump → `backups/`，保留 7 天 |
 
 ### 驗證方式
 
@@ -729,26 +822,54 @@ docker compose up -d
 
 ## UI 功能說明
 
+### 頂部 MarketHeader
+
+| 元件 | 說明 |
+|------|------|
+| **大盤指數** | 台灣加權、S&P 500、Nasdaq、恆生、日經225、韓國綜合；每 5 分鐘自動更新 |
+| **增減點數** | 每個指數顯示「收盤值 ＋增減點 ＋漲跌%」三項 |
+| **台指期** | TAIFEX 官方 API（mis.taifex.com.tw）取近月大台指期漲跌點 + 漲跌%；每 5 分鐘更新 |
+| **時鐘** | 右下角顯示 server-synced 台灣時間（每秒跳動）；前端初始化時從 `/api/server-time` 取得偏移量，後續純 client tick |
+
 ### 篩選儀表板（主頁）
 
 | 元件 | 說明 |
 |------|------|
-| **個股卡片** | 顯示代號、名稱、篩選日（綠色=3日內新鮮資料，灰色=較舊）、評分、資加/戶加 |
-| **策略 badge** | A=綠色、B=黃色（與 BBGauge 進度條顏色一致） |
+| **AI 精選** | 狀態列左側：job4 後由 Claude AI 精選最值得關注個股，點擊複製精選理由 |
+| **Job 狀態列** | 7 個排程執行狀態（✓ 時間 / 等待中 / ✗ 失敗）排列於狀態列 |
+| **個股卡片** | 顯示代號、名稱、篩選日、評分、資加/戶加、千張大戶週增減（1w/2w/3w diff） |
+| **策略 badge** | A=綠色、B=黃色、C=藍色（BB+squeeze 時顯示青色 B+） |
 | **BBGauge** | 布林位階進度條，位階>5=綠、0~5=黃、0~-3=橘、<-3=紅 |
 | **ChipBar** | 台股顏色慣例：正數=紅色、負數=綠色 |
 | **趨勢小圖** | 近 2 個月收盤走勢，漲=紅、跌=綠；右下標示「最新收盤 MM-DD」 |
 | **hover 解讀** | 滑鼠移到卡片顯示詳細文字解讀，可選取文字或點「點擊複製全文」 |
-| **⎘ 複製按鈕** | 股票名稱旁快速複製完整解讀文字 |
-| **退場止損** | 頂部橫欄掃描過去 10 交易日篩選股，有退場訊號立即顯示 |
-| **AI 精選** | 每日 job4 後由 Claude AI 從篩選結果中選出最值得關注的一檔，點擊卡片複製精選理由 |
+
+### 退場止損頁
+
+| 功能 | 說明 |
+|------|------|
+| **來源** | 掃描過去 10 交易日篩選過的個股（不含當日仍在推薦清單者） |
+| **觸發條件** | 技術（BB位階<0）、動能、籌碼（近3日法人賣超≥0.5%） |
+| **顯示欄位** | 代號、名稱、BB位、高點BB、籌碼3d%、觸發訊號 badges |
+| **顏色** | 技術=紅、動能=橘、籌碼=黃 |
+
+### 美股追蹤頁
+
+| 功能 | 說明 |
+|------|------|
+| **標的** | TSM、NVDA、LITE、AAOI、MRVL、MU、WDC、TSLA、GOOGL、MSFT、AMZN、AAPL、SPCX（SpaceX，2026/6/12 IPO） |
+| **資料** | yfinance 抓收盤價 + 盤後價（`postMarketPrice`） |
+| **自動更新** | 台灣開盤日 08:55 自動抓（呼叫 `/api/is-trading-day` 確認，非交易日跳過） |
+| **盤後時間** | 08:55 台灣時間 = 前日 19:55 ET（美股盤後 16:00-20:00 ET 內），盤後資料可取 |
+| **欄位** | 代號、名稱、收盤價、收盤漲跌%、盤後價、盤後漲跌%、盤後-收盤（差值，最右） |
+| **Highlight** | 收盤上漲且盤後又漲 >3% → 琥珀色底色 |
 
 ### 千張大戶頁
 
 | 功能 | 說明 |
 |------|------|
 | **占比排行** | 全市場電子股千張以上大戶持股占比（`pct_1000_lot`），依週增減% 由高到低排序 |
-| **週增減** | 本週 vs 上週持股人數差（+綠/-紅）與占比變化% |
+| **週增減** | 本週 vs 上週持股人數差（+紅/-綠）與占比變化% |
 | **搜尋** | 可依代碼、名稱、類股即時篩選 |
 | **資料頻率** | TDCC 集保每週更新一次（週日 18:30 後） |
 

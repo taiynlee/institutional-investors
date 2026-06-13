@@ -9,12 +9,11 @@ function rowBg(row: ResultRow): string {
   return 'bg-gray-900'
 }
 
-function RowCard({ row }: { row: ResultRow }) {
+function RowCard({ row, onResearchStock }: { row: ResultRow; onResearchStock?: (code: string) => void }) {
   const up = row.chg_pct >= 0
-  const dot = row.score >= 80 ? 'text-green-400' : row.score >= 60 ? 'text-yellow-400' : 'text-red-400'
+  const dot = row.score_b >= 80 ? 'text-green-400' : row.score_b >= 60 ? 'text-yellow-400' : 'text-red-400'
   const dipStr = row.dip_bonus > 0 ? ` +${row.dip_bonus}資` : ''
-  const holderVal = Math.round(row.holders_bonus)
-  const holderStr = holderVal !== 0 ? ` ${holderVal > 0 ? '+' : ''}${holderVal}戶` : ''
+  const holderStr = row.holders_bonus !== 0 ? ` ${row.holders_bonus > 0 ? '+' : ''}${row.holders_bonus.toFixed(2)}%戶` : ''
   const streakStr = row.streak > 1 ? `連續${row.streak}日` : `初次`
   const badge = row.is_ai_pick && row.is_top_score
     ? <span className="text-[10px] bg-purple-800 text-purple-200 px-1.5 py-0.5 rounded mr-1">AI精選+第一</span>
@@ -31,9 +30,12 @@ function RowCard({ row }: { row: ResultRow }) {
         <div className="flex justify-between items-start">
           <div className="text-white text-sm font-bold">
             {badge}
-            {row.code} {row.name}{' '}
+            <span
+              className="cursor-pointer hover:text-blue-400"
+              onClick={() => onResearchStock?.(row.code)}
+            >{row.code}</span>{' '}{row.name}{' '}
             <span className="text-gray-400 font-normal">
-              [{row.tags || '?'}] 分={row.score}{dipStr}{holderStr}
+              [{row.tags || '?'}] B={row.score_b}{row.score_a > 0 ? ` A=${row.score_a}` : ''}{dipStr}{holderStr}
             </span>
           </div>
           <span className={`text-sm font-bold ml-3 shrink-0 ${up ? 'text-red-400' : 'text-green-400'}`}>
@@ -51,7 +53,7 @@ function RowCard({ row }: { row: ResultRow }) {
   )
 }
 
-export function Result() {
+export function Result({ onResearchStock }: { onResearchStock?: (code: string) => void }) {
   const [data, setData] = useState<ResultData | null>(null)
   const [dates, setDates] = useState<string[]>([])
   const [selectedDate, setSelectedDate] = useState<string>('')
@@ -112,7 +114,7 @@ export function Result() {
           <div className="text-center text-gray-500 py-20">無資料</div>
         ) : (
           <div className="flex flex-col gap-3">
-            {data.rows.map(row => <RowCard key={row.code} row={row} />)}
+            {data.rows.map(row => <RowCard key={row.code} row={row} onResearchStock={onResearchStock} />)}
           </div>
         )}
       </div>

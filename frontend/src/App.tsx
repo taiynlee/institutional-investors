@@ -1,37 +1,79 @@
 import { useState } from 'react'
 import { Dashboard } from './pages/Dashboard'
+import { ScoreA } from './pages/ScoreA'
+import { ScoreB } from './pages/ScoreB'
+import { ScoreC } from './pages/ScoreC'
 import { Result } from './pages/Result'
+import { SectorFlow } from './pages/SectorFlow'
+import { IcChain } from './pages/IcChain'
 import { Holders } from './pages/Holders'
+import { WatchlistAPage } from './pages/WatchlistAPage'
+import { ExitAlertsPage } from './pages/ExitAlertsPage'
+import { StockResearch } from './pages/StockResearch'
+import { StockPoolPage } from './pages/StockPool'
+import { UsStocksPage } from './pages/UsStocksPage'
+import { MarketHeader } from './components/MarketHeader'
 import './index.css'
 
-type Tab = 'screener' | 'result' | 'holders'
+type Tab = 'screener' | 'score-a' | 'score-b' | 'score-c' | 'watchlist-a' | 'result' | 'exit-alerts' | 'sector' | 'ic-chain' | 'holders' | 'pool' | 'us-stocks'
+
+const TABS: { id: Tab; label: string; sub?: string }[] = [
+  { id: 'screener',    label: '篩選總覽' },
+  { id: 'score-a',    label: '策略A',   sub: '最新' },
+  { id: 'score-b',    label: '策略B',   sub: '近3日≥60' },
+  { id: 'score-c',    label: '策略C' },
+  { id: 'watchlist-a',label: 'A追蹤' },
+  { id: 'result',       label: '篩選績效' },
+  { id: 'exit-alerts', label: '退場止損' },
+  { id: 'sector',     label: '類股資金' },
+  { id: 'ic-chain',   label: '產業鏈' },
+  { id: 'holders',    label: '千張大戶' },
+  { id: 'pool',       label: '股票池' },
+  { id: 'us-stocks',  label: '美股' },
+]
 
 export default function App() {
   const [tab, setTab] = useState<Tab>('screener')
+  const [researchCode, setResearchCode] = useState<string | null>(null)
+
+  const goResearch = (code: string) => setResearchCode(code)
 
   return (
-    <div>
-      <div className="bg-gray-900 border-b border-gray-800 px-6 py-2 flex gap-4">
-        <button
-          onClick={() => setTab('screener')}
-          className={`text-sm font-medium px-3 py-1 rounded ${tab === 'screener' ? 'bg-gray-700 text-white' : 'text-gray-400 hover:text-white'}`}
-        >
-          篩選結果
-        </button>
-        <button
-          onClick={() => setTab('result')}
-          className={`text-sm font-medium px-3 py-1 rounded ${tab === 'result' ? 'bg-gray-700 text-white' : 'text-gray-400 hover:text-white'}`}
-        >
-          篩選績效
-        </button>
-        <button
-          onClick={() => setTab('holders')}
-          className={`text-sm font-medium px-3 py-1 rounded ${tab === 'holders' ? 'bg-gray-700 text-white' : 'text-gray-400 hover:text-white'}`}
-        >
-          千張大戶
-        </button>
+    <div className="min-h-screen bg-gray-950">
+      <MarketHeader />
+      <div className="bg-gray-900 border-b border-gray-800 px-4 py-1 flex gap-1 overflow-x-auto">
+        {TABS.map(t => (
+          <button
+            key={t.id}
+            onClick={() => setTab(t.id)}
+            className={`text-sm font-medium px-3 rounded whitespace-nowrap transition-colors flex flex-col items-center justify-center leading-tight h-9 ${
+              tab === t.id
+                ? 'bg-gray-700 text-white'
+                : 'text-gray-400 hover:text-white hover:bg-gray-800'
+            }`}
+          >
+            <span>{t.label}</span>
+            {t.sub && <span className="text-[9px] text-gray-500 font-normal">{t.sub}</span>}
+          </button>
+        ))}
       </div>
-      {tab === 'screener' ? <Dashboard /> : tab === 'result' ? <Result /> : <Holders />}
+      <div>
+        {tab === 'screener'    && <Dashboard onResearchStock={goResearch} />}
+        {tab === 'score-a'    && <ScoreA onResearchStock={goResearch} />}
+        {tab === 'score-b'    && <ScoreB onResearchStock={goResearch} />}
+        {tab === 'score-c'    && <ScoreC onResearchStock={goResearch} />}
+        {tab === 'watchlist-a' && <WatchlistAPage onResearchStock={goResearch} />}
+        {tab === 'result'       && <Result onResearchStock={goResearch} />}
+        {tab === 'exit-alerts' && <ExitAlertsPage onResearchStock={goResearch} />}
+        {tab === 'sector'     && <SectorFlow onResearchStock={goResearch} />}
+        {tab === 'ic-chain'   && <IcChain onResearchStock={goResearch} />}
+        {tab === 'holders'    && <Holders onResearchStock={goResearch} />}
+        {tab === 'pool'       && <StockPoolPage />}
+        {tab === 'us-stocks'  && <UsStocksPage />}
+      </div>
+      {researchCode && (
+        <StockResearch code={researchCode} onClose={() => setResearchCode(null)} />
+      )}
     </div>
   )
 }

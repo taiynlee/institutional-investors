@@ -1,17 +1,23 @@
+from collections import defaultdict
 from datetime import date, timedelta
 from typing import Optional
-from fastapi import APIRouter, Depends, Query
-from sqlalchemy import select, and_, func
+from fastapi import APIRouter, Depends, Query, HTTPException
+from pydantic import BaseModel
+from sqlalchemy import select, and_, func, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_db
-from app.db.models import ScreeningResult, FetchLog, DailyPrice, MarginTrading, AIPick, StockList, Institutional, Shareholding
+from app.db.base import engine
+from app.db.models import (
+    ScreeningResult, FetchLog, DailyPrice, MarginTrading, AIPick,
+    StockList, Institutional, Shareholding, IcClassification,
+    CompanyTag, MonthlyRevenue, QuarterlyEps, WatchlistA, StockPool,
+)
 from app.services.screener import calc_bb_position
 
 router = APIRouter()
 
 
 async def _appearance_stats(codes: list[str], target_date: date, db: AsyncSession) -> dict[str, dict]:
-    """近 5 個有篩選結果的交易日內，每檔的出現次數與連續天數。"""
     dates_rows = (await db.execute(
         select(ScreeningResult.calc_date)
         .distinct()
@@ -46,6 +52,43 @@ async def _appearance_stats(codes: list[str], target_date: date, db: AsyncSessio
     return stats
 
 
+def _format_result(r: ScreeningResult, stats: dict | None = None) -> dict:
+    appearances_5d = stats["appearances_5d"] if stats else 1
+    streak = stats["streak"] if stats else 1
+    return {
+        "code": r.code,
+        "name": r.name,
+        "calc_date": str(r.calc_date),
+        "tags": r.tags.split() if r.tags else [],
+        "bb_position": r.bb_position,
+        "bb_peak": r.bb_peak,
+        "peak_days_ago": r.peak_days_ago or 0,
+        "is_squeeze": r.is_squeeze,
+        "vol_ratio": r.vol_ratio,
+        "foreign_6d_net": r.foreign_6d_net,
+        "trust_6d_net": r.trust_6d_net,
+        "chip_ratio_1d": r.chip_ratio_1d,
+        "chip_ratio_6d": r.chip_ratio_6d,
+        "chip_ratio_12d": r.chip_ratio_12d,
+        "chip_ratio_20d": r.chip_ratio_20d,
+        "margin_5d_chg": r.margin_5d_chg,
+        "lending_5d_chg": r.lending_5d_chg,
+        "score_a": r.score_a or 0,
+        "score_b": r.score_b or 0,
+        "dip_bonus": r.dip_bonus,
+        "holders_bonus": r.holders_bonus,
+        "holders_w2": r.holders_w2,
+        "holders_w3": r.holders_w3,
+        "ma5_days": r.ma5_days or 0,
+        "upper_slope": r.upper_slope or 0,
+        "ma20_slope": r.ma20_slope or 0,
+        "close_position": r.close_position or 0,
+        "change_pct": r.change_pct or 0,
+        "appearances_5d": appearances_5d,
+        "streak": streak,
+    }
+
+
 @router.get("/api/screener")
 async def get_screener_results(
     db: AsyncSession = Depends(get_db),
@@ -53,12 +96,13 @@ async def get_screener_results(
     calc_date: Optional[date] = Query(None),
 ):
     target_date = calc_date or date.today()
-    q = select(ScreeningResult).where(
-        and_(ScreeningResult.calc_date == target_date, ScreeningResult.passes == True)
-    ).order_by(ScreeningResult.score.desc())
+    q = (
+        select(ScreeningResult)
+        .where(and_(ScreeningResult.calc_date == target_date, ScreeningResult.passes == True))
+        .order_by(ScreeningResult.score_b.desc())
+    )
     results = (await db.execute(q)).scalars().all()
 
-    # 今天沒資料時 fallback 最近一筆
     if not results and calc_date is None:
         latest = (await db.execute(
             select(ScreeningResult.calc_date)
@@ -69,20 +113,146 @@ async def get_screener_results(
         if latest:
             target_date = latest
             results = (await db.execute(
-                select(ScreeningResult).where(
-                    and_(ScreeningResult.calc_date == latest, ScreeningResult.passes == True)
-                ).order_by(ScreeningResult.score.desc())
+                select(ScreeningResult)
+                .where(and_(ScreeningResult.calc_date == latest, ScreeningResult.passes == True))
+                .order_by(ScreeningResult.score_b.desc())
             )).scalars().all()
 
     codes = [r.code for r in results]
     stats = await _appearance_stats(codes, target_date, db) if codes else {}
-
     return [_format_result(r, stats.get(r.code)) for r in results]
+
+
+async def _ic_names_map(codes: list[str], db: AsyncSession) -> dict[str, list[str]]:
+    if not codes:
+        return {}
+    rows = (await db.execute(
+        select(CompanyTag.code, CompanyTag.tag)
+        .where(CompanyTag.code.in_(codes))
+    )).all()
+    result: dict[str, list[str]] = {}
+    for code, tag in rows:
+        result.setdefault(code, []).append(tag)
+    return result
+
+
+@router.get("/api/score-a")
+async def get_score_a(
+    db: AsyncSession = Depends(get_db),
+    calc_date: Optional[date] = Query(None),
+):
+    """策略A：BB突破品質評分 (100分)，score_a > 0"""
+    target_date = calc_date or date.today()
+    results = (await db.execute(
+        select(ScreeningResult)
+        .where(and_(
+            ScreeningResult.calc_date == target_date,
+            ScreeningResult.passes == True,
+            ScreeningResult.tags.contains("A"),
+            ScreeningResult.score_a > 0,
+        ))
+        .order_by(ScreeningResult.score_a.desc())
+    )).scalars().all()
+
+    if not results and calc_date is None:
+        latest = (await db.execute(
+            select(ScreeningResult.calc_date)
+            .where(and_(
+                ScreeningResult.passes == True,
+                ScreeningResult.tags.contains("A"),
+                ScreeningResult.score_a > 0,
+            ))
+            .order_by(ScreeningResult.calc_date.desc())
+            .limit(1)
+        )).scalar_one_or_none()
+        if latest:
+            target_date = latest
+            results = (await db.execute(
+                select(ScreeningResult)
+                .where(and_(
+                    ScreeningResult.calc_date == latest,
+                    ScreeningResult.passes == True,
+                    ScreeningResult.tags.contains("A"),
+                    ScreeningResult.score_a > 0,
+                ))
+                .order_by(ScreeningResult.score_a.desc())
+            )).scalars().all()
+
+    codes = [r.code for r in results]
+    stats = await _appearance_stats(codes, target_date, db) if codes else {}
+    ic_map = await _ic_names_map(codes, db)
+    out = []
+    for r in results:
+        d = _format_result(r, stats.get(r.code))
+        d["ic_names"] = ic_map.get(r.code, [])
+        out.append(d)
+    return out
+
+
+@router.get("/api/score-b")
+async def get_score_b(
+    db: AsyncSession = Depends(get_db),
+):
+    """策略B：籌碼拉回評分，近3日 + score_b >= 60"""
+    recent_dates = (await db.execute(
+        select(ScreeningResult.calc_date)
+        .distinct()
+        .where(and_(ScreeningResult.passes == True, ScreeningResult.tags.contains("B")))
+        .order_by(ScreeningResult.calc_date.desc())
+        .limit(3)
+    )).scalars().all()
+
+    if not recent_dates:
+        return []
+
+    results = (await db.execute(
+        select(ScreeningResult)
+        .where(and_(
+            ScreeningResult.calc_date.in_(recent_dates),
+            ScreeningResult.passes == True,
+            ScreeningResult.tags.contains("B"),
+            ScreeningResult.score_b >= 60,
+        ))
+        .order_by(ScreeningResult.calc_date.desc(), ScreeningResult.score_b.desc())
+    )).scalars().all()
+
+    target_date = recent_dates[0]
+    codes = [r.code for r in results]
+    stats = await _appearance_stats(codes, target_date, db) if codes else {}
+
+    vol_map: dict[tuple, int] = {}
+    if codes:
+        vol_rows = (await db.execute(
+            select(DailyPrice.code, DailyPrice.trade_date, DailyPrice.volume)
+            .where(and_(
+                DailyPrice.code.in_(codes),
+                DailyPrice.trade_date.in_(recent_dates),
+            ))
+        )).all()
+        for code, td, vol in vol_rows:
+            vol_map[(code, td)] = vol
+
+    out = []
+    for r in results:
+        d = _format_result(r, stats.get(r.code))
+        d["volume"] = vol_map.get((r.code, r.calc_date), 0)
+        d["rs_vs_market"] = r.rs_vs_market or 0
+        out.append(d)
+    return out
+
+
+@router.get("/api/score-c")
+async def get_score_c(
+    db: AsyncSession = Depends(get_db),
+):
+    """策略C：基本面加速篩選"""
+    from app.services.screener_c import run_screener_c
+    results = await run_screener_c()
+    return results
 
 
 @router.get("/api/result/dates")
 async def get_result_dates(db: AsyncSession = Depends(get_db)):
-    """回傳過去 10 個有篩選結果且之後有價格資料的交易日，供下拉選單使用。"""
     candidate_dates = (await db.execute(
         select(ScreeningResult.calc_date)
         .distinct()
@@ -110,8 +280,6 @@ async def get_result_comparison(
     db: AsyncSession = Depends(get_db),
     pred_date: Optional[date] = Query(None),
 ):
-    """篩選結果 vs 最後一個有資料交易日收盤比較。"""
-    # 取得所有可用日期
     candidate_dates = (await db.execute(
         select(ScreeningResult.calc_date)
         .distinct()
@@ -120,7 +288,6 @@ async def get_result_comparison(
         .limit(20)
     )).scalars().all()
 
-    # 找最後一個有價格資料的日期（基準收盤日）
     latest_price_date = (await db.execute(
         select(DailyPrice.trade_date)
         .order_by(DailyPrice.trade_date.desc())
@@ -130,7 +297,6 @@ async def get_result_comparison(
     if not latest_price_date:
         return {"pred_date": None, "price_date": None, "rows": []}
 
-    # 選定 pred_date：若未指定則用最近一個有資料的日期
     if pred_date:
         chosen = pred_date if pred_date in candidate_dates else None
     else:
@@ -143,18 +309,16 @@ async def get_result_comparison(
     if not chosen:
         return {"pred_date": None, "price_date": None, "rows": []}
 
-    # 取得那天的篩選結果
     screened = (await db.execute(
         select(ScreeningResult)
         .where(ScreeningResult.calc_date == chosen)
-        .order_by(ScreeningResult.score.desc())
+        .order_by(ScreeningResult.score_b.desc())
     )).scalars().all()
 
     codes = [r.code for r in screened]
     if not codes:
         return {"pred_date": str(chosen), "price_date": None, "rows": []}
 
-    # 篩選日收盤：找最近一個 ≤ chosen 的交易日（避免篩選日是假日無價格資料）
     prev_price_date = (await db.execute(
         select(func.max(DailyPrice.trade_date))
         .where(and_(DailyPrice.code.in_(codes), DailyPrice.trade_date <= chosen))
@@ -168,13 +332,11 @@ async def get_result_comparison(
         .where(and_(DailyPrice.code.in_(codes), DailyPrice.trade_date == prev_price_date))
     )).scalars().all()}
 
-    # 最後一個有資料交易日收盤
     next_prices = {r.code: r.close for r in (await db.execute(
         select(DailyPrice)
         .where(and_(DailyPrice.code.in_(codes), DailyPrice.trade_date == latest_price_date))
     )).scalars().all()}
 
-    # AI 精選
     ai_pick_row = (await db.execute(
         select(AIPick).where(AIPick.calc_date == chosen)
     )).scalar_one_or_none()
@@ -194,7 +356,8 @@ async def get_result_comparison(
             "code": s.code,
             "name": s.name,
             "tags": s.tags or "",
-            "score": s.score,
+            "score_b": s.score_b or 0,
+            "score_a": s.score_a or 0,
             "dip_bonus": s.dip_bonus or 0,
             "holders_bonus": s.holders_bonus or 0,
             "streak": st.get("streak", 1),
@@ -224,28 +387,62 @@ async def get_price_history(code: str, db: AsyncSession = Depends(get_db)):
 
 @router.get("/api/screener/{code}")
 async def get_stock_detail(code: str, db: AsyncSession = Depends(get_db)):
-    q = select(ScreeningResult).where(
-        ScreeningResult.code == code
-    ).order_by(ScreeningResult.calc_date.desc()).limit(30)
-    rows = (await db.execute(q)).scalars().all()
+    rows = (await db.execute(
+        select(ScreeningResult)
+        .where(ScreeningResult.code == code)
+        .order_by(ScreeningResult.calc_date.desc())
+        .limit(30)
+    )).scalars().all()
     return [_format_result(r) for r in rows]
 
 
 _JOB_SCHEDULE = {
-    "job1": "18:00",
-    "job2": "20:45",
-    "job3": "18:30 (週日)",
-    "job4": "21:00",
+    "job1": "18:00（週一～五）",
+    "job2": "20:45（週一～五）",
+    "job3": "18:30（週日）",
+    "job4": "21:00（週一～五）",
+    "job5": "每月10-25日 12:00",
+    "job6": "每季（3/1, 5/16, 8/15, 11/15）",
+    "job7": "每半年（1/1, 7/1）",
+}
+
+_JOB_DISPLAY_NAME = {
+    "job1": "法人＋股價",
+    "job2": "融資借券",
+    "job3": "大戶持股",
+    "job4": "選股篩選",
+    "job5": "月營收",
+    "job6": "季報EPS",
+    "job7": "產業鏈",
 }
 
 
 @router.get("/api/status")
 async def get_data_status(db: AsyncSession = Depends(get_db)):
     logs = (await db.execute(
-        select(FetchLog).where(FetchLog.fetch_date == date.today())
-        .order_by(FetchLog.job_name)
+        select(FetchLog)
+        .order_by(FetchLog.fetch_date.desc(), FetchLog.job_name)
     )).scalars().all()
-    log_map = {l.job_name: l for l in logs}
+
+    # job5/job6 use dynamic keys (e.g. job5_202605, job6_q2_2026); match by prefix
+    def _best_log(prefix: str) -> FetchLog | None:
+        today_str = str(date.today())
+        candidates = [l for l in logs if l.job_name.startswith(prefix)]
+        if not candidates:
+            return None
+        # prefer today's entry; fallback to most recent
+        today_hits = [l for l in candidates if str(l.fetch_date) == today_str]
+        return today_hits[0] if today_hits else candidates[0]
+
+    log_map: dict[str, FetchLog | None] = {
+        "job1": next((l for l in logs if l.job_name == "job1" and str(l.fetch_date) == str(date.today())), None),
+        "job2": next((l for l in logs if l.job_name == "job2" and str(l.fetch_date) == str(date.today())), None),
+        "job3": next((l for l in logs if l.job_name == "job3"), None),
+        "job4": next((l for l in logs if l.job_name == "job4" and str(l.fetch_date) == str(date.today())), None),
+        "job5": _best_log("job5_"),
+        "job6": _best_log("job6_"),
+        "job7": _best_log("job7_"),
+    }
 
     def _fmt_job(job_name: str) -> dict:
         l = log_map.get(job_name)
@@ -254,7 +451,7 @@ async def get_data_status(db: AsyncSession = Depends(get_db)):
             taipei_dt = l.created_at + timedelta(hours=8)
             updated_at = taipei_dt.strftime("%m/%d %H:%M")
         return {
-            "name": job_name,
+            "name": _JOB_DISPLAY_NAME.get(job_name, job_name),
             "schedule": _JOB_SCHEDULE.get(job_name, ""),
             "status": l.status if l else "pending",
             "rows": l.rows_fetched if l else 0,
@@ -267,8 +464,8 @@ async def get_data_status(db: AsyncSession = Depends(get_db)):
 
     return {
         "date": str(date.today()),
-        "jobs": [_fmt_job(j) for j in ("job1", "job2", "job3", "job4")],
-        "is_reliable": any(l.job_name == "job4" and l.status == "success" for l in logs),
+        "jobs": [_fmt_job(j) for j in ("job1", "job2", "job3", "job4", "job5", "job6", "job7")],
+        "is_reliable": log_map.get("job4") is not None and log_map["job4"].status == "success",
         "data_sources": {
             "institutional": {"label": "法人買賣超", "source": "TWSE T86", "via": "job1 18:00"},
             "price": {"label": "日收盤價", "source": "TWSE MI_INDEX", "via": "job1 18:00"},
@@ -279,43 +476,695 @@ async def get_data_status(db: AsyncSession = Depends(get_db)):
                 "latest_date": str(margin_latest) if margin_latest else None,
             },
             "shareholding": {"label": "持股集中度", "source": "TDCC 集保", "via": "job3 週日 18:30"},
+            "monthly_revenue": {"label": "月營收", "source": "MOPS", "via": "job5 每月10-25日"},
+            "quarterly_eps": {"label": "季報EPS", "source": "FinMind", "via": "job6 每季"},
         },
     }
 
 
-def _format_result(r: ScreeningResult, stats: dict | None = None) -> dict:
-    appearances_5d = stats["appearances_5d"] if stats else 1
-    streak = stats["streak"] if stats else 1
-    return {
-        "code": r.code,
-        "name": r.name,
-        "calc_date": str(r.calc_date),
-        "tags": r.tags.split() if r.tags else [],
-        "bb_position": r.bb_position,
-        "bb_peak": r.bb_peak,
-        "peak_days_ago": r.peak_days_ago or 0,
-        "is_squeeze": r.is_squeeze,
-        "vol_ratio": r.vol_ratio,
-        "foreign_6d_net": r.foreign_6d_net,
-        "trust_6d_net": r.trust_6d_net,
-        "chip_ratio_6d": r.chip_ratio_6d,
-        "chip_ratio_12d": r.chip_ratio_12d,
-        "margin_5d_chg": r.margin_5d_chg,
-        "lending_5d_chg": r.lending_5d_chg,
-        "score": r.score,
-        "dip_bonus": r.dip_bonus,
-        "holders_bonus": r.holders_bonus,
-        "appearances_5d": appearances_5d,
-        "streak": streak,
+@router.get("/api/sector-flow")
+async def get_sector_flow(
+    db: AsyncSession = Depends(get_db),
+    days: int = Query(5, ge=1, le=30),
+):
+    """各類股法人買賣超統計"""
+    cutoff = date.today() - timedelta(days=days * 2)
+    inst_dates = (await db.execute(
+        select(Institutional.trade_date).distinct()
+        .where(Institutional.trade_date >= cutoff)
+        .order_by(Institutional.trade_date.desc())
+        .limit(days)
+    )).scalars().all()
+
+    if not inst_dates:
+        return []
+
+    stocks = {r.code: r for r in (await db.execute(select(StockList))).scalars().all()}
+    inst_rows = (await db.execute(
+        select(Institutional)
+        .where(and_(
+            Institutional.code.in_(list(stocks.keys())),
+            Institutional.trade_date.in_(inst_dates),
+        ))
+    )).scalars().all()
+
+    sector_agg: dict = defaultdict(lambda: {"net": 0.0, "count": 0})
+    for row in inst_rows:
+        stock = stocks.get(row.code)
+        if not stock:
+            continue
+        sector = stock.sector or "其他"
+        net = (row.foreign_net or 0) + (row.trust_net or 0)
+        sector_agg[sector]["net"] += net
+        sector_agg[sector]["count"] += 1
+
+    result = [
+        {"sector": sector, "net": round(v["net"]), "stock_count": v["count"]}
+        for sector, v in sector_agg.items()
+    ]
+    result.sort(key=lambda x: x["net"], reverse=True)
+    return result
+
+
+@router.get("/api/sector-stocks/{sector}")
+async def get_sector_stocks(
+    sector: str,
+    db: AsyncSession = Depends(get_db),
+    days: int = Query(5, ge=1, le=20),
+):
+    """某類股下各股法人淨額排行"""
+    stocks = {r.code: r for r in (await db.execute(
+        select(StockList).where(StockList.sector == sector)
+    )).scalars().all()}
+    if not stocks:
+        return []
+
+    cutoff = date.today() - timedelta(days=days * 2)
+    inst_dates = (await db.execute(
+        select(Institutional.trade_date).distinct()
+        .where(Institutional.trade_date >= cutoff)
+        .order_by(Institutional.trade_date.desc())
+        .limit(days)
+    )).scalars().all()
+
+    inst_rows = (await db.execute(
+        select(Institutional)
+        .where(and_(
+            Institutional.code.in_(list(stocks.keys())),
+            Institutional.trade_date.in_(inst_dates),
+        ))
+    )).scalars().all()
+
+    agg: dict = defaultdict(float)
+    for row in inst_rows:
+        agg[row.code] += (row.foreign_net or 0) + (row.trust_net or 0)
+
+    result = [
+        {"code": code, "name": stocks[code].name, "net": round(net)}
+        for code, net in agg.items()
+    ]
+    result.sort(key=lambda x: x["net"], reverse=True)
+    return result
+
+
+@router.get("/api/market-overview")
+async def get_market_overview():
+    """大盤行情（yfinance）"""
+    try:
+        import yfinance as yf
+        symbols = {
+            "^TWII":  "台灣加權",
+            "^GSPC":  "S&P 500",
+            "^IXIC":  "Nasdaq",
+            "^HSI":   "恆生",
+            "^N225":  "日經225",
+            "^KS11":  "韓國綜合",
+        }
+        result = []
+        for sym, name in symbols.items():
+            try:
+                t = yf.Ticker(sym)
+                hist = t.history(period="2d")
+                if len(hist) < 2:
+                    continue
+                prev_close = hist["Close"].iloc[-2]
+                last_close = hist["Close"].iloc[-1]
+                chg_pct = (last_close - prev_close) / prev_close * 100
+                chg_pts = last_close - prev_close
+                result.append({
+                    "symbol": sym,
+                    "name": name,
+                    "close": round(last_close, 2),
+                    "chg_pts": round(chg_pts, 2),
+                    "chg_pct": round(chg_pct, 2),
+                })
+            except Exception:
+                pass
+        return result
+    except ImportError:
+        return []
+
+
+@router.get("/api/server-time")
+async def server_time():
+    """回傳台北當前時間（毫秒 timestamp + ISO string），供前端時鐘同步"""
+    from datetime import datetime, timezone, timedelta
+    now = datetime.now(timezone(timedelta(hours=8)))
+    return {"timestamp_ms": int(now.timestamp() * 1000), "taipei": now.isoformat()}
+
+
+@router.get("/api/taifex-futures")
+async def taifex_futures():
+    """台指期最新報價（TAIFEX 公開 API）— 日盤 / 夜盤均適用，僅回傳漲跌點"""
+    import httpx
+    url = "https://mis.taifex.com.tw/futures/api/getQuoteList"
+    payload = {
+        "SymbolType": "F",
+        "MarketType": "0",
+        "SymbolCode": "TX",
+        "ContractYear": "",
+        "ContractMonth": "",
+        "SettlementMonth": "0",
+        "Settlement": "",
+        "Status": "0",
     }
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            r = await client.post(url, json=payload, headers={"Referer": "https://mis.taifex.com.tw/"})
+            items = (r.json().get("RtData") or {}).get("QuoteList") or []
+            import re
+            # Near-month TX (大台指) only: e.g. TXFF6-F, TXFG6-F
+            # Exclude: TXF-S (spot), TXPF (after-hours), MTX (mini), weekly
+            for item in items:
+                sym = item.get("SymbolID", "")
+                if not re.match(r"^TXF[A-L]\d+-F$", sym):
+                    continue
+                vol = item.get("CTotalVolume", "")
+                if not vol:
+                    continue
+                diff_str = item.get("CDiff", "")
+                rate_str = item.get("CDiffRate", "")
+                last_str = item.get("CLastPrice", "")
+                if not diff_str or not last_str:
+                    continue
+                return {
+                    "symbol": item["SymbolID"],
+                    "last": float(last_str),
+                    "diff": float(diff_str),
+                    "diff_pct": float(rate_str) if rate_str else None,
+                    "volume": int(vol),
+                    "date": item.get("CDate", ""),
+                    "time": item.get("CTime", ""),
+                }
+    except Exception:
+        pass
+    return None
+
+
+@router.get("/api/is-trading-day")
+async def is_trading_day():
+    """檢查今天台股是否開盤（非週末 + 非國定假日）"""
+    import httpx
+    today = date.today()
+    if today.weekday() >= 5:
+        return {"trading": False, "reason": "weekend"}
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            r = await client.get(
+                "https://www.twse.com.tw/rwd/zh/holidaySchedule/holidaySchedule",
+                params={"response": "json", "queryYear": str(today.year)},
+            )
+            rows = r.json().get("data", [])
+            holidays = {row[0] for row in rows}
+            today_str = today.strftime("%Y/%m/%d")
+            if today_str in holidays:
+                return {"trading": False, "reason": "holiday"}
+    except Exception:
+        pass
+    return {"trading": True}
+
+
+@router.get("/api/us-stocks")
+async def get_us_stocks():
+    """美股追蹤清單（收盤價＋盤後價）"""
+    import yfinance as yf
+    import asyncio
+    from concurrent.futures import ThreadPoolExecutor
+
+    watchlist = [
+        ("TSM",  "台積電ADR"),
+        ("NVDA", "輝達"),
+        ("LITE", "Lumentum"),
+        ("AAOI", "Applied Opt"),
+        ("MRVL", "Marvell"),
+        ("SPCX", "SpaceX"),
+        ("MU",   "美光"),
+        ("WDC",  "威騰"),
+        ("TSLA", "特斯拉"),
+        ("GOOGL","Alphabet"),
+        ("MSFT", "微軟"),
+        ("AMZN", "亞馬遜"),
+        ("AAPL", "蘋果"),
+    ]
+
+    def fetch_one(sym: str, name: str):
+        try:
+            t = yf.Ticker(sym)
+            hist = t.history(period="2d")
+            if len(hist) < 1:
+                return None
+            close = float(hist["Close"].iloc[-1])
+            prev  = float(hist["Close"].iloc[-2]) if len(hist) >= 2 else close
+            chg_pct = (close - prev) / prev * 100 if prev else 0
+
+            info = t.info
+            post_price = info.get("postMarketPrice")
+            post_chg_pct = None
+            if post_price and close:
+                post_chg_pct = (float(post_price) - close) / close * 100
+
+            return {
+                "symbol": sym,
+                "name": name,
+                "close": round(close, 2),
+                "chg_pct": round(chg_pct, 2),
+                "post_price": round(float(post_price), 2) if post_price else None,
+                "post_chg_pct": round(post_chg_pct, 2) if post_chg_pct is not None else None,
+            }
+        except Exception:
+            return None
+
+    loop = asyncio.get_event_loop()
+    with ThreadPoolExecutor(max_workers=6) as ex:
+        tasks = [loop.run_in_executor(ex, fetch_one, sym, name) for sym, name in watchlist]
+        results = await asyncio.gather(*tasks)
+
+    return [r for r in results if r is not None]
+
+
+@router.get("/api/stock-snapshot/{code}")
+async def get_stock_snapshot(code: str, db: AsyncSession = Depends(get_db)):
+    """單股完整快照"""
+    stock = (await db.execute(
+        select(StockList).where(StockList.code == code)
+    )).scalar_one_or_none()
+    if not stock:
+        raise HTTPException(status_code=404, detail="Stock not found")
+
+    latest_screen = (await db.execute(
+        select(ScreeningResult)
+        .where(ScreeningResult.code == code)
+        .order_by(ScreeningResult.calc_date.desc())
+        .limit(1)
+    )).scalar_one_or_none()
+
+    latest_price = (await db.execute(
+        select(DailyPrice)
+        .where(DailyPrice.code == code)
+        .order_by(DailyPrice.trade_date.desc())
+        .limit(1)
+    )).scalar_one_or_none()
+
+    latest_inst = (await db.execute(
+        select(Institutional)
+        .where(Institutional.code == code)
+        .order_by(Institutional.trade_date.desc())
+        .limit(1)
+    )).scalar_one_or_none()
+
+    latest_sh = (await db.execute(
+        select(Shareholding)
+        .where(Shareholding.code == code)
+        .order_by(Shareholding.report_date.desc())
+        .limit(1)
+    )).scalar_one_or_none()
+
+    tags = [r.tag for r in (await db.execute(
+        select(CompanyTag).where(CompanyTag.code == code)
+    )).scalars().all()]
+
+    return {
+        "code": code,
+        "name": stock.name,
+        "sector": stock.sector,
+        "market": stock.market,
+        "capital": stock.capital,
+        "tags": tags,
+        "price": {
+            "close": latest_price.close if latest_price else None,
+            "high": latest_price.high if latest_price else None,
+            "low": latest_price.low if latest_price else None,
+            "volume": latest_price.volume if latest_price else None,
+            "date": str(latest_price.trade_date) if latest_price else None,
+        },
+        "inst": {
+            "foreign_net": latest_inst.foreign_net if latest_inst else None,
+            "trust_net": latest_inst.trust_net if latest_inst else None,
+            "three_major_net": latest_inst.three_major_net if latest_inst else None,
+            "date": str(latest_inst.trade_date) if latest_inst else None,
+        },
+        "shareholding": {
+            "pct_1000_lot": latest_sh.pct_1000_lot if latest_sh else None,
+            "pct_400_lot": latest_sh.pct_400_lot if latest_sh else None,
+            "date": str(latest_sh.report_date) if latest_sh else None,
+        },
+        "screen": _format_result(latest_screen) if latest_screen else None,
+    }
+
+
+@router.get("/api/stock-levels/{code}")
+async def get_stock_levels(code: str, db: AsyncSession = Depends(get_db)):
+    """支撐壓力位階計算"""
+    import pandas as pd
+    from app.services.stock_levels import calc_levels
+
+    cutoff = date.today() - timedelta(days=380)
+    price_rows = (await db.execute(
+        select(DailyPrice)
+        .where(and_(DailyPrice.code == code, DailyPrice.trade_date >= cutoff))
+        .order_by(DailyPrice.trade_date)
+    )).scalars().all()
+
+    if not price_rows:
+        return {"current_price": 0, "supports": [], "resistances": []}
+
+    inst_rows = (await db.execute(
+        select(Institutional)
+        .where(and_(Institutional.code == code, Institutional.trade_date >= cutoff))
+        .order_by(Institutional.trade_date)
+    )).scalars().all()
+
+    price_df = pd.DataFrame([
+        {
+            "trade_date": r.trade_date,
+            "open": r.open, "high": r.high, "low": r.low,
+            "close": r.close, "volume": r.volume,
+        }
+        for r in price_rows
+    ])
+    inst_df = pd.DataFrame([
+        {"trade_date": r.trade_date, "three_major_net": r.three_major_net}
+        for r in inst_rows
+    ])
+
+    return calc_levels(price_df, inst_df)
+
+
+@router.get("/api/stock-peers/{code}")
+async def get_stock_peers(code: str, db: AsyncSession = Depends(get_db)):
+    """同類股同業列表"""
+    stock = (await db.execute(
+        select(StockList).where(StockList.code == code)
+    )).scalar_one_or_none()
+    if not stock or not stock.sector:
+        return []
+
+    peers = (await db.execute(
+        select(StockList)
+        .where(and_(StockList.sector == stock.sector, StockList.code != code))
+        .limit(30)
+    )).scalars().all()
+
+    result = []
+    for p in peers:
+        latest_price = (await db.execute(
+            select(DailyPrice)
+            .where(DailyPrice.code == p.code)
+            .order_by(DailyPrice.trade_date.desc())
+            .limit(1)
+        )).scalar_one_or_none()
+        result.append({
+            "code": p.code,
+            "name": p.name,
+            "close": latest_price.close if latest_price else None,
+        })
+    return result
+
+
+@router.get("/api/company-tags")
+async def get_all_company_tags(db: AsyncSession = Depends(get_db)):
+    """所有股票標籤（依代碼分組）"""
+    rows = (await db.execute(
+        select(CompanyTag).order_by(CompanyTag.code, CompanyTag.tag)
+    )).scalars().all()
+    result: dict[str, list[str]] = {}
+    for r in rows:
+        result.setdefault(r.code, []).append(r.tag)
+    return result
+
+
+@router.get("/api/company-tags/{code}")
+async def get_company_tags(code: str, db: AsyncSession = Depends(get_db)):
+    rows = (await db.execute(
+        select(CompanyTag).where(CompanyTag.code == code)
+    )).scalars().all()
+    return [r.tag for r in rows]
+
+
+@router.get("/api/fins/{code}")
+async def get_fins(code: str, db: AsyncSession = Depends(get_db)):
+    """財務資料：月營收 + 季報EPS"""
+    rev_rows = (await db.execute(
+        select(MonthlyRevenue)
+        .where(MonthlyRevenue.code == code)
+        .order_by(MonthlyRevenue.year.desc(), MonthlyRevenue.month.desc())
+        .limit(24)
+    )).scalars().all()
+
+    eps_rows = (await db.execute(
+        select(QuarterlyEps)
+        .where(QuarterlyEps.code == code)
+        .order_by(QuarterlyEps.year.desc(), QuarterlyEps.quarter.desc())
+        .limit(8)
+    )).scalars().all()
+
+    rev_list = [
+        {"year": r.year, "month": r.month, "revenue": r.revenue}
+        for r in rev_rows
+    ]
+    eps_list = [
+        {
+            "year": r.year, "quarter": r.quarter,
+            "eps": r.eps, "revenue": r.revenue,
+            "op_income": r.op_income, "net_income": r.net_income,
+        }
+        for r in eps_rows
+    ]
+    return {"revenue": rev_list, "eps": eps_list}
+
+
+@router.get("/api/ic-chains")
+async def get_ic_chains_new(db: AsyncSession = Depends(get_db)):
+    """產業鏈分類 (新路徑)"""
+    from collections import OrderedDict
+    rows = (await db.execute(
+        select(IcClassification, StockList.name.label("sl_name"))
+        .outerjoin(StockList, IcClassification.code == StockList.code)
+        .order_by(IcClassification.ic_code, IcClassification.code)
+    )).all()
+
+    groups: dict = OrderedDict()
+    for ic, sl_name in rows:
+        if ic.ic_code not in groups:
+            groups[ic.ic_code] = {
+                "ic_code": ic.ic_code,
+                "ic_name": ic.ic_name,
+                "ic_parent": ic.ic_parent,
+                "companies": [],
+            }
+        groups[ic.ic_code]["companies"].append({
+            "code": ic.code,
+            "name": sl_name or ic.name or ic.code,
+            "ic_node": ic.ic_node,
+        })
+    return list(groups.values())
+
+
+@router.get("/api/ic_chain")
+async def get_ic_chains(db: AsyncSession = Depends(get_db)):
+    """產業鏈分類（舊路徑，保持相容）"""
+    return await get_ic_chains_new(db)
+
+
+@router.get("/api/watchlist-a")
+async def get_watchlist_a(
+    db: AsyncSession = Depends(get_db),
+    status: Optional[str] = Query(None),
+):
+    """策略A追蹤清單"""
+    q = select(WatchlistA)
+    if status:
+        q = q.where(WatchlistA.status == status)
+    q = q.order_by(WatchlistA.added_date.desc())
+    rows = (await db.execute(q)).scalars().all()
+
+    codes = [r.code for r in rows]
+    latest_prices: dict[str, float] = {}
+    if codes:
+        price_subq = (
+            select(DailyPrice.code, DailyPrice.close, DailyPrice.trade_date)
+            .where(DailyPrice.code.in_(codes))
+            .distinct(DailyPrice.code)
+            .order_by(DailyPrice.code, DailyPrice.trade_date.desc())
+        ).subquery()
+        price_rows = (await db.execute(select(price_subq))).all()
+        for r in price_rows:
+            latest_prices[r.code] = r.close
+
+    result = []
+    for r in rows:
+        close = latest_prices.get(r.code)
+        chg_pct = None
+        if close and r.added_close and r.added_close > 0:
+            chg_pct = round((close - r.added_close) / r.added_close * 100, 2)
+        result.append({
+            "id": r.id,
+            "code": r.code,
+            "name": r.name,
+            "added_date": str(r.added_date),
+            "added_close": r.added_close,
+            "added_bb_position": r.added_bb_position,
+            "added_score_a": r.added_score_a,
+            "status": r.status,
+            "triggered_date": str(r.triggered_date) if r.triggered_date else None,
+            "triggered_close": r.triggered_close,
+            "triggered_bb_position": r.triggered_bb_position,
+            "current_close": close,
+            "chg_pct": chg_pct,
+        })
+    return result
+
+
+class WatchlistStatusUpdate(BaseModel):
+    status: str
+
+
+@router.patch("/api/watchlist-a/{item_id}/status")
+async def update_watchlist_status(
+    item_id: int,
+    body: WatchlistStatusUpdate,
+    db: AsyncSession = Depends(get_db),
+):
+    """更新追蹤清單狀態 (entered / exited / dismissed)"""
+    valid = {"tracking", "triggered", "entered", "exited", "dismissed"}
+    if body.status not in valid:
+        raise HTTPException(status_code=400, detail=f"Invalid status. Must be one of: {valid}")
+    item = (await db.execute(
+        select(WatchlistA).where(WatchlistA.id == item_id)
+    )).scalar_one_or_none()
+    if not item:
+        raise HTTPException(status_code=404, detail="Item not found")
+    item.status = body.status
+    await db.commit()
+    return {"id": item_id, "status": body.status}
+
+
+@router.get("/api/watchlist-a/{code}/inst-flow")
+async def get_watchlist_inst_flow(
+    code: str,
+    db: AsyncSession = Depends(get_db),
+    pre_days: int = Query(6, ge=1, le=30),
+):
+    """追蹤清單個股法人流向（預設6日）"""
+    cutoff = date.today() - timedelta(days=pre_days * 2 + 5)
+    inst_dates = (await db.execute(
+        select(Institutional.trade_date).distinct()
+        .where(Institutional.trade_date >= cutoff)
+        .order_by(Institutional.trade_date.desc())
+        .limit(pre_days)
+    )).scalars().all()
+
+    if not inst_dates:
+        return []
+
+    rows = (await db.execute(
+        select(Institutional)
+        .where(and_(
+            Institutional.code == code,
+            Institutional.trade_date.in_(inst_dates),
+        ))
+        .order_by(Institutional.trade_date.desc())
+    )).scalars().all()
+
+    return [
+        {
+            "date": str(r.trade_date),
+            "foreign_net": round(r.foreign_net or 0),
+            "trust_net": round(r.trust_net or 0),
+            "dealer_net": round(r.dealer_net or 0),
+            "net": round((r.foreign_net or 0) + (r.trust_net or 0)),
+        }
+        for r in rows
+    ]
+
+
+@router.get("/api/inst-flow/{code}")
+async def get_inst_flow_stock(
+    code: str,
+    db: AsyncSession = Depends(get_db),
+    days: int = Query(20, ge=1, le=60),
+):
+    """個股法人買賣超歷史"""
+    cutoff = date.today() - timedelta(days=days * 2 + 5)
+    inst_dates = (await db.execute(
+        select(Institutional.trade_date).distinct()
+        .where(Institutional.trade_date >= cutoff)
+        .order_by(Institutional.trade_date.desc())
+        .limit(days)
+    )).scalars().all()
+
+    if not inst_dates:
+        return []
+
+    rows = (await db.execute(
+        select(Institutional)
+        .where(and_(
+            Institutional.code == code,
+            Institutional.trade_date.in_(inst_dates),
+        ))
+        .order_by(Institutional.trade_date)
+    )).scalars().all()
+
+    return [
+        {
+            "date": str(r.trade_date),
+            "foreign_net": round(r.foreign_net or 0),
+            "trust_net": round(r.trust_net or 0),
+            "dealer_net": round(r.dealer_net or 0),
+            "net": round((r.foreign_net or 0) + (r.trust_net or 0)),
+        }
+        for r in rows
+    ]
+
+
+@router.get("/api/inst-flow")
+async def get_inst_flow(
+    db: AsyncSession = Depends(get_db),
+    days: int = Query(5, ge=1, le=30),
+    top: int = Query(30, ge=5, le=100),
+):
+    """法人買超 / 賣超排行"""
+    cutoff = date.today() - timedelta(days=days * 2)
+    inst_dates = (await db.execute(
+        select(Institutional.trade_date).distinct()
+        .where(Institutional.trade_date >= cutoff)
+        .order_by(Institutional.trade_date.desc())
+        .limit(days)
+    )).scalars().all()
+
+    if not inst_dates:
+        return {"buy": [], "sell": []}
+
+    stocks = {r.code: r for r in (await db.execute(select(StockList))).scalars().all()}
+    inst_rows = (await db.execute(
+        select(Institutional)
+        .where(and_(
+            Institutional.code.in_(list(stocks.keys())),
+            Institutional.trade_date.in_(inst_dates),
+        ))
+    )).scalars().all()
+
+    agg: dict = defaultdict(float)
+    for row in inst_rows:
+        agg[row.code] += (row.foreign_net or 0) + (row.trust_net or 0)
+
+    sorted_agg = sorted(agg.items(), key=lambda x: x[1], reverse=True)
+    buy_list = [
+        {"code": c, "name": stocks[c].name if c in stocks else c, "net": round(n)}
+        for c, n in sorted_agg[:top] if n > 0
+    ]
+    sell_list = [
+        {"code": c, "name": stocks[c].name if c in stocks else c, "net": round(n)}
+        for c, n in sorted_agg[-top:] if n < 0
+    ]
+    sell_list.reverse()
+    return {"buy": buy_list, "sell": sell_list}
 
 
 @router.get("/api/exit-alerts")
 async def get_exit_alerts(db: AsyncSession = Depends(get_db)):
-    """過去 10 交易日篩出的股票，檢查技術/動能/籌碼退場條件。"""
     cutoff = date.today() - timedelta(days=20)
 
-    # 最近 10 個有篩選結果的交易日
     recent_dates = (await db.execute(
         select(ScreeningResult.calc_date)
         .distinct()
@@ -327,7 +1176,6 @@ async def get_exit_alerts(db: AsyncSession = Depends(get_db)):
     if not recent_dates:
         return []
 
-    # 最新一次篩選結果的股票代號（不顯示在退場欄）
     latest_screener_date = recent_dates[0]
     current_screener_codes = set((await db.execute(
         select(ScreeningResult.code)
@@ -346,8 +1194,6 @@ async def get_exit_alerts(db: AsyncSession = Depends(get_db)):
         .order_by(ScreeningResult.code, ScreeningResult.calc_date.desc())
     )).scalars().all()
 
-    # 每檔：取最新一筆（最新 bb_position）+ 歷史最高 bb_peak
-    # 排除目前仍在篩選結果中的股票（避免推薦 vs 退場矛盾）
     stock_latest: dict = {}
     stock_peak_bb: dict = {}
     for r in all_results:
@@ -362,34 +1208,35 @@ async def get_exit_alerts(db: AsyncSession = Depends(get_db)):
     if not codes:
         return []
 
-    # 股本
     capitals = {r.code: r.capital for r in (await db.execute(
         select(StockList).where(StockList.code.in_(codes))
     )).scalars().all()}
 
-    # 近 3 個有資料的交易日法人資料
-    inst_dates = (await db.execute(
+    all_inst_dates = (await db.execute(
         select(Institutional.trade_date)
         .distinct()
-        .where(Institutional.trade_date >= date.today() - timedelta(days=10))
+        .where(Institutional.trade_date >= date.today() - timedelta(days=25))
         .order_by(Institutional.trade_date.desc())
-        .limit(3)
+        .limit(12)
     )).scalars().all()
 
+    inst_dates_3d = set(all_inst_dates[:3])
     chip_3d: dict = {}
-    if inst_dates:
+    chip_12d: dict = {}
+    if all_inst_dates:
         inst_rows = (await db.execute(
             select(Institutional)
             .where(and_(
                 Institutional.code.in_(codes),
-                Institutional.trade_date.in_(inst_dates),
+                Institutional.trade_date.in_(all_inst_dates),
             ))
         )).scalars().all()
         for row in inst_rows:
             net = (row.foreign_net or 0) + (row.trust_net or 0)
-            chip_3d[row.code] = chip_3d.get(row.code, 0) + net
+            chip_12d[row.code] = chip_12d.get(row.code, 0) + net
+            if row.trade_date in inst_dates_3d:
+                chip_3d[row.code] = chip_3d.get(row.code, 0) + net
 
-    # 為每檔從 DailyPrice 抓 65 天重算 BB
     cutoff_bb = date.today() - timedelta(days=100)
     price_rows = (await db.execute(
         select(DailyPrice)
@@ -413,10 +1260,9 @@ async def get_exit_alerts(db: AsyncSession = Depends(get_db)):
         chip_sum = chip_3d.get(code, 0)
         chip_pct = chip_sum / capital * 100
 
+        chip_12d_pct = chip_12d.get(code, 0) / capital * 100
         triggered = []
-        if bb < 0:
-            triggered.append({"type": "tech", "label": "跌破月線", "bb": round(bb, 1)})
-        if chip_pct <= -0.5:
+        if chip_pct <= -1.5 and chip_12d_pct <= 0:
             triggered.append({"type": "chip", "label": "籌碼出場", "chip_pct": round(chip_pct, 2)})
 
         if triggered:
@@ -433,10 +1279,7 @@ async def get_exit_alerts(db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/api/holders")
-async def get_holders(
-    db: AsyncSession = Depends(get_db),
-):
-    """千張大戶占比排行，含週增減。"""
+async def get_holders(db: AsyncSession = Depends(get_db)):
     latest_date = (await db.execute(
         select(func.max(Shareholding.report_date))
     )).scalar_one_or_none()
@@ -473,6 +1316,7 @@ async def get_holders(
             "report_date": str(sh.report_date),
             "holders": sh.holders_1000_lot,
             "pct": sh.pct_1000_lot,
+            "pct_400_lot": sh.pct_400_lot,
             "prev_holders": prev.holders_1000_lot if prev else None,
             "prev_pct": prev.pct_1000_lot if prev else None,
             "holders_chg": (sh.holders_1000_lot - prev.holders_1000_lot) if prev else None,
@@ -485,7 +1329,6 @@ async def get_holders(
 
 @router.get("/api/ai-pick")
 async def get_ai_pick(db: AsyncSession = Depends(get_db)):
-    """回傳最近一筆 AI 精選結果，只回傳與最新篩選同日的結果。"""
     latest_screen_date = (await db.execute(
         select(ScreeningResult.calc_date)
         .where(ScreeningResult.passes == True)
@@ -500,6 +1343,11 @@ async def get_ai_pick(db: AsyncSession = Depends(get_db)):
         select(AIPick).where(AIPick.calc_date == latest_screen_date)
     )).scalar_one_or_none()
     if not row:
+        # fallback: 最新的 ai_pick 不論日期
+        row = (await db.execute(
+            select(AIPick).order_by(AIPick.calc_date.desc()).limit(1)
+        )).scalar_one_or_none()
+    if not row:
         return {"calc_date": None, "code": None, "name": None, "reason": None}
     return {
         "calc_date": str(row.calc_date),
@@ -507,3 +1355,168 @@ async def get_ai_pick(db: AsyncSession = Depends(get_db)):
         "name": row.name,
         "reason": row.reason,
     }
+
+
+class PoolAddBody(BaseModel):
+    code: str
+    name: str = ""
+
+
+@router.get("/api/pool")
+async def get_pool(db: AsyncSession = Depends(get_db)):
+    """目前股票池清單"""
+    rows = (await db.execute(
+        select(StockPool).order_by(StockPool.code)
+    )).scalars().all()
+    return [
+        {"code": r.code, "name": r.name, "added_at": str(r.added_at)[:10]}
+        for r in rows
+    ]
+
+
+@router.post("/api/pool")
+async def add_to_pool(body: PoolAddBody, db: AsyncSession = Depends(get_db)):
+    """加入股票到池"""
+    exists = (await db.execute(
+        select(StockPool).where(StockPool.code == body.code)
+    )).scalar_one_or_none()
+    if exists:
+        return {"ok": True, "already": True}
+    name = body.name
+    if not name:
+        sl = (await db.execute(
+            select(StockList).where(StockList.code == body.code)
+        )).scalar_one_or_none()
+        name = sl.name if sl else body.code
+    db.add(StockPool(code=body.code, name=name))
+    await db.commit()
+    return {"ok": True, "code": body.code, "name": name}
+
+
+@router.delete("/api/pool/{code}")
+async def remove_from_pool(code: str, db: AsyncSession = Depends(get_db)):
+    """從池移除股票"""
+    row = (await db.execute(
+        select(StockPool).where(StockPool.code == code)
+    )).scalar_one_or_none()
+    if not row:
+        raise HTTPException(status_code=404, detail="Not in pool")
+    await db.delete(row)
+    await db.commit()
+    return {"ok": True}
+
+
+@router.get("/api/stocks/search")
+async def search_stocks(q: str = Query(""), db: AsyncSession = Depends(get_db)):
+    """搜尋股票（代碼或名稱）"""
+    if not q.strip():
+        return []
+    rows = (await db.execute(
+        select(StockList).where(
+            StockList.code.ilike(f"%{q}%") | StockList.name.ilike(f"%{q}%")
+        ).limit(20)
+    )).scalars().all()
+    return [{"code": r.code, "name": r.name, "sector": r.sector} for r in rows]
+
+
+@router.post("/api/admin/trim_to_pool")
+async def trim_to_pool(db: AsyncSession = Depends(get_db)):
+    """刪除非股票池的所有歷史資料（不可逆）"""
+    from sqlalchemy import text
+    pool_codes = [r.code for r in (await db.execute(select(StockPool.code))).all()]
+    if not pool_codes:
+        return {"error": "pool is empty"}
+    placeholders = ",".join(f"'{c}'" for c in pool_codes)
+    tables = [
+        "daily_price", "institutional", "margin_trading", "shareholding",
+        "securities_lending", "screening_result", "company_tags",
+        "monthly_revenue", "quarterly_eps", "ic_classification",
+    ]
+    deleted = {}
+    async with engine.begin() as conn:
+        for tbl in tables:
+            result = await conn.execute(text(
+                f"DELETE FROM {tbl} WHERE code NOT IN ({placeholders})"
+            ))
+            deleted[tbl] = result.rowcount
+        result = await conn.execute(text(
+            f"DELETE FROM stock_list WHERE code NOT IN ({placeholders})"
+        ))
+        deleted["stock_list"] = result.rowcount
+    return {"deleted": deleted}
+
+
+@router.post("/api/admin/refresh_ic_chain")
+async def trigger_ic_chain_refresh():
+    import asyncio
+    from app.services.scheduler import job7_ic_chain
+    asyncio.create_task(job7_ic_chain())
+    return {"status": "triggered"}
+
+
+@router.post("/api/admin/run_screener")
+async def trigger_screener(force: bool = False):
+    import asyncio
+    from app.services.scheduler import job4_screener
+    asyncio.create_task(job4_screener(force=force))
+    return {"status": "force triggered" if force else "triggered"}
+
+
+@router.post("/api/admin/run_revenue")
+async def trigger_revenue(force: bool = True):
+    import asyncio
+    from app.services.scheduler import job5_monthly_revenue
+    asyncio.create_task(job5_monthly_revenue(force=force))
+    return {"status": "triggered"}
+
+
+@router.post("/api/admin/run_ai_pick")
+async def trigger_ai_pick(db: AsyncSession = Depends(get_db)):
+    import asyncio
+    from app.services.scheduler import _run_ai_pick
+    from app.db.models import ScreeningResult
+    latest_date = (await db.execute(
+        select(ScreeningResult.calc_date).order_by(ScreeningResult.calc_date.desc()).limit(1)
+    )).scalar_one_or_none()
+    if not latest_date:
+        raise HTTPException(status_code=404, detail="no screening results in DB")
+    results = (await db.execute(
+        select(ScreeningResult)
+        .where(ScreeningResult.calc_date == latest_date)
+        .order_by(ScreeningResult.score_b.desc())
+    )).scalars().all()
+    asyncio.create_task(_run_ai_pick(latest_date, results))
+    return {"status": "triggered", "date": str(latest_date), "stocks": len(results)}
+
+
+@router.post("/api/admin/run_monthly_revenue")
+async def trigger_monthly_revenue():
+    import asyncio
+    from app.services.scheduler import job5_monthly_revenue
+    asyncio.create_task(job5_monthly_revenue())
+    return {"status": "triggered"}
+
+
+@router.post("/api/admin/backfill_revenue")
+async def trigger_backfill_revenue(start_date: str = "2023-01-01"):
+    import asyncio
+    from app.services.scheduler import backfill_revenue_history
+    asyncio.create_task(backfill_revenue_history(start_date))
+    return {"status": "triggered", "start_date": start_date}
+
+
+@router.post("/api/admin/run_quarterly_eps")
+async def trigger_quarterly_eps(force: bool = True):
+    """Job6 — FinMind TaiwanStockFinancialStatements 季報EPS"""
+    import asyncio
+    from app.services.scheduler import job6_quarterly_eps
+    asyncio.create_task(job6_quarterly_eps(force=force))
+    return {"status": "triggered"}
+
+
+@router.post("/api/admin/run_eps")
+async def trigger_eps(force: bool = True):
+    import asyncio
+    from app.services.scheduler import job6_quarterly_eps
+    asyncio.create_task(job6_quarterly_eps(force=force))
+    return {"status": "triggered"}

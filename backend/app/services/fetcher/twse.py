@@ -104,6 +104,39 @@ async def fetch_margin(trade_date: date) -> list[dict]:
     return rows
 
 
+async def fetch_tpex_margin(trade_date: date) -> list[dict]:
+    """TPEx 融資融券餘額（上櫃）"""
+    import httpx
+    roc_date = f"{trade_date.year - 1911}/{trade_date.month:02d}/{trade_date.day:02d}"
+    url = "https://www.tpex.org.tw/web/stock/margin_trading/margin_balance/margin_bal_result.php"
+    params = {"l": "zh-tw", "d": roc_date, "o": "json"}
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(url, params=params)
+        data = resp.json()
+    except Exception:
+        return []
+    rows = []
+    for r in data.get("aaData", []):
+        try:
+            code = str(r[0]).strip()
+            mb = _parse_int(r[6])
+            mb_prev = _parse_int(r[2])
+            sb = _parse_int(r[13])
+            sb_prev = _parse_int(r[9])
+            rows.append({
+                "code": code,
+                "trade_date": trade_date,
+                "margin_balance": mb,
+                "margin_change": mb - mb_prev,
+                "short_balance": sb,
+                "short_change": sb - sb_prev,
+            })
+        except (IndexError, ValueError, AttributeError):
+            continue
+    return rows
+
+
 async def fetch_lending(trade_date: date) -> list[dict]:
     """TWSE 借券賣出餘額 TWT38U（已廢棄，資料已合併至 TWT93U，保留函式避免 import 錯誤）"""
     return []

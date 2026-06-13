@@ -38,7 +38,8 @@ function generateAnalysis(s: ScreenerResult): string {
   lines.push(`chip6d=${s.chip_ratio_6d.toFixed(2)}%：（外資${fmtLots(s.foreign_6d_net)} + 投信${fmtLots(s.trust_6d_net)}）÷ 股本 × 100% = ${s.chip_ratio_6d.toFixed(2)}%，${chipOk ? '超過入場門檻（≥1%），代表主力持續在場' : '未達入場門檻（≥1%），籌碼集中度不足'}。`)
   lines.push('')
 
-  const scoreLabel = s.score >= 80 ? '綠燈' : s.score >= 60 ? '黃燈' : '紅燈'
+  const score = s.score_b
+  const scoreLabel = score >= 80 ? '綠燈' : score >= 60 ? '黃燈' : '紅燈'
   const missing: string[] = []
   if (!s.is_squeeze) missing.push('沒有BB壓縮（is_squeeze=false）→ 少15分')
   if (s.vol_ratio > 0.5) missing.push(`量縮不夠（vol_ratio=${s.vol_ratio.toFixed(2)}，>0.5）→ 少10分`)
@@ -46,31 +47,35 @@ function generateAnalysis(s: ScreenerResult): string {
   if (s.lending_5d_chg > 0) missing.push(`借券近5日增加（+${(s.lending_5d_chg * 100).toFixed(1)}%）→ 扣分`)
 
   if (missing.length > 0) {
-    lines.push(`基礎分${s.score}（${scoreLabel}）低的原因：`)
+    lines.push(`B分${score}（${scoreLabel}）低的原因：`)
     missing.forEach(m => lines.push(`  ${m}`))
   } else {
-    lines.push(`基礎分${s.score}（${scoreLabel}）：各項條件均達標。`)
+    lines.push(`B分${score}（${scoreLabel}）：各項條件均達標。`)
+  }
+
+  if (s.score_a > 0) {
+    lines.push(`A分${s.score_a.toFixed(0)}（策略A突破品質）`)
   }
   lines.push('')
 
   if (s.dip_bonus > 0) {
     const isFull = s.dip_bonus >= 5
-    lines.push(`+${s.dip_bonus}資${isFull ? '（滿分）才是這檔最關鍵的地方' : ''}：最近${s.dip_bonus}次股價下跌日，法人都逆勢買超${isFull ? '，一次不漏' : ''}。這個信號含義是「主力刻意壓盤，股價跌它卻在偷偷買進」，通常是主力洗盤而非出貨的${isFull ? '強烈' : ''}跡象。`)
+    lines.push(`+${s.dip_bonus}資${isFull ? '（滿分）才是這檔最關鍵的地方' : ''}：最近${s.dip_bonus}次股價下跌日，法人都逆勢買超。`)
     lines.push('')
   }
 
   if (s.holders_bonus !== null && s.holders_bonus !== undefined) {
     const absN = Math.abs(s.holders_bonus)
-    const dir = s.holders_bonus > 0 ? `增加 ${absN} 人` : s.holders_bonus < 0 ? `減少 ${absN} 人` : `與上週相同`
-    const comment = s.holders_bonus > 0 ? '大戶人數增加，籌碼向上集中，偏多訊號。' : s.holders_bonus < 0 ? '大戶人數減少，籌碼分散，需注意。' : '大戶人數無增減，籌碼穩定維持。'
-    lines.push(`${s.holders_bonus > 0 ? '+' : ''}${s.holders_bonus}戶加：千張以上大戶人數本週比上週${dir}。${comment}`)
+    const dir = s.holders_bonus > 0 ? `增加 ${absN.toFixed(2)}%` : s.holders_bonus < 0 ? `減少 ${absN.toFixed(2)}%` : `與上週相同`
+    const comment = s.holders_bonus > 0 ? '大戶加碼，籌碼向上集中，偏多訊號。' : s.holders_bonus < 0 ? '大戶減倉，籌碼分散，需注意。' : '大戶持股穩定。'
+    lines.push(`${s.holders_bonus > 0 ? '+' : ''}${s.holders_bonus.toFixed(2)}%戶：千張以上大戶本週比上週${dir}。${comment}`)
     lines.push('')
   }
 
-  if (s.score >= 80) {
+  if (score >= 80) {
     lines.push(`結論：各項條件強勢，可列入優先觀察。`)
-  } else if (s.dip_bonus >= 4 && s.score < 60) {
-    lines.push(`結論：基礎面條件普通（量沒縮、型態沒壓縮），但籌碼沉澱訊號很強。偏謹慎看待，等量縮或BB壓縮成形再考慮。`)
+  } else if (s.dip_bonus >= 4 && score < 60) {
+    lines.push(`結論：基礎面條件普通，但籌碼沉澱訊號很強。偏謹慎看待，等量縮或BB壓縮成形再考慮。`)
   } else if (s.dip_bonus >= 4) {
     lines.push(`結論：籌碼沉澱訊號強，基礎面也在水準線，可關注後續型態發展。`)
   } else {
@@ -88,10 +93,11 @@ function AppearanceBadge({ appearances, streak }: { appearances: number; streak:
   return <span className="px-2 py-0.5 bg-gray-700 text-gray-300 text-xs rounded-full">5日 {appearances} 次</span>
 }
 
-interface StockCardProps { stock: ScreenerResult }
+interface StockCardProps { stock: ScreenerResult; onResearchStock?: (code: string) => void }
 
-export function StockCard({ stock }: StockCardProps) {
-  const scoreColor = stock.score >= 80 ? 'text-green-400' : stock.score >= 60 ? 'text-yellow-400' : 'text-red-400'
+export function StockCard({ stock, onResearchStock }: StockCardProps) {
+  const score = stock.score_b
+  const scoreColor = score >= 80 ? 'text-green-400' : score >= 60 ? 'text-yellow-400' : 'text-red-400'
   const analysis = generateAnalysis(stock)
   const daysSinceCalc = Math.floor((Date.now() - new Date(stock.calc_date).getTime()) / 86400000)
   const dateColor = daysSinceCalc <= 3 ? 'text-green-400' : 'text-gray-600'
@@ -114,7 +120,10 @@ export function StockCard({ stock }: StockCardProps) {
 
       <div className="flex justify-between items-start mb-3">
         <div>
-          <span className="text-white font-bold text-lg">{stock.code}</span>
+          <span
+            className="text-white font-bold text-lg cursor-pointer hover:text-blue-400"
+            onClick={() => onResearchStock?.(stock.code)}
+          >{stock.code}</span>
           <span className="text-gray-400 text-lg ml-2">{stock.name}</span>
           <span className={`text-[10px] ml-2 ${dateColor}`}>{stock.calc_date.slice(5)} 篩選</span>
           <button
@@ -124,16 +133,27 @@ export function StockCard({ stock }: StockCardProps) {
           >⎘</button>
         </div>
         <div className="flex items-stretch gap-1.5">
-          <span className={`text-2xl font-black leading-none self-center ${scoreColor}`}>{stock.score}</span>
-          <div className="flex flex-col justify-between text-xs font-bold leading-none py-0.5">
+          <div className="text-center">
+            {stock.score_a > 0 && (
+              <div className="text-xs text-blue-400 font-semibold">A:{stock.score_a.toFixed(0)}</div>
+            )}
+            <span className={`text-2xl font-black leading-none ${scoreColor}`}>{score}</span>
+            <div className="text-[10px] text-gray-500">B分</div>
+          </div>
+          <div className="flex flex-col justify-end text-[10px] font-bold leading-none py-0.5 gap-[3px]">
             <span className={`${stock.dip_bonus !== 0 ? 'text-orange-400' : 'text-gray-600'}`}>
               {stock.dip_bonus > 0 ? '+' : ''}{stock.dip_bonus}資
             </span>
-            {stock.holders_bonus !== null && stock.holders_bonus !== undefined && (
-              <span className={`${stock.holders_bonus > 0 ? 'text-sky-400' : stock.holders_bonus < 0 ? 'text-pink-400' : 'text-gray-500'}`}>
-                {stock.holders_bonus > 0 ? '+' : ''}{stock.holders_bonus}戶
+            {[
+              { val: stock.holders_bonus, label: '1w' },
+              { val: stock.holders_w2,    label: '2w' },
+              { val: stock.holders_w3,    label: '3w' },
+            ].map(({ val, label }) => val != null ? (
+              <span key={label} className={`${val > 0 ? 'text-sky-400' : val < 0 ? 'text-pink-400' : 'text-gray-500'}`}>
+                <span className="text-[8px] text-gray-600 font-normal mr-0.5">{label}</span>
+                {val > 0 ? '+' : ''}{val.toFixed(2)}%
               </span>
-            )}
+            ) : null)}
           </div>
         </div>
       </div>
@@ -157,6 +177,14 @@ export function StockCard({ stock }: StockCardProps) {
         <span>創高位階 {stock.bb_peak.toFixed(1)}</span>
         <span>|</span>
         <span>量比 {stock.vol_ratio.toFixed(2)}</span>
+        {stock.change_pct !== 0 && (
+          <>
+            <span>|</span>
+            <span className={stock.change_pct >= 0 ? 'text-green-500' : 'text-red-500'}>
+              {stock.change_pct >= 0 ? '+' : ''}{stock.change_pct.toFixed(2)}%
+            </span>
+          </>
+        )}
       </div>
 
       <ChipBar stock={stock} />

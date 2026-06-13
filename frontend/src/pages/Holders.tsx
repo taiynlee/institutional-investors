@@ -20,7 +20,7 @@ function ChgBadge({ v, suffix = '' }: { v: number | null; suffix?: string }) {
   return <span className="text-gray-500">0{suffix}</span>
 }
 
-export function Holders() {
+export function Holders({ onResearchStock }: { onResearchStock?: (code: string) => void }) {
   const [rows, setRows] = useState<HolderRow[]>([])
   const [search, setSearch] = useState('')
   const [loading, setLoading] = useState(true)
@@ -83,7 +83,10 @@ export function Holders() {
                 {filtered.map((r, i) => (
                   <tr key={r.code} className="border-b border-gray-800 hover:bg-gray-800 transition-colors">
                     <td className="px-4 py-2.5 text-gray-600 text-xs">{i + 1}</td>
-                    <td className="px-4 py-2.5 font-mono text-blue-300">{r.code}</td>
+                    <td
+                      className="px-4 py-2.5 font-mono text-blue-300 cursor-pointer hover:text-blue-400"
+                      onClick={() => onResearchStock?.(r.code)}
+                    >{r.code}</td>
                     <td className="px-4 py-2.5 font-medium text-white">{r.name}</td>
                     <td className="px-4 py-2.5 text-gray-500 text-xs">{r.sector}</td>
                     <td className="px-4 py-2.5 text-right text-white font-bold">{r.holders}</td>

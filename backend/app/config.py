@@ -6,6 +6,8 @@ class Settings(BaseSettings):
     finmind_token: str = ""
     config_path: str = "/app/config"
     line_bot_url: str = "http://172.17.0.1:8001"
+    line_channel_token: str = ""
+    line_user_id: str = ""
 
     class Config:
         env_file = ".env"

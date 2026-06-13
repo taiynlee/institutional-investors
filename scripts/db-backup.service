@@ -1,0 +1,10 @@
+[Unit]
+Description=Institutional Investors DB Backup
+After=docker.service institutional-investors.service
+
+[Service]
+Type=oneshot
+User=tommy0322
+ExecStart=/home/tommy0322/institutional-investors/scripts/backup-db.sh
+StandardOutput=journal
+StandardError=journal
