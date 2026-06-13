@@ -262,7 +262,7 @@ institutional-investors/
 │   │   │   │   ├── price.py      # 歷史價格補抓
 │   │   │   │   └── stock_list.py # 電子股清單（FinMind）
 │   │   │   ├── screener.py       # BB 計算 + A/B 篩選邏輯 + 評分
-│   │   │   └── scheduler.py      # APScheduler 4 排程 + 90 日回填
+│   │   │   └── scheduler.py      # 自製 asyncio 排程迴圈 + 4 個 Job + 非交易日 fallback
 │   │   └── db/
 │   │       ├── base.py       # SQLAlchemy engine + session
 │   │       └── models.py     # ORM 資料模型
@@ -278,7 +278,8 @@ institutional-investors/
 │   │   │   └── Tooltip.tsx       # 通用 tooltip 元件
 │   │   ├── pages/
 │   │   │   ├── Dashboard.tsx # 篩選結果頁
-│   │   │   └── Result.tsx    # 篩選績效頁（昨日結果 vs 次日收盤）
+│   │   │   ├── Result.tsx    # 篩選績效頁（昨日結果 vs 次日收盤）
+│   │   │   └── Holders.tsx   # 千張大戶占比排行頁（週增減%排序）
 │   │   ├── hooks/
 │   │   │   └── useScreener.ts # API 資料 hook
 │   │   ├── types/
@@ -348,7 +349,7 @@ institutional-investors/
 
 > **重要：本系統只處理台股上市（TWSE）和上櫃（TPEx）的電子類股。**
 
-- `stock_list` 只收錄 TWSE 上市 + TPEx 上櫃的電子類股（約 1055 檔）
+- `stock_list` 只收錄 TWSE 上市 + TPEx 上櫃的電子類股（約 1118 檔），涵蓋產業：電子工業、電子零組件業、其他電子業、光電業、電腦及週邊設備業、電子通路業、半導體業、**通信網路業**
 - 每日爬取 TWSE T86（全市場）/ TWT93U（融資）等 API 回傳的全市場資料時，**插入前過濾**，只寫入 `stock_list` 中存在的代號
 - 非電子股、興櫃、創新板、ETF 等一律不寫入，不佔 DB 空間
 
@@ -405,7 +406,7 @@ institutional-investors/
 | Scrapling | latest | 反爬蟲爬蟲 |
 | yfinance | latest | 大盤指數（^TWII）備援 |
 | pandas / numpy | latest | 資料處理、布林帶計算 |
-| APScheduler | latest | 每日定時爬取（4 個排程 Job） |
+| asyncio（內建） | — | 自製 `_scheduler_loop`，每分鐘檢查時間觸發 4 個排程 Job（取代 APScheduler） |
 
 ### 前端
 
@@ -737,9 +738,19 @@ docker compose up -d
 | **BBGauge** | 布林位階進度條，位階>5=綠、0~5=黃、0~-3=橘、<-3=紅 |
 | **ChipBar** | 台股顏色慣例：正數=紅色、負數=綠色 |
 | **趨勢小圖** | 近 2 個月收盤走勢，漲=紅、跌=綠；右下標示「最新收盤 MM-DD」 |
-| **hover 解讀** | 滑鼠移到卡片顯示詳細文字解讀（策略邏輯、籌碼分析、結論） |
+| **hover 解讀** | 滑鼠移到卡片顯示詳細文字解讀，可選取文字或點「點擊複製全文」 |
+| **⎘ 複製按鈕** | 股票名稱旁快速複製完整解讀文字 |
 | **退場止損** | 頂部橫欄掃描過去 10 交易日篩選股，有退場訊號立即顯示 |
-| **AI 精選** | 每日 job4 後由 Claude AI 從篩選結果中選出最值得關注的一檔 |
+| **AI 精選** | 每日 job4 後由 Claude AI 從篩選結果中選出最值得關注的一檔，點擊卡片複製精選理由 |
+
+### 千張大戶頁
+
+| 功能 | 說明 |
+|------|------|
+| **占比排行** | 全市場電子股千張以上大戶持股占比（`pct_1000_lot`），依週增減% 由高到低排序 |
+| **週增減** | 本週 vs 上週持股人數差（+綠/-紅）與占比變化% |
+| **搜尋** | 可依代碼、名稱、類股即時篩選 |
+| **資料頻率** | TDCC 集保每週更新一次（週日 18:30 後） |
 
 ### 篩選績效頁
 
