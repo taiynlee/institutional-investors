@@ -167,7 +167,7 @@ def create_app(
                         await ws.send_text(msg)
                     except Exception:
                         dead.add(ws)
-                _ws_clients -= dead
+                _ws_clients.difference_update(dead)
             except Exception:
                 pass
 

@@ -29,21 +29,23 @@ for i in $(seq 1 30); do
     sleep 1
 done
 
-# ── 2. 檢查 fubon-dashboard 是否已在跑 ──────────────────────────────────────
-echo ">>> [2/3] 檢查當沖引擎..."
+# ── 2. fubon-dashboard via systemd user service ─────────────────────────────
+echo ">>> [2/3] 啟動 fubon-dashboard（systemd user service）..."
 if curl -sf http://localhost:8090/health > /dev/null 2>&1; then
     echo "    fubon-dashboard 已在運行（port 8090），跳過啟動"
 else
-    echo ">>> [3/3] 啟動 fubon-dashboard（背景執行）..."
-    cd "$FUBON_DIR"
-    nohup python run.py >> "$LOG_DIR/fubon_stdout.log" 2>&1 &
-    FPID=$!
-    echo "    fubon-dashboard PID=$FPID，等待 5s..."
-    sleep 5
-    if curl -sf http://localhost:8090/health > /dev/null 2>&1; then
-        echo "    fubon-dashboard 啟動成功"
-    else
-        echo "    ⚠ fubon-dashboard 尚未就緒，請查看 $LOG_DIR/fubon_stdout.log"
+    systemctl --user restart fubon-dashboard.service 2>/dev/null || \
+        systemctl --user start fubon-dashboard.service
+    echo ">>> [3/3] 等待 fubon-dashboard 就緒..."
+    for i in $(seq 1 15); do
+        if curl -sf http://localhost:8090/health > /dev/null 2>&1; then
+            echo "    fubon-dashboard 啟動成功（${i}s）"
+            break
+        fi
+        sleep 1
+    done
+    if ! curl -sf http://localhost:8090/health > /dev/null 2>&1; then
+        echo "    ⚠ fubon-dashboard 尚未就緒，查看：journalctl --user -u fubon-dashboard -n 30"
     fi
 fi
 
