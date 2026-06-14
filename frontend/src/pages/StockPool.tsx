@@ -102,7 +102,7 @@ export function StockPoolPage() {
     setBackfilling(true)
     setBackfillNote(null)
     try {
-      const r = await axios.post('/api/admin/backfill-financials')
+      const r = await axios.post('/api/admin/backfill_pool_financials')
       setBackfillNote(`✓ 已觸發補抓 ${r.data.codes} 支股票（背景執行中）`)
     } catch (e: any) {
       setBackfillNote(`✕ ${e?.response?.data?.detail ?? '觸發失敗'}`)
