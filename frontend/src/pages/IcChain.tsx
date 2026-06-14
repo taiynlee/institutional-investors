@@ -111,7 +111,7 @@ export function IcChain({ onResearchStock }: { onResearchStock?: (code: string) 
 
   return (
     <div className="min-h-screen bg-gray-950 text-white p-6">
-      <div className="max-w-5xl mx-auto">
+      <div className="max-w-7xl mx-auto">
         <div className="flex justify-between items-center mb-6">
           <div>
             <h1 className="text-2xl font-black text-white">電子科技產業鏈</h1>

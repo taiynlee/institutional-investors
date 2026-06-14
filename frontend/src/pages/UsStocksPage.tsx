@@ -103,7 +103,7 @@ export function UsStocksPage() {
 
   return (
     <div className="min-h-screen bg-gray-950 text-white p-6">
-      <div className="max-w-4xl mx-auto">
+      <div className="max-w-7xl mx-auto">
         <div className="flex justify-between items-end mb-6">
           <div>
             <h1 className="text-2xl font-black text-white">美股追蹤</h1>
@@ -208,13 +208,12 @@ export function UsStocksPage() {
                   <th className="px-4 py-3 text-right">收盤漲跌</th>
                   <th className="px-4 py-3 text-right">盤後價</th>
                   <th className="px-4 py-3 text-right">盤後漲跌</th>
-                  <th className="px-4 py-3 text-right">盤後-收盤</th>
                   {showManage && <th className="px-4 py-3 w-8"></th>}
                 </tr>
               </thead>
               <tbody>
                 {stocks.map(s => {
-                  const highlight = s.chg_pct > 0 && s.post_chg_pct != null && s.post_chg_pct > 3
+                  const highlight = s.chg_pct >= 0 && s.post_chg_pct != null && s.post_chg_pct > 3
                   return (
                     <tr key={s.symbol} className={`border-b border-gray-800 transition-colors ${highlight ? 'bg-amber-950 hover:bg-amber-900' : 'hover:bg-gray-800'}`}>
                       <td className="px-4 py-3 font-mono text-blue-300 font-bold">{s.symbol}</td>
@@ -225,13 +224,6 @@ export function UsStocksPage() {
                         {s.post_price != null ? s.post_price.toFixed(2) : <span className="text-gray-600">—</span>}
                       </td>
                       <td className="px-4 py-3 text-right"><ChgBadge val={s.post_chg_pct} /></td>
-                      <td className="px-4 py-3 text-right font-mono">
-                        {s.post_price != null ? (() => {
-                          const diff = s.post_price - s.close
-                          const color = diff > 0 ? 'text-red-400' : diff < 0 ? 'text-green-400' : 'text-gray-400'
-                          return <span className={color}>{diff > 0 ? '+' : ''}{diff.toFixed(2)}</span>
-                        })() : <span className="text-gray-600">—</span>}
-                      </td>
                       {showManage && (
                         <td className="px-4 py-3 text-center">
                           <button

@@ -86,7 +86,7 @@ export function Result({ onResearchStock }: { onResearchStock?: (code: string) =
 
   return (
     <div className="min-h-screen bg-gray-950 text-white p-6">
-      <div className="max-w-3xl mx-auto">
+      <div className="max-w-7xl mx-auto">
         <div className="mb-6 flex items-center gap-4 flex-wrap">
           <h2 className="text-xl font-black text-white">篩選績效</h2>
           <select

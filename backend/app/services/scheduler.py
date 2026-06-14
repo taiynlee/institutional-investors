@@ -965,11 +965,63 @@ def create_scheduler() -> AsyncIOScheduler:
     return scheduler
 
 
+async def backfill_financials_for_codes(codes: list[str], start_date: str = "2023-01-01"):
+    """補抓指定股票的月營收和季報EPS（FinMind）"""
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+    from app.services.fetcher.finmind import fetch_monthly_revenue_history, fetch_quarterly_eps
+    from app.db.models import MonthlyRevenue, QuarterlyEps
+
+    SLEEP_SEC = 3600 / 550  # FinMind rate limit ≈ 6.5s
+
+    logger.info(f"backfill_financials: starting for {len(codes)} stocks")
+
+    for code in codes:
+        try:
+            rev_rows = await fetch_monthly_revenue_history(code, start_date)
+            if rev_rows:
+                async with AsyncSessionLocal() as db:
+                    stmt = pg_insert(MonthlyRevenue).values(rev_rows)
+                    stmt = stmt.on_conflict_do_update(
+                        index_elements=["code", "year", "month"],
+                        set_={"revenue": stmt.excluded.revenue},
+                    )
+                    await db.execute(stmt)
+                    await db.commit()
+                logger.info(f"backfill_financials revenue {code}: {len(rev_rows)} rows")
+        except Exception as e:
+            logger.warning(f"backfill_financials revenue failed {code}: {e}")
+        await asyncio.sleep(SLEEP_SEC)
+
+        try:
+            eps_rows = await fetch_quarterly_eps(code)
+            if eps_rows:
+                async with AsyncSessionLocal() as db:
+                    stmt = pg_insert(QuarterlyEps).values(eps_rows)
+                    stmt = stmt.on_conflict_do_update(
+                        index_elements=["code", "year", "quarter"],
+                        set_={
+                            "eps": stmt.excluded.eps,
+                            "revenue": stmt.excluded.revenue,
+                            "op_income": stmt.excluded.op_income,
+                            "net_income": stmt.excluded.net_income,
+                            "updated_at": stmt.excluded.updated_at,
+                        },
+                    )
+                    await db.execute(stmt)
+                    await db.commit()
+                logger.info(f"backfill_financials eps {code}: {len(eps_rows)} rows")
+        except Exception as e:
+            logger.warning(f"backfill_financials eps failed {code}: {e}")
+        await asyncio.sleep(SLEEP_SEC)
+
+    logger.info(f"backfill_financials done for {len(codes)} stocks")
+
+
 async def backfill_90_days():
     """首次啟動時，補抓 90 日歷史（只補股票池內的股票）"""
     from app.db.models import StockPool
     async with AsyncSessionLocal() as db:
-        count = (await db.execute(select(DailyPrice))).first()
+        count = (await db.execute(select(DailyPrice).limit(1))).first()
     if count is not None:
         logger.info("Data exists, skipping backfill.")
         return

@@ -21,7 +21,7 @@ export function ExitAlertsPage({ onResearchStock }: { onResearchStock?: (code: s
 
   return (
     <div className="min-h-screen bg-gray-950 text-white p-6">
-      <div className="max-w-5xl mx-auto">
+      <div className="max-w-7xl mx-auto">
         <div className="mb-6">
           <h1 className="text-2xl font-black text-white">退場止損訊號</h1>
           <p className="text-gray-400 text-sm">技術面、動能、籌碼三維度偵測退場訊號</p>

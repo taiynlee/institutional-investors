@@ -99,7 +99,7 @@ export function StockPoolPage() {
 
   return (
     <div className="min-h-screen bg-gray-950 text-white p-6">
-      <div className="max-w-4xl mx-auto">
+      <div className="max-w-7xl mx-auto">
         <div className="flex justify-between items-start mb-6">
           <div>
             <h1 className="text-2xl font-black text-white">股票池管理</h1>

@@ -10,3 +10,5 @@ config.yaml
 __pycache__/
 *.pyc
 .env
+.deps_installed
+vendor/

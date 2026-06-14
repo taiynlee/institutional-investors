@@ -103,6 +103,9 @@ async def _apply_migrations():
                 ), {"s": sym, "n": name, "t": now})
 
 
+_log = __import__("logging").getLogger(__name__)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     async with engine.begin() as conn:
@@ -110,9 +113,22 @@ async def lifespan(app: FastAPI):
     await _apply_migrations()
     SKIP_STARTUP_SYNC = os.getenv("SKIP_STARTUP_SYNC", "").lower() in ("1", "true")
     if not SKIP_STARTUP_SYNC:
-        await refresh_stock_list()
-        await backfill_90_days()
-    asyncio.create_task(backfill_shareholding_all())
+        try:
+            await refresh_stock_list()
+        except Exception as e:
+            _log.warning("refresh_stock_list failed on startup: %s", e)
+        try:
+            await backfill_90_days()
+        except Exception as e:
+            _log.warning("backfill_90_days failed on startup: %s", e)
+
+    async def _safe_shareholding():
+        try:
+            await backfill_shareholding_all()
+        except Exception as e:
+            _log.warning("backfill_shareholding_all failed: %s", e)
+
+    asyncio.create_task(_safe_shareholding())
     scheduler = create_scheduler()
     scheduler.start()
     yield

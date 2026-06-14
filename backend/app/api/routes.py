@@ -780,7 +780,10 @@ async def get_us_stocks(db: AsyncSession = Depends(get_db)):
     loop = asyncio.get_event_loop()
     with ThreadPoolExecutor(max_workers=6) as ex:
         tasks = [loop.run_in_executor(ex, fetch_one, sym, name) for sym, name in watchlist]
-        results = await asyncio.gather(*tasks)
+        try:
+            results = await asyncio.wait_for(asyncio.gather(*tasks), timeout=30.0)
+        except asyncio.TimeoutError:
+            results = []
 
     return [r for r in results if r is not None]
 
@@ -1420,6 +1423,7 @@ async def get_pool(db: AsyncSession = Depends(get_db)):
 @router.post("/api/pool")
 async def add_to_pool(body: PoolAddBody, db: AsyncSession = Depends(get_db)):
     """加入股票到池"""
+    import asyncio
     exists = (await db.execute(
         select(StockPool).where(StockPool.code == body.code)
     )).scalar_one_or_none()
@@ -1433,6 +1437,8 @@ async def add_to_pool(body: PoolAddBody, db: AsyncSession = Depends(get_db)):
         name = sl.name if sl else body.code
     db.add(StockPool(code=body.code, name=name))
     await db.commit()
+    from app.services.scheduler import backfill_financials_for_codes
+    asyncio.create_task(backfill_financials_for_codes([body.code]))
     return {"ok": True, "code": body.code, "name": name}
 
 
@@ -1563,3 +1569,18 @@ async def trigger_eps(force: bool = True):
     from app.services.scheduler import job6_quarterly_eps
     asyncio.create_task(job6_quarterly_eps(force=force))
     return {"status": "triggered"}
+
+
+@router.post("/api/admin/backfill_pool_financials")
+async def trigger_backfill_pool_financials(
+    start_date: str = "2023-01-01",
+    db: AsyncSession = Depends(get_db),
+):
+    """補抓所有 pool 股票的月營收 + 季報EPS（FinMind，背景執行）"""
+    import asyncio
+    from app.services.scheduler import backfill_financials_for_codes
+    codes = [r.code for r in (await db.execute(select(StockPool))).scalars().all()]
+    if not codes:
+        return {"status": "skipped", "reason": "pool is empty"}
+    asyncio.create_task(backfill_financials_for_codes(codes, start_date))
+    return {"status": "triggered", "codes": len(codes), "start_date": start_date}

@@ -28,7 +28,9 @@ services:
       DATABASE_URL: postgresql+asyncpg://stock:secret@db:5432/stock_force
       FINMIND_TOKEN: ""
       SKIP_STARTUP_SYNC: "1"
-      LINE_BOT_URL: "http://172.17.0.1:8001"
+      LINE_BOT_URL: "http://host.docker.internal:8001"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./config:/app/config:ro
 
@@ -37,21 +39,10 @@ services:
     restart: unless-stopped
     ports:
       - "6174:80"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       - backend
-      - fubon-dashboard
-
-  fubon-dashboard:
-    build: ./services/fubon-dashboard
-    restart: unless-stopped
-    environment:
-      FUBON_DATA_DIR: /fubon-data
-      FUBON_LOG_DIR: /fubon-logs
-      FUBON_CONFIG: /fubon-config/config.yaml
-    volumes:
-      - /home/tommy0322/fubon/data:/fubon-data
-      - /home/tommy0322/fubon/logs:/fubon-logs:ro
-      - /home/tommy0322/fubon/config.yaml:/fubon-config/config.yaml:ro
 
 volumes:
   pgdata:

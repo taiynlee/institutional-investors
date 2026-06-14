@@ -300,12 +300,14 @@ institutional-investors/
 │   ├── package.json
 │   └── vite.config.ts
 ├── services/
-│   └── fubon-dashboard/      # 台股當沖 Dashboard 服務（Fubon 引擎的 API 代理）
-│       ├── Dockerfile
-│       ├── requirements.txt  # fastapi, uvicorn, pyyaml
-│       ├── main.py           # uvicorn 進入點
-│       ├── monitor/dashboard/app.py  # FastAPI endpoints（修改版：SQLite fallback）
-│       └── data/storage/daily_store.py   # 盤前資料 SQLite 存取
+│   └── fubon-dashboard/      # 台股當沖自動交易（WSL 直接執行，非 Docker）
+│       ├── run.py            # 一鍵啟動（python run.py）
+│       ├── start.sh          # bash 替代啟動（bash start.sh）
+│       ├── main.py           # FastAPI + WebSocket app（含 DailyScheduler）
+│       ├── engine/           # 交易引擎（ORB 策略、位置管理、觸價單、排程）
+│       ├── monitor/dashboard/app.py  # REST + /ws/stream WebSocket 即時推送
+│       ├── requirements.txt
+│       └── .env              # LINE token（不進 git）
 ├── scripts/
 │   ├── backup-db.sh          # PostgreSQL pg_dump 備份腳本（保留最近 7 份）
 │   ├── db-backup.service     # systemd service unit（手動安裝用）
@@ -483,19 +485,9 @@ services:
     build: ./frontend
     ports:
       - "6174:80"
-    depends_on: [backend, fubon-dashboard]
-
-  fubon-dashboard:
-    build: ./services/fubon-dashboard
-    restart: unless-stopped
-    environment:
-      FUBON_DATA_DIR: /fubon-data
-      FUBON_LOG_DIR: /fubon-logs
-      FUBON_CONFIG: /fubon-config/config.yaml
-    volumes:
-      - /home/tommy0322/fubon/data:/fubon-data           # ticks.db + daily.db (rw for WAL)
-      - /home/tommy0322/fubon/logs:/fubon-logs:ro        # 今日 log 檔
-      - /home/tommy0322/fubon/config.yaml:/fubon-config/config.yaml:ro  # 交易設定（唯讀）
+    depends_on: [backend]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # nginx proxy_pass 指向 WSL host
 
 volumes:
   pgdata:
@@ -715,22 +707,32 @@ LINE Bot 連結透過 ngrok tunnel 對外，開機自動重建 webhook URL。
 
 ### 架構說明
 
-原始 Fubon 交易引擎（`/home/tommy0322/fubon/`）以 systemd service 形式常駐，完全獨立不受影響。`services/fubon-dashboard/` 是最小化的 Dashboard API 服務（複製版），透過 Docker volume 掛載讀取 SQLite 資料。
+`services/fubon-dashboard/` 是完整交易引擎，**直接在 WSL 執行**（非 Docker）。一個指令啟動所有元件：
+富邦 SDK → tick streaming → ORB 策略評估 → 觸價單 → WebSocket 推送 → 前端即時顯示。
 
 ```
-[原始 Fubon systemd - 完全不動]
-  fubon-trading.service → python -m main
-    └─ 寫入 data/ticks.db（交易記錄、即時報價）
-    └─ 寫入 data/daily.db（股票池、盤前資料）
-    └─ 寫入 logs/dry_run_YYYY-MM-DD.log
+WSL 直接執行（非 Docker）
+  cd services/fubon-dashboard && python run.py
+    ├─ DailyScheduler：平日 08:30 自動登入富邦 SDK，09:00 前 WebSocket 就緒
+    ├─ 交易引擎（ORB strategy）：每 10 秒評估突破信號，自動下觸價單
+    ├─ FastAPI :8090（REST + /ws/stream）
+    │    └─ /ws/stream 每秒推送引擎狀態給前端
+    └─ 13:36 自動停止（收盤後強制平倉確認）
 
-[institutional-investors Docker]
-  fubon-dashboard:8090 （內部）
-    └─ 掛載 /home/tommy0322/fubon/data → /fubon-data
-    └─ 掛載 /home/tommy0322/fubon/logs → /fubon-logs (ro)
-    └─ 掛載 /home/tommy0322/fubon/config.yaml (ro)
+Docker Compose（frontend nginx）
+  nginx → /fubon-api/ws/* → host.docker.internal:8090/ws/*  （WebSocket，長連線）
+  nginx → /fubon-api/*    → host.docker.internal:8090/*      （REST fallback）
+```
 
-  nginx → /fubon-api/* → fubon-dashboard:8090/*
+**啟動流程：**
+```bash
+# 1. 先啟動 Docker stack（DB + 後端 + 前端）
+docker compose up -d
+
+# 2. WSL 另開終端，啟動交易引擎
+cd /home/tommy0322/institutional-investors/services/fubon-dashboard
+python run.py
+# → 前端自動透過 WebSocket 接收即時資料，數字實時跳動
 ```
 
 ### 前端 Tab：台股當沖
@@ -739,17 +741,18 @@ LINE Bot 連結透過 ngrok tunnel 對外，開機自動重建 webhook URL。
 
 | 子頁 | 資料來源 | 說明 |
 |-----|---------|------|
-| 今日交易 | SSE `/fubon-api/stream` + `/fubon-api/positions` | 即時持倉 + 盤中損益 |
-| 交易紀錄 | `/fubon-api/trades` | 今日成交記錄（from ticks.db） |
+| 今日交易 | WebSocket `/fubon-api/ws/stream` | 即時持倉 + 盤中損益（WS 串流，每秒更新） |
+| 交易紀錄 | `/fubon-api/trades` | 今日成交記錄（SQLite） |
 | 盤前狀況 | `/fubon-api/pre-session/logs` | 盤前跑批紀錄 |
 | 交易設定 | `/fubon-api/trading-params` | 資金限額、持倉數、dry run 開關 |
 | 系統設定 | `/fubon-api/config` | 讀取 config.yaml（密碼遮蔽） |
-| 系統健診 | `/fubon-api/health` + `/fubon-api/logs/today` | API 狀態 + 今日 log |
+| 系統健診 | `/fubon-api/health-check/results` + `/fubon-api/logs/today` | 引擎狀態、config、LINE 設定、tick 資料流 |
 
 ### 安全注意
 
-- `config.yaml`（含帳密）已加入 `.gitignore`，透過 volume mount 注入，不進 git
-- `*.pfx` 憑證已加入 `.gitignore`
+- `config.yaml`（含富邦帳密）已加入 `.gitignore`，放 `/home/tommy0322/fubon-config/`，不進 git
+- `.env`（LINE token）已加入 `.gitignore`
+- `vendor/`（富邦 SDK wheel binary）已加入 `.gitignore`
 - `/fubon-api/` 只能從本機 6174 port 存取，不對外暴露
 
 ---
