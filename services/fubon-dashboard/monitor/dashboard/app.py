@@ -7,6 +7,13 @@ import sqlite3
 import threading
 from datetime import date, datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
+
+_TZ_TW = ZoneInfo("Asia/Taipei")
+
+
+def _now_tw() -> datetime:
+    return datetime.now(tz=_TZ_TW)
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -25,7 +32,7 @@ class TradingParamsBody(BaseModel):
 
 
 def _today() -> str:
-    return date.today().isoformat()
+    return _now_tw().date().isoformat()
 
 
 def _sanitize(obj):
@@ -185,13 +192,13 @@ def create_app(
             _ws_clients.discard(ws)
 
     async def _daily_cleanup_loop():
-        """每天 20:00 執行一次清理，保留最近 30 天資料。"""
+        """每天 20:00 台灣時間執行一次清理，保留最近 30 天資料。"""
         while True:
-            now = datetime.now()
+            now = _now_tw()
             next_run = now.replace(hour=20, minute=0, second=0, microsecond=0)
             if next_run <= now:
                 next_run += timedelta(days=1)
-            await asyncio.sleep((next_run - datetime.now()).total_seconds())
+            await asyncio.sleep((next_run - _now_tw()).total_seconds())
             if Path(_ticks_db).exists():
                 _cleanup_ticks_db(_ticks_db)
 
@@ -1550,8 +1557,8 @@ def create_app(
         out: dict = {}
         today = _today()
         today_pct = f"{today}%"
-        now = datetime.now()
-        this_min = now.replace(second=0, microsecond=0)
+        now = _now_tw()
+        this_min = now.replace(second=0, microsecond=0, tzinfo=None)
         this_min_str  = this_min.strftime("%Y-%m-%d %H:%M:%S")
         prev_min_str  = (this_min - timedelta(minutes=1)).strftime("%Y-%m-%d %H:%M:%S")
         prev2_min_str = (this_min - timedelta(minutes=2)).strftime("%Y-%m-%d %H:%M:%S")

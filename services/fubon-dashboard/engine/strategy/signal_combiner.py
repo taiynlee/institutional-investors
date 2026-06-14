@@ -41,6 +41,7 @@ class SignalCombiner:
         chips_score: int,
         change_pct: float,
         futures_signal=None,
+        bid_ratio: float = 0.0,   # 委買 / (委買+委賣)，0 = 無資料
     ) -> SignalResult:
         def no(reason):
             return SignalResult(symbol=symbol, should_enter=False, change_pct=change_pct, reason=reason)
@@ -65,7 +66,11 @@ class SignalCombiner:
             if not ok:
                 return no(f"futures_{reason}")
 
-        if not orb_signal:
+        if orb_signal:
+            # ORB 突破：仍要求委買比 ≥ 65%（有資料才檢查，無資料放行）
+            if bid_ratio > 0 and bid_ratio < 0.65:
+                return no("bid_ratio_low")
+        else:
             bullish_boost = futures_signal is not None and futures_signal.is_bullish_confirmation()
             min_vp = max(1, self.min_volume_price_score - (1 if bullish_boost else 0))
             min_tc = max(1, self.min_technical_score - (1 if bullish_boost else 0))

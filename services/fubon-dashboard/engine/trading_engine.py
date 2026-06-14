@@ -411,6 +411,7 @@ class TradingEngine:
                     logger.debug("期貨 symbol %s 失敗: %s", fsym, e)
 
         # ── 交易模組 ─────────────────────────────────────────────────────────
+        # broker 永遠 dry_run=True 作安全護欄，真實下單需明確修改此行並充分測試
         broker = FubonBroker(dry_run=True)
         broker.initialize(sdk, _account)
         bm = BudgetManager(total_capital, risk_per_trade_pct, max_position_capital)
@@ -430,7 +431,8 @@ class TradingEngine:
         )
         vp = VolumePriceStrategy()
         tech = TechnicalStrategy()
-        notifier = LineNotifier(dry_run=True)
+        # dry_run 模式仍發 LINE 通知（讓使用者監控訊號是否正確觸發）
+        notifier = LineNotifier(dry_run=False)
         paper = PaperTracker(
             take_profit_pct=take_profit_pct,
             time_stop_hour=time_stop_hour,

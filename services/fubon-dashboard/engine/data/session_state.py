@@ -73,6 +73,20 @@ class SymbolSession:
             return 10.0
         return (self.limitup_price - self.curr_price) / self.curr_price * 100
 
+    @property
+    def bid_ratio(self) -> float:
+        """委買 / (委買+委賣)，無資料回傳 0"""
+        bid_total = sum(
+            b.get("size", 0) if isinstance(b, dict) else (b[1] if len(b) > 1 else 1)
+            for b in self.last_bids
+        )
+        ask_total = sum(
+            a.get("size", 0) if isinstance(a, dict) else (a[1] if len(a) > 1 else 1)
+            for a in self.last_asks
+        )
+        total = bid_total + ask_total
+        return bid_total / total if total > 0 else 0.0
+
     def volume_price_score(
         self,
         vp: VolumePriceStrategy,
@@ -172,6 +186,7 @@ class SymbolSession:
             chips_score=0,
             change_pct=self.change_pct,
             futures_signal=futures_signal,
+            bid_ratio=self.bid_ratio,
         )
 
     def evaluate(
@@ -210,4 +225,5 @@ class SymbolSession:
             chips_score=0,
             change_pct=self.change_pct,
             futures_signal=futures_signal,
+            bid_ratio=self.bid_ratio,
         )
