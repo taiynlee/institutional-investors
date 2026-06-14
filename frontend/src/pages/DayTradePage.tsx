@@ -1274,8 +1274,6 @@ function HealthTab() {
   const [running, setRunning] = useState(false)
   const [logs, setLogs] = useState<{ lines: string[]; file: string | null; date: string | null }>({ lines: [], file: null, date: null })
   const [engineState, setEngineState] = useState<any>(null)
-  const [engineBusy, setEngineBusy] = useState(false)
-
   const stream = useEngineStream()
 
   // WebSocket 推送：取代 /engine/status 5秒輪詢
@@ -1283,35 +1281,14 @@ function HealthTab() {
     if (stream && stream.type === 'state') setEngineState(stream)
   }, [stream])
 
-  const refreshEngine = () =>
-    axios.get(`${API}/engine/status`).then(r => setEngineState(r.data)).catch(() => {})
-
   const refreshLogs = () =>
     axios.get(`${API}/logs/latest?lines=100`).then(r => setLogs({ lines: r.data.lines, file: r.data.file, date: r.data.date })).catch(() => {})
 
   useEffect(() => {
     axios.get(`${API}/health-check/results`).then(r => { if (r.data?.results?.length) setResult(r.data) }).catch(() => {})
     refreshLogs()
-    refreshEngine()  // 首次載入用 REST，後續由 WS 推送
+    axios.get(`${API}/engine/status`).then(r => setEngineState(r.data)).catch(() => {})
   }, [])
-
-  const startEngine = () => {
-    if (!window.confirm('確定啟動交易引擎？將開始接收即時報價並執行 DRY RUN 模擬。')) return
-    setEngineBusy(true)
-    axios.post(`${API}/engine/start`)
-      .then(() => { refreshEngine(); setTimeout(refreshLogs, 2000) })
-      .catch(() => {})
-      .finally(() => setEngineBusy(false))
-  }
-
-  const stopEngine = () => {
-    if (!window.confirm('確定停止交易引擎？將停止接收報價。')) return
-    setEngineBusy(true)
-    axios.post(`${API}/engine/stop`)
-      .then(() => { refreshEngine(); setTimeout(refreshLogs, 2000) })
-      .catch(() => {})
-      .finally(() => setEngineBusy(false))
-  }
 
   const engStatus: string = engineState?.status ?? 'unknown'
   const engRunning = engStatus === 'running'
@@ -1344,45 +1321,25 @@ function HealthTab() {
 
   return (
     <div className="space-y-4">
-      {/* 引擎控制 */}
-      <div className={card}>
-        <div className={`px-4 py-2 border-b border-[#253d5c] flex items-center justify-between`}>
-          <span className="text-sm font-semibold text-[#dde6f0]">交易引擎</span>
-          <div className="flex items-center gap-3">
-            {engineState?.pnl && engRunning && (
-              <span className={`text-xs ${mono} ${(engineState.pnl.actual_pnl ?? 0) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                實際 {(engineState.pnl.actual_pnl ?? 0) >= 0 ? '+' : ''}{(engineState.pnl.actual_pnl ?? 0).toLocaleString()}
-                　理論 {(engineState.pnl.paper_pnl ?? 0) >= 0 ? '+' : ''}{(engineState.pnl.paper_pnl ?? 0).toLocaleString()}
-              </span>
-            )}
-            <span className={`text-xs font-medium ${engColor}`}>{engLabel}</span>
-            {engRunning && engineState?.tick_count != null && (
-              <span className={`text-[11px] ${muted}`}>{engineState.tick_count.toLocaleString()} ticks</span>
-            )}
-            <button
-              onClick={engRunning || engTransient ? stopEngine : startEngine}
-              disabled={engineBusy || engTransient || engStatus === 'unavailable'}
-              className={`px-4 py-1 text-xs rounded border transition-colors disabled:opacity-40 disabled:cursor-not-allowed
-                ${engRunning || engTransient
-                  ? 'border-red-400 text-red-400 hover:bg-red-400/10'
-                  : 'border-green-400 text-green-400 hover:bg-green-400/10'}`}
-            >
-              {engineBusy ? '處理中...' : engRunning ? '停止引擎' : engTransient ? (engStatus === 'starting' ? '啟動中...' : '停止中...') : '啟動引擎'}
-            </button>
-          </div>
-        </div>
-        <div className="px-4 py-3 flex flex-wrap gap-x-6 gap-y-1 text-xs">
-          {engineState?.error && <span className="text-red-400 w-full">{engineState.error}</span>}
-          {engineState?.symbols?.length > 0 && (
-            <span className={muted}>監控：{engineState.symbols.join(', ')}</span>
-          )}
-          {engineState?.started_at && (
-            <span className={muted}>啟動時間：{new Date(engineState.started_at).toLocaleTimeString('zh-TW', { hour12: false })}</span>
-          )}
-          {engineState?.dry_run != null && (
-            <span className="text-blue-400">DRY RUN 模擬模式</span>
-          )}
-        </div>
+      {/* 引擎狀態（唯讀，DailyScheduler 自動管理） */}
+      <div className={`${card} px-4 py-3 flex flex-wrap items-center gap-x-6 gap-y-1 text-xs`}>
+        <span className={`font-semibold text-sm ${engColor}`}>引擎 {engLabel}</span>
+        {engRunning && engineState?.tick_count != null && (
+          <span className={muted}>{engineState.tick_count.toLocaleString()} ticks</span>
+        )}
+        {engineState?.pnl && engRunning && (
+          <span className={`${mono} ${(engineState.pnl.actual_pnl ?? 0) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+            實際 {(engineState.pnl.actual_pnl ?? 0) >= 0 ? '+' : ''}{(engineState.pnl.actual_pnl ?? 0).toLocaleString()}
+            　理論 {(engineState.pnl.paper_pnl ?? 0) >= 0 ? '+' : ''}{(engineState.pnl.paper_pnl ?? 0).toLocaleString()}
+          </span>
+        )}
+        {engineState?.started_at && (
+          <span className={muted}>啟動：{new Date(engineState.started_at).toLocaleTimeString('zh-TW', { hour12: false })}</span>
+        )}
+        {engineState?.dry_run != null && <span className="text-blue-400">DRY RUN</span>}
+        {engineState?.symbols?.length > 0 && <span className={muted}>監控：{engineState.symbols.join(', ')}</span>}
+        {engineState?.error && <span className="text-red-400 w-full">{engineState.error}</span>}
+        <span className={`ml-auto text-[10px] ${muted}`}>DailyScheduler 08:30 自動啟動 / 13:36 自動停止</span>
       </div>
 
       {/* 快速/完整健診 buttons */}

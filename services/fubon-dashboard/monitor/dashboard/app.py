@@ -98,13 +98,15 @@ def create_app(
         "cb_pause_minutes": 30,
     }
 
-    def _read_cb_settings():
+    def _load_trading_params_from_db():
+        """從 SQLite settings 表還原所有交易參數（重啟後不遺失）"""
         try:
             with sqlite3.connect(f"file:{_ticks_db}?mode=ro", uri=True,
                                  check_same_thread=False) as c:
                 rows = c.execute(
                     "SELECT key, value FROM settings WHERE key IN "
-                    "('cb_crash_pct','cb_window_min','cb_pause_minutes')"
+                    "('cb_crash_pct','cb_window_min','cb_pause_minutes',"
+                    "'max_position_capital','max_daily_positions','dry_run','commission_discount')"
                 ).fetchall()
             for k, v in rows:
                 if k == 'cb_crash_pct':
@@ -113,10 +115,18 @@ def create_app(
                     _trading_params['cb_window_min'] = int(v)
                 elif k == 'cb_pause_minutes':
                     _trading_params['cb_pause_minutes'] = int(v)
+                elif k == 'max_position_capital':
+                    _trading_params['max_position_capital'] = int(v)
+                elif k == 'max_daily_positions':
+                    _trading_params['max_daily_positions'] = int(v)
+                elif k == 'dry_run':
+                    _trading_params['dry_run'] = v.lower() in ('true', '1', 'yes')
+                elif k == 'commission_discount':
+                    _trading_params['commission_discount'] = float(v)
         except Exception:
             pass
 
-    _read_cb_settings()
+    _load_trading_params_from_db()
 
     # ── WebSocket push ────────────────────────────────────────────────────────
     _ws_clients: set = set()
@@ -1139,6 +1149,10 @@ def create_app(
         try:
             with sqlite3.connect(_ticks_db, check_same_thread=False) as c:
                 for k, v in [
+                    ('max_position_capital', str(body.max_position_capital)),
+                    ('max_daily_positions', str(body.max_daily_positions)),
+                    ('dry_run', str(body.dry_run)),
+                    ('commission_discount', str(body.commission_discount)),
                     ('cb_crash_pct', str(body.cb_crash_pct)),
                     ('cb_window_min', str(body.cb_window_min)),
                     ('cb_pause_minutes', str(body.cb_pause_minutes)),
@@ -1146,7 +1160,7 @@ def create_app(
                     c.execute("INSERT OR REPLACE INTO settings(key,value) VALUES(?,?)", (k, v))
         except Exception:
             pass
-        return {"ok": True, "note": "已更新；熔斷設定即時生效", **_trading_params}
+        return {"ok": True, "note": "已更新並持久化，重啟後生效", **_trading_params}
 
     # ── Debug: 模擬買賣（送真實 LINE 通知，不影響引擎狀態）──────────────────────
     _sim_positions: dict = {}  # symbol → {entry_price, lots, stop_loss}

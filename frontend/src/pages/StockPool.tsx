@@ -20,6 +20,8 @@ export function StockPoolPage() {
   const [searchResults, setSearchResults] = useState<SearchResult[]>([])
   const [searching, setSearching] = useState(false)
   const [showDropdown, setShowDropdown] = useState(false)
+  const [backfilling, setBackfilling] = useState(false)
+  const [backfillNote, setBackfillNote] = useState<string | null>(null)
   const searchRef = useRef<HTMLDivElement>(null)
 
   const loadPool = () => {
@@ -95,6 +97,20 @@ export function StockPoolPage() {
     }
   }
 
+  const backfillAll = async () => {
+    if (!confirm(`補抓全部 ${pool.length} 支股票的月營收 + 季報 EPS？背景執行，速率限制約每股 13 秒，完成需數分鐘。`)) return
+    setBackfilling(true)
+    setBackfillNote(null)
+    try {
+      const r = await axios.post('/api/admin/backfill-financials')
+      setBackfillNote(`✓ 已觸發補抓 ${r.data.codes} 支股票（背景執行中）`)
+    } catch (e: any) {
+      setBackfillNote(`✕ ${e?.response?.data?.detail ?? '觸發失敗'}`)
+    } finally {
+      setBackfilling(false)
+    }
+  }
+
   const poolSet = new Set(pool.map(s => s.code))
 
   return (
@@ -105,7 +121,15 @@ export function StockPoolPage() {
             <h1 className="text-2xl font-black text-white">股票池管理</h1>
             <p className="text-gray-400 text-sm mt-1">共 {pool.length} 支追蹤股票</p>
           </div>
-          <div className="flex gap-2">
+          <div className="flex gap-2 items-center flex-wrap justify-end">
+            {backfillNote && <span className={`text-xs ${backfillNote.startsWith('✓') ? 'text-green-400' : 'text-red-400'}`}>{backfillNote}</span>}
+            <button
+              onClick={backfillAll}
+              disabled={backfilling || pool.length === 0}
+              className="px-3 py-1.5 text-sm bg-blue-800 hover:bg-blue-700 text-white rounded disabled:opacity-50"
+            >
+              {backfilling ? '補抓中...' : '補抓財務資料'}
+            </button>
             {selected.size > 0 && (
               <button
                 onClick={removeSelected}
