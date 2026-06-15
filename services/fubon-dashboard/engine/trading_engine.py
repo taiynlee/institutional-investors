@@ -66,6 +66,13 @@ class TradingEngine:
         self._lock = threading.Lock()
         self.session_date: Optional[str] = None  # 當前 session 的交易日期
 
+        # 預設路徑從 env var 讀取（run.py 已 set，scheduler 直接呼 start() 時使用）
+        _data = os.environ.get("FUBON_DATA_DIR", "/home/tommy0322/fubon-data")
+        self._default_config = os.environ.get("FUBON_CONFIG", "/home/tommy0322/fubon-config/config.yaml")
+        self._default_ticks_db = os.path.join(_data, "ticks.db")
+        self._default_daily_db = os.path.join(_data, "daily.db")
+        self._default_log_dir = os.environ.get("FUBON_LOG_DIR", "/home/tommy0322/fubon-logs")
+
     @property
     def status(self) -> str:
         return self._state["status"]
@@ -108,7 +115,17 @@ class TradingEngine:
             "paper_unrealized": round(paper_unrealized),
         }
 
-    def start(self, config_path: str, ticks_db: str, daily_db: str, log_dir: str) -> bool:
+    def start(
+        self,
+        config_path: Optional[str] = None,
+        ticks_db: Optional[str] = None,
+        daily_db: Optional[str] = None,
+        log_dir: Optional[str] = None,
+    ) -> bool:
+        config_path = config_path or self._default_config
+        ticks_db    = ticks_db    or self._default_ticks_db
+        daily_db    = daily_db    or self._default_daily_db
+        log_dir     = log_dir     or self._default_log_dir
         with self._lock:
             if self._state["status"] in ("running", "starting"):
                 return False
