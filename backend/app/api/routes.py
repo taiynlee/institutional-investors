@@ -1730,26 +1730,37 @@ async def get_daytrade_list(
     db: AsyncSession = Depends(get_db),
     date_str: Optional[str] = Query(None),
     live: bool = Query(False),
+    source: str = Query("candidates"),
 ):
     from sqlalchemy import text as _text
-    if date_str:
-        target_date = date.fromisoformat(date_str)
+    if source == "pool":
+        pool_rows = (await db.execute(select(StockPool.code, StockPool.name))).all()
+        codes = [r.code for r in pool_rows]
+        target_date = date.today()
+        if not codes:
+            return {"date": target_date.isoformat(), "count": 0, "stocks": []}
     else:
-        target_date = (await db.execute(
-            select(func.max(DaytradeCandidate.trade_date))
-        )).scalar_one_or_none()
-        if not target_date:
-            return {"date": None, "count": 0, "stocks": []}
+        if date_str:
+            target_date = date.fromisoformat(date_str)
+        else:
+            target_date = (await db.execute(
+                select(func.max(DaytradeCandidate.trade_date))
+            )).scalar_one_or_none()
+            if not target_date:
+                return {"date": None, "count": 0, "stocks": []}
 
-    codes = (await db.execute(
-        select(DaytradeCandidate.code).where(DaytradeCandidate.trade_date == target_date)
-    )).scalars().all()
-    if not codes:
-        return {"date": target_date.isoformat(), "count": 0, "stocks": []}
+        codes = (await db.execute(
+            select(DaytradeCandidate.code).where(DaytradeCandidate.trade_date == target_date)
+        )).scalars().all()
+        if not codes:
+            return {"date": target_date.isoformat(), "count": 0, "stocks": []}
 
-    pool_map = {r.code: r.name for r in (await db.execute(
-        select(StockPool.code, StockPool.name).where(StockPool.code.in_(codes))
-    )).all()}
+    if source == "pool":
+        pool_map = {r.code: r.name for r in pool_rows}
+    else:
+        pool_map = {r.code: r.name for r in (await db.execute(
+            select(StockPool.code, StockPool.name).where(StockPool.code.in_(codes))
+        )).all()}
 
     # Batch fetch latest prices (last 20 rows each)
     prices_raw = (await db.execute(_text("""

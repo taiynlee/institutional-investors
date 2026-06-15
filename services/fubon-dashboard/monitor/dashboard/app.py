@@ -367,7 +367,9 @@ def create_app(
 
     @app.post("/daytrade-list/sync")
     def sync_daytrade_list(date_str: str = ""):
-        """21:05 由 backend job8 觸發：PG pool × 選股篩選結果 → PG daytrade_candidate"""
+        """21:05 由 backend job8 觸發：
+        pool live-filter ∪ 策略A ∪ 策略B ∪ watchlist-a(active) − 退場止損 → PG daytrade_candidate
+        """
         from datetime import date as _date, timedelta
         import httpx as _httpx
 
@@ -377,36 +379,68 @@ def create_app(
             nxt += timedelta(days=1)
         target_date = nxt.isoformat()
 
-        # 取 PG pool
-        pool_ids: list[str] = []
+        selected: set[str] = set()
+
+        # 1. Pool live-filter（above_ma20 + vol_ok + chip_count≥2）
+        live_count = 0
         try:
-            pr = _httpx.get(f"{_BACKEND}/api/pool", timeout=10)
-            if pr.status_code == 200:
-                pool_ids = [p["code"] for p in pr.json()]
+            r = _httpx.get(f"{_BACKEND}/api/daytrade/list",
+                           params={"live": "true", "source": "pool"}, timeout=30)
+            if r.status_code == 200:
+                stocks = r.json().get("stocks", [])
+                live_count = len(stocks)
+                selected.update(s["stock_id"] for s in stocks)
         except Exception:
             pass
 
-        # 取篩選結果 score-a + score-b
-        screened: set[str] = set()
+        # 2. 策略A + 策略B
+        score_count = 0
         try:
             for ep in (f"{_BACKEND}/api/score-a", f"{_BACKEND}/api/score-b"):
                 r = _httpx.get(ep, timeout=10)
                 if r.status_code == 200:
-                    screened.update(row["code"] for row in r.json() if "code" in row)
+                    codes = [row["code"] for row in r.json() if "code" in row]
+                    score_count += len(codes)
+                    selected.update(codes)
         except Exception:
             pass
 
-        selected = [s for s in pool_ids if s in screened] if screened else pool_ids
+        # 3. WatchlistA（tracking / triggered / entered）
+        watch_count = 0
+        try:
+            r = _httpx.get(f"{_BACKEND}/api/watchlist-a", timeout=10)
+            if r.status_code == 200:
+                active = {"tracking", "triggered", "entered"}
+                codes = [row["code"] for row in r.json() if row.get("status") in active]
+                watch_count = len(codes)
+                selected.update(codes)
+        except Exception:
+            pass
 
-        # 寫入 PG（source of truth）
+        # 4. 扣除退場止損名單
+        exit_count = 0
+        try:
+            r = _httpx.get(f"{_BACKEND}/api/exit-alerts", timeout=10)
+            if r.status_code == 200:
+                exit_codes = {row["code"] for row in r.json()}
+                exit_count = len(exit_codes & selected)
+                selected -= exit_codes
+        except Exception:
+            pass
+
+        # 寫入 PG
+        codes_list = list(selected)
         try:
             _httpx.post(f"{_BACKEND}/api/daytrade/sync",
-                        json={"date": target_date, "codes": selected}, timeout=10)
+                        json={"date": target_date, "codes": codes_list}, timeout=10)
         except Exception:
             pass
 
-        return {"ok": True, "date": target_date, "count": len(selected),
-                "pool": len(pool_ids), "screened": len(screened)}
+        return {
+            "ok": True, "date": target_date, "count": len(codes_list),
+            "live_filter": live_count, "score_ab": score_count,
+            "watchlist_a": watch_count, "excluded_exit": exit_count,
+        }
 
     @app.post("/sync-pool")
     def sync_pool_from_pg():
