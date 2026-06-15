@@ -786,6 +786,9 @@ const PARAM_DEFS: PD[] = [
   { id:'buy_retry_ticks',            group:'委託設定', label:'追價 tick 數',  desc:'追價委託時在最新成交價上加幾個 tick，避免又追不到（dry run 無效）', unit:'tick', source:'cfg', cfgPath:'order.buy_retry_ticks', type:'number', step:1, min:0, canDisable:false },
   { id:'commission_discount',        group:'委託設定', label:'手續費折扣',    desc:'券商手續費折讓倍率：0.28 = 付28%，72% 月底退還', unit:'折', source:'rt', rtKey:'commission_discount', type:'number', step:0.01, min:0.01, max:1, canDisable:false },
   { id:'futures_poll_interval_secs', group:'委託設定', label:'期貨輪詢間隔',  desc:'主動查詢個股期貨價格的間隔秒數（REST API，非 WebSocket）', unit:'秒', source:'cfg', cfgPath:'order.futures_poll_interval_secs', type:'number', step:5, min:5, canDisable:false },
+  // 當沖篩選條件
+  { id:'daytrade_price_min', group:'當沖篩選', label:'股價下限', desc:'當沖候選昨收低於此值排除（太便宜流動性差、跳動幅度小）', unit:'元', source:'rt', rtKey:'daytrade_price_min', type:'number', step:50, min:0, canDisable:false },
+  { id:'daytrade_price_max', group:'當沖篩選', label:'股價上限', desc:'當沖候選昨收高於此值排除（太貴每張成本高，不利當沖資金配置）', unit:'元', source:'rt', rtKey:'daytrade_price_max', type:'number', step:50, min:0, canDisable:false },
 ]
 
 const _PARAM_GROUPS = Array.from(new Set(PARAM_DEFS.map(p => p.group)))
@@ -843,6 +846,8 @@ function ParamsTab() {
         cb_crash_pct:         Number(vals.cb_crash_pct)         || 1.5,
         cb_window_min:        Number(vals.cb_window_min)        || 5,
         cb_pause_minutes:     Number(vals.cb_pause_minutes)     || 30,
+        daytrade_price_min:   Number(vals.daytrade_price_min)   ?? 200,
+        daytrade_price_max:   Number(vals.daytrade_price_max)   ?? 990,
       })
       const cfgUpdate: Record<string, any> = {}
       for (const p of PARAM_DEFS) {

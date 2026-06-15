@@ -29,6 +29,8 @@ class TradingParamsBody(BaseModel):
     cb_crash_pct: float = 1.5   # N分鐘跌幅觸發熔斷（%）
     cb_window_min: int = 5
     cb_pause_minutes: int = 30  # 熔斷後暫停進場分鐘數
+    daytrade_price_min: float = 200.0  # 當沖篩選股價下限
+    daytrade_price_max: float = 990.0  # 當沖篩選股價上限
 
 
 def _today() -> str:
@@ -103,6 +105,8 @@ def create_app(
         "cb_crash_pct": 1.5,
         "cb_window_min": 5,
         "cb_pause_minutes": 30,
+        "daytrade_price_min": 200.0,
+        "daytrade_price_max": 990.0,
     }
 
     def _load_trading_params_from_db():
@@ -113,7 +117,8 @@ def create_app(
                 rows = c.execute(
                     "SELECT key, value FROM settings WHERE key IN "
                     "('cb_crash_pct','cb_window_min','cb_pause_minutes',"
-                    "'max_position_capital','max_daily_positions','dry_run','commission_discount')"
+                    "'max_position_capital','max_daily_positions','dry_run','commission_discount',"
+                    "'daytrade_price_min','daytrade_price_max')"
                 ).fetchall()
             for k, v in rows:
                 if k == 'cb_crash_pct':
@@ -130,6 +135,10 @@ def create_app(
                     _trading_params['dry_run'] = v.lower() in ('true', '1', 'yes')
                 elif k == 'commission_discount':
                     _trading_params['commission_discount'] = float(v)
+                elif k == 'daytrade_price_min':
+                    _trading_params['daytrade_price_min'] = float(v)
+                elif k == 'daytrade_price_max':
+                    _trading_params['daytrade_price_max'] = float(v)
         except Exception:
             pass
 
@@ -379,6 +388,8 @@ def create_app(
             nxt += timedelta(days=1)
         target_date = nxt.isoformat()
 
+        price_min = _trading_params.get("daytrade_price_min", 200.0)
+        price_max = _trading_params.get("daytrade_price_max", 990.0)
         selected: set[str] = set()
 
         # 1. Pool live-filter（above_ma20 + vol_ok + chip_count≥2）
@@ -428,6 +439,23 @@ def create_app(
         except Exception:
             pass
 
+        # 5. 股價範圍過濾（批次取昨收，過濾 < price_min 或 > price_max）
+        price_excluded = 0
+        if selected:
+            try:
+                r = _httpx.get(f"{_BACKEND}/api/stocks/latest-prices",
+                               params={"codes": ",".join(selected)}, timeout=15)
+                if r.status_code == 200:
+                    prices = r.json()
+                    before = len(selected)
+                    selected = {
+                        c for c in selected
+                        if price_min <= prices.get(c, price_min) <= price_max
+                    }
+                    price_excluded = before - len(selected)
+            except Exception:
+                pass
+
         # 寫入 PG
         codes_list = list(selected)
         try:
@@ -440,6 +468,8 @@ def create_app(
             "ok": True, "date": target_date, "count": len(codes_list),
             "live_filter": live_count, "score_ab": score_count,
             "watchlist_a": watch_count, "excluded_exit": exit_count,
+            "excluded_price": price_excluded,
+            "price_range": [price_min, price_max],
         }
 
     @app.post("/sync-pool")
@@ -1066,6 +1096,8 @@ def create_app(
         _trading_params["cb_crash_pct"] = max(0.1, body.cb_crash_pct)
         _trading_params["cb_window_min"] = max(1, body.cb_window_min)
         _trading_params["cb_pause_minutes"] = max(5, body.cb_pause_minutes)
+        _trading_params["daytrade_price_min"] = max(0.0, body.daytrade_price_min)
+        _trading_params["daytrade_price_max"] = max(0.0, body.daytrade_price_max)
         try:
             with sqlite3.connect(_ticks_db, check_same_thread=False) as c:
                 for k, v in [
@@ -1076,6 +1108,8 @@ def create_app(
                     ('cb_crash_pct', str(body.cb_crash_pct)),
                     ('cb_window_min', str(body.cb_window_min)),
                     ('cb_pause_minutes', str(body.cb_pause_minutes)),
+                    ('daytrade_price_min', str(body.daytrade_price_min)),
+                    ('daytrade_price_max', str(body.daytrade_price_max)),
                 ]:
                     c.execute("INSERT OR REPLACE INTO settings(key,value) VALUES(?,?)", (k, v))
         except Exception:

@@ -1487,6 +1487,22 @@ async def sync_fubon_pool():
         raise HTTPException(status_code=502, detail=str(e))
 
 
+@router.get("/api/stocks/latest-prices")
+async def get_latest_prices(codes: str = Query(...), db: AsyncSession = Depends(get_db)):
+    """批次取最新收盤價，codes=2330,2317,..."""
+    from sqlalchemy import text as _text
+    code_list = [c.strip() for c in codes.split(",") if c.strip()]
+    if not code_list:
+        return {}
+    rows = (await db.execute(_text("""
+        SELECT DISTINCT ON (code) code, close
+        FROM daily_price
+        WHERE code = ANY(:codes)
+        ORDER BY code, trade_date DESC
+    """), {"codes": code_list})).mappings().all()
+    return {r["code"]: float(r["close"]) for r in rows}
+
+
 @router.get("/api/stocks/search")
 async def search_stocks(q: str = Query(""), db: AsyncSession = Depends(get_db)):
     """搜尋股票（代碼或名稱）"""
@@ -1800,22 +1816,26 @@ async def get_daytrade_list(
         margin = margin_map.get(code)
 
         prev_close = prices[0]["close"] if prices else None
-        volume = prices[0]["volume"] if prices else None
+        # daily_price.volume 單位為股(shares)，除以 1000 換算成張
+        volume_shares = prices[0]["volume"] if prices else None
+        volume = round(volume_shares / 1000) if volume_shares else None
         prev_prev_close = prices[1]["close"] if len(prices) > 1 else prev_close
-        avg_vol5 = round(sum(p["volume"] for p in prices[:5]) / min(5, len(prices))) if prices else 0
+        avg_vol5_shares = round(sum(p["volume"] for p in prices[:5]) / min(5, len(prices))) if prices else 0
+        avg_vol5 = round(avg_vol5_shares / 1000)  # 換算成張
         ma20 = sum(p["close"] for p in prices[:20]) / min(20, len(prices)) if prices else 0
 
         foreign_net = float(inst["foreign_net"]) if inst else 0
         trust_net = float(inst["trust_net"]) if inst else 0
         dealer_net = float(inst["dealer_net"]) if inst else 0
-        margin_balance = int(margin["margin_balance"]) if margin else 0
-        margin_change = int(margin["margin_change"]) if margin else 0
-        short_balance = int(margin["short_balance"]) if margin else 0
+        margin_balance = int(margin["margin_balance"]) if margin else 0      # 單位：張(千股)
+        margin_change = int(margin["margin_change"]) if margin else 0        # 單位：張(千股)
+        # short_balance 來自 TWT93U 欄位，實際儲存為股；除以 1000 換算成張
+        short_balance = round(int(margin["short_balance"]) / 1000) if margin else 0
 
         change = round((prev_close or 0) - (prev_prev_close or prev_close or 0), 2)
         change_pct = round(change / prev_prev_close * 100, 2) if prev_prev_close else 0
         above_ma20 = (prev_close or 0) > ma20
-        vol_ok = avg_vol5 >= 2000
+        vol_ok = avg_vol5 >= 2000  # avg_vol5 已換算成張，2000張門檻正確
         chip_count = (
             (1 if foreign_net > 0 else 0) +
             (1 if trust_net > 0 else 0) +
@@ -1829,9 +1849,9 @@ async def get_daytrade_list(
             "stock_id": code,
             "name": pool_map.get(code, code),
             "prev_close": prev_close,
-            "volume": volume,
+            "volume": volume,            # 張
             "prev_prev_close": prev_prev_close,
-            "avg_vol5": avg_vol5,
+            "avg_vol5": avg_vol5,        # 張
             "ma20": round(ma20, 4),
             "foreign_net": foreign_net,
             "trust_net": trust_net,
