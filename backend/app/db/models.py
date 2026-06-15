@@ -209,6 +209,26 @@ class UsWatchlist(Base):
     added_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class DaytradeCandidate(Base):
+    __tablename__ = "daytrade_candidate"
+    __table_args__ = (UniqueConstraint("trade_date", "code"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    trade_date: Mapped[date] = mapped_column(Date, index=True)
+    code: Mapped[str] = mapped_column(String(10), index=True)
+
+
+class DaytradePreSessionLog(Base):
+    __tablename__ = "daytrade_pre_session_log"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    run_date: Mapped[date] = mapped_column(Date, index=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="running")
+    total_stocks: Mapped[int] = mapped_column(Integer, default=0)
+    success_stocks: Mapped[int] = mapped_column(Integer, default=0)
+    error_msg: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+
+
 class FetchLog(Base):
     __tablename__ = "fetch_log"
     __table_args__ = (UniqueConstraint("job_name", "fetch_date"),)

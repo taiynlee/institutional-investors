@@ -35,13 +35,11 @@ class SignalCombiner:
         positions_count: int,
         max_positions: int,
         limit_up_pct_away: float,
-        orb_signal: bool,
         volume_price_score: int,
         technical_score: int,
         chips_score: int,
         change_pct: float,
         futures_signal=None,
-        bid_ratio: float = 0.0,   # 委買 / (委買+委賣)，0 = 無資料
     ) -> SignalResult:
         def no(reason):
             return SignalResult(symbol=symbol, should_enter=False, change_pct=change_pct, reason=reason)
@@ -55,7 +53,7 @@ class SignalCombiner:
         if not no_order_lock:
             return no("order_locked")
         if positions_count >= max_positions:
-            return no("max_positions_reached")
+            return no("max_daily_trades_reached")
         if limit_up_pct_away < self.limit_up_buffer_pct:
             return no("too_close_to_limit_up")
         if change_pct > self.max_entry_gain_pct:
@@ -66,18 +64,14 @@ class SignalCombiner:
             if not ok:
                 return no(f"futures_{reason}")
 
-        if orb_signal:
-            # ORB 突破：仍要求委買比 ≥ 65%（有資料才檢查，無資料放行）
-            if bid_ratio > 0 and bid_ratio < 0.65:
-                return no("bid_ratio_low")
-        else:
-            bullish_boost = futures_signal is not None and futures_signal.is_bullish_confirmation()
-            min_vp = max(1, self.min_volume_price_score - (1 if bullish_boost else 0))
-            min_tc = max(1, self.min_technical_score - (1 if bullish_boost else 0))
-            if volume_price_score < min_vp:
-                return no("volume_price_score_low")
-            if technical_score < min_tc:
-                return no("technical_score_low")
+        bullish_boost = futures_signal is not None and futures_signal.is_bullish_confirmation()
+        min_vp = max(1, self.min_volume_price_score - (1 if bullish_boost else 0))
+        min_tc = max(1, self.min_technical_score - (1 if bullish_boost else 0))
+
+        if volume_price_score < min_vp:
+            return no("volume_price_score_low")
+        if technical_score < min_tc:
+            return no("technical_score_low")
 
         size_ratio = futures_signal.position_size_ratio() if futures_signal is not None else 1.0
         return SignalResult(

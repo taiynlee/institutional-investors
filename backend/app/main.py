@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.routes import router
 from app.services.scheduler import (
     create_scheduler,
+    startup_backfill,
     backfill_90_days,
     backfill_shareholding_all,
     refresh_stock_list,
@@ -131,6 +132,7 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(_safe_shareholding())
     scheduler = create_scheduler()
     scheduler.start()
+    asyncio.create_task(startup_backfill())
     yield
     scheduler.shutdown()
 

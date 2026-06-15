@@ -15,8 +15,8 @@ interface HolderRow {
 
 function ChgBadge({ v, suffix = '' }: { v: number | null; suffix?: string }) {
   if (v === null) return <span className="text-gray-600">—</span>
-  if (v > 0) return <span className="text-green-400">+{v}{suffix}</span>
-  if (v < 0) return <span className="text-red-400">{v}{suffix}</span>
+  if (v > 0) return <span className="text-red-400">+{v}{suffix}</span>
+  if (v < 0) return <span className="text-green-400">{v}{suffix}</span>
   return <span className="text-gray-500">0{suffix}</span>
 }
 

@@ -103,7 +103,12 @@ async def job1_institutional_price():
                 await db.execute(stmt.on_conflict_do_nothing(index_elements=["code", "trade_date"]))
             if price_rows:
                 stmt = pg_insert(DailyPrice).values(price_rows)
-                await db.execute(stmt.on_conflict_do_nothing(index_elements=["code", "trade_date"]))
+                await db.execute(stmt.on_conflict_do_update(
+                    index_elements=["code", "trade_date"],
+                    set_={"open": stmt.excluded.open, "high": stmt.excluded.high,
+                          "low": stmt.excluded.low, "close": stmt.excluded.close,
+                          "volume": stmt.excluded.volume},
+                ))
             await db.commit()
         await _log_fetch("job1", today, "success", len(rows) + len(price_rows))
     except Exception as e:
@@ -948,20 +953,110 @@ async def job7_ic_chain():
         logger.error(f"job7 ic_chain failed: {e}")
 
 
+async def job8_daytrade_screener():
+    """21:05（週一～五）— 觸發富邦當沖篩選，更新隔日 daytrade_list"""
+    import httpx
+    today = date.today()
+    if today.weekday() in (5, 6):
+        return
+    if await _already_fetched("job8", today):
+        return
+    try:
+        async with httpx.AsyncClient() as client:
+            r = await client.post(
+                "http://host.docker.internal:8090/daytrade-list/sync",
+                timeout=30,
+            )
+            r.raise_for_status()
+            data = r.json()
+        await _log_fetch("job8", today, "success", data.get("count", 0))
+        logger.info("job8 daytrade screener: %d stocks → %s", data.get("count", 0), data.get("date"))
+    except Exception as e:
+        await _log_fetch("job8", today, "failed")
+        logger.error("job8 failed: %s", e)
+
+
+async def startup_backfill():
+    """啟動時補跑今天應跑但未成功的 daily jobs。"""
+    from zoneinfo import ZoneInfo
+    from datetime import datetime as _dt
+    now = _dt.now(tz=ZoneInfo("Asia/Taipei"))
+    today = now.date()
+    wd = today.weekday()  # 0=Mon 6=Sun
+    h, m = now.hour, now.minute
+
+    def due(sched_h, sched_m):
+        return h > sched_h or (h == sched_h and m >= sched_m)
+
+    tasks = []
+    if wd < 5 and due(18, 0) and not await _already_fetched("job1", today):
+        tasks.append(("job1", job1_institutional_price()))
+    if wd < 5 and due(20, 45) and not await _already_fetched("job2", today):
+        tasks.append(("job2", job2_margin()))
+    job4_due = (wd < 5 and due(21, 0)) or (wd == 6 and due(22, 30))
+    if job4_due and not await _already_fetched("job4", today):
+        tasks.append(("job4", job4_screener()))
+    if wd < 5 and due(21, 5) and not await _already_fetched("job8", today):
+        tasks.append(("job8", job8_daytrade_screener()))
+
+    if tasks:
+        names = [t[0] for t in tasks]
+        logger.info("startup_backfill: 補跑 %s", names)
+        await asyncio.gather(*[t[1] for t in tasks], return_exceptions=True)
+    else:
+        logger.info("startup_backfill: 無需補跑")
+
+
+async def job_watchdog():
+    """每 30 分鐘檢查應跑但未成功的 jobs，自動補跑。"""
+    from zoneinfo import ZoneInfo
+    from datetime import datetime as _dt
+    now = _dt.now(tz=ZoneInfo("Asia/Taipei"))
+    today = now.date()
+    wd = today.weekday()
+    h, m = now.hour, now.minute
+
+    def due(sched_h, sched_m):
+        return h > sched_h or (h == sched_h and m >= sched_m)
+
+    if wd < 5 and due(18, 0) and h < 21:
+        if not await _already_fetched("job1", today):
+            logger.info("watchdog: 補跑 job1")
+            await job1_institutional_price()
+
+    if wd < 5 and due(20, 45) and h < 23:
+        if not await _already_fetched("job2", today):
+            logger.info("watchdog: 補跑 job2")
+            await job2_margin()
+
+    job4_due = (wd < 5 and due(21, 0)) or (wd == 6 and due(22, 30))
+    if job4_due and h < 23:
+        if not await _already_fetched("job4", today):
+            logger.info("watchdog: 補跑 job4")
+            await job4_screener()
+
+    if wd < 5 and due(21, 5) and h < 23:
+        if not await _already_fetched("job8", today):
+            logger.info("watchdog: 補跑 job8")
+            await job8_daytrade_screener()
+
+
 def create_scheduler() -> AsyncIOScheduler:
-    scheduler = AsyncIOScheduler(timezone="Asia/Taipei")
+    scheduler = AsyncIOScheduler(timezone="Asia/Taipei", misfire_grace_time=300)
     scheduler.add_job(job1_institutional_price, "cron", hour=18, minute=0)
     scheduler.add_job(job2_margin, "cron", hour=20, minute=45)
     scheduler.add_job(job3_shareholding, "cron", day_of_week="sat", hour=11, minute=30)
     scheduler.add_job(job3_shareholding, "cron", day_of_week="sun", hour=18, minute=30)
     scheduler.add_job(job4_screener, "cron", hour=21, minute=0)
     scheduler.add_job(job4_screener, "cron", day_of_week="sun", hour=22, minute=30)
+    scheduler.add_job(job8_daytrade_screener, "cron", hour=21, minute=5)
     scheduler.add_job(job5_monthly_revenue, "cron", day="10-25", hour=12, minute=0)
     scheduler.add_job(job6_quarterly_eps, "cron", month="5", day=16, hour=9, minute=0)
     scheduler.add_job(job6_quarterly_eps, "cron", month="8", day=15, hour=9, minute=0)
     scheduler.add_job(job6_quarterly_eps, "cron", month="11", day=15, hour=9, minute=0)
     scheduler.add_job(job6_quarterly_eps, "cron", month="3", day=1, hour=9, minute=0)
     scheduler.add_job(job7_ic_chain, "cron", month="1,7", day=1, hour=2, minute=0)
+    scheduler.add_job(job_watchdog, "interval", minutes=30)
     return scheduler
 
 

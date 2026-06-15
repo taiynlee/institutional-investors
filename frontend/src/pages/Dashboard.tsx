@@ -90,9 +90,13 @@ export function Dashboard({ onResearchStock }: { onResearchStock?: (code: string
   const pick = useAIPick()
   const { topA, topB, load: loadFallback } = useFallbackScores()
 
+  const screenerJob = status?.jobs?.find((j: JobStatus) => j.name === '選股篩選')
+  const todayRunEmpty = screenerJob?.status === 'success' && screenerJob?.rows === 0
+  const isStaleData = todayRunEmpty && results.length > 0
+
   useEffect(() => {
-    if (!loading && results.length === 0) loadFallback()
-  }, [loading, results.length])
+    if (!loading && (results.length === 0 || isStaleData)) loadFallback()
+  }, [loading, results.length, isStaleData])
 
   return (
     <div className="min-h-screen bg-gray-950 text-white p-6">
@@ -171,16 +175,24 @@ export function Dashboard({ onResearchStock }: { onResearchStock?: (code: string
                   <JobStatusBadge key={job.name} job={job} />
                 ))}
               </div>
-              <span className="text-xs text-gray-500 self-center shrink-0">篩出 {results.length} 檔</span>
+              <span className="text-xs text-gray-500 self-center shrink-0">
+                {isStaleData ? `今日 0 支通過 (${screenerJob?.updated_at})` : `篩出 ${results.length} 檔`}
+              </span>
             </div>
           </div>
         )}
 
         {loading ? (
           <div className="text-center text-gray-500 py-20">載入中...</div>
-        ) : results.length === 0 ? (
+        ) : results.length === 0 || isStaleData ? (
           <div className="space-y-4">
-            <p className="text-gray-500 text-sm text-center py-4">今日無符合突破條件的股票，以下列出策略A/B候補名單</p>
+            {isStaleData ? (
+              <p className="text-gray-500 text-sm text-center py-4">
+                今日篩選 0 支通過條件（{screenerJob?.updated_at}），以下為策略A/B候補名單（最後有效結果）
+              </p>
+            ) : (
+              <p className="text-gray-500 text-sm text-center py-4">今日無符合突破條件的股票，以下列出策略A/B候補名單</p>
+            )}
             <FallbackTable title="策略A 最高分" stocks={topA} scoreKey="score_a" onResearchStock={onResearchStock} />
             <FallbackTable title="策略B 最高分" stocks={topB} scoreKey="score_b" onResearchStock={onResearchStock} />
           </div>

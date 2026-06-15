@@ -10,21 +10,16 @@ class RiskManager:
         take_profit_pct: float = 5.0,
         time_stop_hour: float = 11,
         force_exit_time: time = time(13, 20),
-        vwap_exit: bool = True,
-        vwap_exit_volume_ratio: float = 0.7,
     ):
         self.om = order_manager
         self.take_profit_pct = take_profit_pct
         self.time_stop_hour = time_stop_hour
         self.force_exit_time = force_exit_time
-        self.vwap_exit = vwap_exit
-        self.vwap_exit_volume_ratio = vwap_exit_volume_ratio
 
     def on_tick(
         self,
         symbol: str,
         price: float,
-        vwap: float,
         now: datetime,
         futures_signal=None,
         current_volume: int = 0,
@@ -62,14 +57,5 @@ class RiskManager:
         if current_time >= time(_tsh, _tsm) and price < pos.entry_price:
             self.om.place_sell(symbol, reason="time_stop")
             return "time_stop"
-
-        if self.vwap_exit and price < vwap:
-            volume_ok = (
-                avg_volume <= 0
-                or current_volume >= avg_volume * self.vwap_exit_volume_ratio
-            )
-            if volume_ok:
-                self.om.place_sell(symbol, reason="vwap_exit")
-                return "vwap_exit"
 
         return None

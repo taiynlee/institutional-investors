@@ -3,14 +3,14 @@ from engine.utils.tz import now_tw
 
 
 class ORBStrategy:
-    """09:00–09:15 記錄 ORB 高低點，之後偵測突破訊號。"""
+    """09:00–09:xx 記錄 ORB 高低點，之後偵測突破訊號。結束時間由 window_minutes 決定。"""
 
-    # ORB 觀察窗口：09:00–09:15（固定台股開盤時段）
     _ORB_START = dtime(9, 0)
-    _ORB_END   = dtime(9, 15)
 
     def __init__(self, window_minutes: int = 15):
         self.window_minutes = window_minutes
+        # ORB 結束時間由 window_minutes 動態計算（預設 09:15）
+        self._ORB_END = dtime(9 + window_minutes // 60, window_minutes % 60)
         self.orb_high: float | None = None
         self.orb_low: float | None = None
         self.is_locked: bool = False

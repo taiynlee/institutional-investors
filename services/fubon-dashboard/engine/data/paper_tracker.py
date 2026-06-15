@@ -30,15 +30,11 @@ class PaperTracker:
         take_profit_pct: float = 5.0,
         time_stop_hour: float = 11,
         force_exit_time: time = time(13, 23),
-        vwap_exit: bool = True,
-        vwap_exit_volume_ratio: float = 0.7,
         atr_multiplier: float = 1.8,
     ):
         self.take_profit_pct = take_profit_pct
         self.time_stop_hour = time_stop_hour
         self.force_exit_time = force_exit_time
-        self.vwap_exit = vwap_exit
-        self.vwap_exit_volume_ratio = vwap_exit_volume_ratio
         self.atr_multiplier = atr_multiplier
 
         self.positions: dict[str, PaperTrade] = {}
@@ -107,7 +103,6 @@ class PaperTracker:
         symbol: str,
         price: float,
         now: datetime,
-        vwap: float,
         current_volume: int = 0,
         avg_volume: float = 0.0,
     ) -> Optional[str]:
@@ -130,14 +125,6 @@ class PaperTracker:
         _tsm = round((self.time_stop_hour - _tsh) * 60)
         if curr_time >= time(_tsh, _tsm) and price < trade.entry_price:
             return self._close(trade, price, now, "time_stop")
-
-        if self.vwap_exit and price < vwap:
-            vol_ok = (
-                avg_volume <= 0
-                or current_volume >= avg_volume * self.vwap_exit_volume_ratio
-            )
-            if vol_ok:
-                return self._close(trade, price, now, "vwap_exit")
 
         return None
 

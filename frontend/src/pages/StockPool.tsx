@@ -7,6 +7,14 @@ interface PoolStock {
   added_at: string
 }
 
+interface FinStatus {
+  code: string
+  has_revenue: boolean
+  has_eps: boolean
+  revenue_updated_at?: string | null
+  eps_updated_at?: string | null
+}
+
 interface SearchResult {
   code: string
   name: string
@@ -22,6 +30,7 @@ export function StockPoolPage() {
   const [showDropdown, setShowDropdown] = useState(false)
   const [backfilling, setBackfilling] = useState(false)
   const [backfillNote, setBackfillNote] = useState<string | null>(null)
+  const [finStatus, setFinStatus] = useState<Record<string, FinStatus>>({})
   const searchRef = useRef<HTMLDivElement>(null)
 
   const loadPool = () => {
@@ -32,7 +41,17 @@ export function StockPoolPage() {
       .finally(() => setLoading(false))
   }
 
-  useEffect(() => { loadPool() }, [])
+  const loadFinStatus = () => {
+    axios.get<FinStatus[]>('/api/pool/financials-status')
+      .then(r => {
+        const map: Record<string, FinStatus> = {}
+        r.data.forEach(s => { map[s.code] = s })
+        setFinStatus(map)
+      })
+      .catch(() => {})
+  }
+
+  useEffect(() => { loadPool(); loadFinStatus() }, [])
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
@@ -111,6 +130,29 @@ export function StockPoolPage() {
     }
   }
 
+  const backfillMissing = async () => {
+    setBackfilling(true)
+    setBackfillNote(null)
+    try {
+      const r = await axios.post('/api/pool/backfill-missing')
+      if (r.data.missing === 0) {
+        setBackfillNote('✓ 全部股票均有月營收和季EPS，無需補抓')
+      } else {
+        setBackfillNote(`✓ 補抓 ${r.data.missing} 支缺失股票（背景執行中）`)
+      }
+      setTimeout(loadFinStatus, 3000)
+    } catch (e: any) {
+      setBackfillNote(`✕ ${e?.response?.data?.detail ?? '觸發失敗'}`)
+    } finally {
+      setBackfilling(false)
+    }
+  }
+
+  const missingCount = pool.filter(s => {
+    const fs = finStatus[s.code]
+    return !fs || !fs.has_revenue || !fs.has_eps
+  }).length
+
   const poolSet = new Set(pool.map(s => s.code))
 
   return (
@@ -123,12 +165,21 @@ export function StockPoolPage() {
           </div>
           <div className="flex gap-2 items-center flex-wrap justify-end">
             {backfillNote && <span className={`text-xs ${backfillNote.startsWith('✓') ? 'text-green-400' : 'text-red-400'}`}>{backfillNote}</span>}
+            {missingCount > 0 && (
+              <button
+                onClick={backfillMissing}
+                disabled={backfilling}
+                className="px-3 py-1.5 text-sm bg-yellow-700 hover:bg-yellow-600 text-white rounded disabled:opacity-50"
+              >
+                {backfilling ? '補抓中...' : `補抓缺失 (${missingCount}支)`}
+              </button>
+            )}
             <button
               onClick={backfillAll}
               disabled={backfilling || pool.length === 0}
               className="px-3 py-1.5 text-sm bg-blue-800 hover:bg-blue-700 text-white rounded disabled:opacity-50"
             >
-              {backfilling ? '補抓中...' : '補抓財務資料'}
+              {backfilling ? '補抓中...' : '補抓全部財務'}
             </button>
             {selected.size > 0 && (
               <button
@@ -200,6 +251,8 @@ export function StockPoolPage() {
                   <th className="px-4 py-3 text-left">代碼</th>
                   <th className="px-4 py-3 text-left">名稱</th>
                   <th className="px-4 py-3 text-left">加入時間</th>
+                  <th className="px-4 py-3 text-center">月營收</th>
+                  <th className="px-4 py-3 text-center">季EPS</th>
                   <th className="px-4 py-3 text-right">操作</th>
                 </tr>
               </thead>
@@ -221,6 +274,20 @@ export function StockPoolPage() {
                     <td className="px-4 py-3 text-white">{stock.name}</td>
                     <td className="px-4 py-3 text-gray-500 text-xs">
                       {stock.added_at ? new Date(stock.added_at).toLocaleDateString('zh-TW') : '—'}
+                    </td>
+                    <td className="px-4 py-3 text-center text-xs">
+                      {finStatus[stock.code]
+                        ? (finStatus[stock.code].has_revenue
+                            ? <span className="text-green-400" title={finStatus[stock.code].revenue_updated_at ?? ''}>✔ <span className="text-gray-500">{finStatus[stock.code].revenue_updated_at}</span></span>
+                            : <span className="text-red-400">✘</span>)
+                        : <span className="text-gray-600">—</span>}
+                    </td>
+                    <td className="px-4 py-3 text-center text-xs">
+                      {finStatus[stock.code]
+                        ? (finStatus[stock.code].has_eps
+                            ? <span className="text-green-400" title={finStatus[stock.code].eps_updated_at ?? ''}>✔ <span className="text-gray-500">{finStatus[stock.code].eps_updated_at}</span></span>
+                            : <span className="text-red-400">✘</span>)
+                        : <span className="text-gray-600">—</span>}
                     </td>
                     <td className="px-4 py-3 text-right">
                       <button

@@ -68,6 +68,11 @@
 | `securities_lending` | `(code, trade_date)` | 借券賣出餘額 |
 | `shareholding` | `(code, report_date)` | 千張大戶持股（週報） |
 | `screening_result` | `(code, calc_date)` | 每日篩選結果 |
+| `watchlist_a` | `(code, added_date)` | 策略A追蹤清單 |
+| `stock_pool` | `code` | 當沖監控股票池（139支） |
+| `daytrade_candidate` | `(trade_date, code)` | 每日當沖候選（job8 篩出） |
+| `daytrade_pre_session_log` | `id` | 盤前跑批紀錄 |
+| `us_watchlist` | `symbol` | 美股追蹤清單 |
 | `fetch_log` | `(job_name, fetch_date)` | 執行紀錄，防重複 |
 
 **screening_result 關鍵欄位：**
@@ -106,13 +111,24 @@
 
 ## 當沖自動交易引擎（`services/fubon-dashboard/engine/`）
 
-運行於 fubon-dashboard Docker container 內，以背景執行緒執行，由 `/engine/start|stop|status` API 控制。
+直接在 WSL 執行（非 Docker），以背景執行緒執行，由 `/engine/start|stop|status` API 控制。
+
+### 資料流（PG-only，SQLite daily.db 已廢棄）
+
+```
+PG stock_pool + daytrade_candidate（由 job8 每日 21:05 更新）
+    ↓ HTTP GET localhost:8000/api/daytrade/list  （當日標的）
+    ↓ HTTP GET localhost:8000/api/pool            （股票名稱）
+交易引擎啟動 → Fubon SDK → ORB 策略 → ticks.db（盤中 tick / 狀態）
+```
+
+> `ticks.db`（位於 `/home/tommy0322/fubon-data/ticks.db`）保留，儲存盤中 tick、quotes、intraday trades/positions。`daily.db` 已於 2026-06-15 刪除，所有資料改由 PG 提供。
 
 ### 交易流程
 
 | 時段 | 動作 |
 |------|------|
-| 啟動時（盤前） | 讀 `daytrade_list` 最新日期取標的；SDK 登入；抓昨日 ATR（14日）；抓 TAIEX 昨收（日跌幅 gate） |
+| 啟動時（盤前） | 呼叫 PG backend `/api/daytrade/list` 取標的；`/api/pool` 取名稱；SDK 登入；抓昨日 ATR（14日）；抓 TAIEX 昨收（日跌幅 gate） |
 | 09:00–09:15（觀察期） | 每 tick 記錄，建 1min / 5min K 棒，ORB 區間鎖定（最高/最低價）|
 | 09:15 後（可入場） | 每分鐘評估進場條件 |
 | 13:10 | 停止新開倉 |
@@ -159,5 +175,7 @@
 
 - [ ] 借券賣出歷史補填（目前只有當日資料，需選擇時間執行 90 日回填）
 - [ ] CORS allow_origins 加入 `http://localhost:6174`（目前允許 3000 / 5173，前端實際跑 6174）
+- [ ] 策略A追蹤清單退出機制（BB<0 跌破月線自動標記 triggered，使用者確認後 exited）
+- [ ] 當沖篩選邏輯優化（chip_count 條件/標的數不足時顯示最高分備援）
 - [ ] v2：八大官股行庫買賣超（WantGoo，API 需 session+CSRF，待研究）
 - [ ] v2：券商分點前5大買超（CMoney，URL 需修正）

@@ -12,29 +12,22 @@ class VolumePriceStrategy:
         self,
         bid_total: float,
         ask_total: float,
-        outside_ratio: float,
-        curr_volume: float,
-        prev_volume: float,
+        curr_volume: int,
+        avg_volume: float,   # 近期 1min K 棒平均量（排除 VWAP）
         curr_close: float,
         prev_close: float,
-        price: float,
-        vwap: float,
-        vwap_sigma: float,
-        vwap_entry_sigma: float,
-        vwap_exit_sigma: float,
     ) -> int:
-        if price > vwap + vwap_exit_sigma * vwap_sigma:
-            return 0
-
         points = 0
+        # 委買壓力：委買比率 ≥ 65%（主動買盤，買方積極）
         if self.check_bid_imbalance(bid_total, ask_total):
             points += 1
-        if outside_ratio > 0.60:
+        # 量爆發 ≥ 均量 × 1.5（徒升必有量）
+        if avg_volume > 0 and curr_volume >= avg_volume * 1.5:
             points += 1
-        if curr_volume > prev_volume:
+        # 價格上升（當分鐘收 > 前分鐘收）
+        if prev_close > 0 and curr_close > prev_close:
             points += 1
-        if curr_close > prev_close:
-            points += 1
-        if price >= vwap + vwap_entry_sigma * vwap_sigma:
+        # 超強量 ≥ 均量 × 3（額外加分，量翻倍爆量）
+        if avg_volume > 0 and curr_volume >= avg_volume * 3.0:
             points += 1
         return points

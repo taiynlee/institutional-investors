@@ -35,8 +35,8 @@ const SUB_TABS: { id: SubTab; label: string }[] = [
   { id: 'trades',      label: '交易紀錄' },
   { id: 'pre-session', label: '盤前狀況' },
   { id: 'params',      label: '交易設定' },
-  { id: 'config',      label: '系統設定' },
-  { id: 'health',      label: '系統健診' },
+  { id: 'config',      label: '當沖設定' },
+  { id: 'health',      label: '當沖健診' },
 ]
 
 // ── Shared styles ─────────────────────────────────────────────────────────────
@@ -93,7 +93,7 @@ function LiveTab() {
 
   useEffect(() => {
     setLoading(true)
-    axios.get(`${API}/daytrade-list/live`)
+    axios.get(`${API}/daytrade-list`)
       .then(r => setList(r.data))
       .catch(() => setList(null))
       .finally(() => setLoading(false))
@@ -119,7 +119,7 @@ function LiveTab() {
     return () => clearInterval(tid)
   }, [list?.date])
 
-  const pnlColor = (v: number) => v > 0 ? 'text-green-400' : v < 0 ? 'text-red-400' : 'text-[#6b84a0]'
+  const pnlColor = (v: number) => v > 0 ? 'text-red-400' : v < 0 ? 'text-green-400' : 'text-[#6b84a0]'
 
   const stocks: any[] = list?.stocks ?? []
   const idxData = ticks['__index__'] ?? {}
@@ -146,10 +146,14 @@ function LiveTab() {
           </span>
           <span className={`text-[10px] ${muted}`}>{status?.trade_count ?? 0} 筆</span>
         </div>
-        {/* 持倉 */}
+        {/* 今日已交易 / 持倉 */}
         <div className={`${card} px-3 py-3 flex flex-col justify-center`}>
-          <span className="text-[10px] text-[#6b84a0] mb-0.5">持倉</span>
-          <span className="text-base font-bold text-[#60a5fa]">{positions.length}</span>
+          <span className="text-[10px] text-[#6b84a0] mb-0.5">今日已交易</span>
+          <span className="text-base font-bold text-[#60a5fa]">
+            {stream?.pnl?.daily_entries ?? 0}
+            <span className="text-[#6b84a0] text-xs font-normal"> / {stream?.pnl?.max_daily ?? 3} 檔</span>
+          </span>
+          <span className="text-[10px] text-[#6b84a0]">持倉 {positions.length} 檔</span>
         </div>
         {/* 加權指數 */}
         <div className={`${card} px-3 py-3 flex flex-col justify-center`}>
@@ -158,7 +162,7 @@ function LiveTab() {
             {idxPrice != null ? idxPrice.toLocaleString(undefined, {maximumFractionDigits: 0}) : '—'}
           </span>
           <div className="flex items-center gap-1 mt-0.5">
-            {idxChg5 !== 0 && <span className={`text-[10px] ${mono} ${idxChg5 >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+            {idxChg5 !== 0 && <span className={`text-[10px] ${mono} ${idxChg5 >= 0 ? 'text-red-400' : 'text-green-400'}`}>
               {idxChg5 >= 0 ? '▲' : '▼'}{Math.abs(idxChg5).toFixed(1)}
             </span>}
             <span className={`text-[10px] px-1 py-0.5 rounded ${circuit === 'normal' ? 'bg-green-400/20 text-green-400' : circuit === 'crash' ? 'bg-red-400/20 text-red-400' : 'bg-yellow-400/20 text-yellow-400'}`}>
@@ -196,7 +200,7 @@ function LiveTab() {
                   <th className="px-4 py-2 text-right">現價</th>
                   <th className="px-4 py-2 text-right">停損線</th>
                   <th className="px-4 py-2 text-right">ATR</th>
-                  <th className="px-4 py-2 text-right">ORB低</th>
+
                   <th className="px-4 py-2 text-right">未實現</th>
                 </tr>
               </thead>
@@ -205,17 +209,17 @@ function LiveTab() {
                   const tk = ticks[p.symbol]
                   const cur = tk?.price ?? null
                   const unreal = cur != null ? (cur - p.entry_price) * p.lots * 1000 : null
-                  const uc = unreal != null ? (unreal >= 0 ? 'text-green-400' : 'text-red-400') : muted
+                  const uc = unreal != null ? (unreal >= 0 ? 'text-red-400' : 'text-green-400') : muted
                   const nearStop = cur != null && p.stop_loss != null && cur <= p.stop_loss * 1.02
                   return (
                     <tr key={p.symbol} className="border-b border-[#253d5c] hover:bg-[#1a2d4a]">
                       <td className="px-4 py-2 text-[#60a5fa] font-bold">{p.symbol}</td>
                       <td className="px-4 py-2 text-right text-[#dde6f0]">{p.lots}</td>
                       <td className={`px-4 py-2 text-right ${mono} text-[#dde6f0]`}>{p.entry_price?.toFixed(1)}</td>
-                      <td className={`px-4 py-2 text-right ${mono} ${cur != null ? (cur >= p.entry_price ? 'text-green-400' : 'text-red-400') : muted}`}>{cur != null ? cur.toFixed(1) : '—'}</td>
+                      <td className={`px-4 py-2 text-right ${mono} ${cur != null ? (cur >= p.entry_price ? 'text-red-400' : 'text-green-400') : muted}`}>{cur != null ? cur.toFixed(1) : '—'}</td>
                       <td className={`px-4 py-2 text-right ${mono} ${nearStop ? 'text-red-400 font-bold' : 'text-orange-400'}`}>{p.stop_loss?.toFixed(1) ?? '—'}</td>
                       <td className={`px-4 py-2 text-right ${mono} ${muted}`}>{p.atr != null ? p.atr.toFixed(2) : '—'}</td>
-                      <td className={`px-4 py-2 text-right ${mono} ${muted}`}>{p.orb_low != null ? p.orb_low.toFixed(1) : '—'}</td>
+
                       <td className={`px-4 py-2 text-right ${mono} ${uc}`}>{unreal != null ? `${unreal >= 0 ? '+' : ''}${Math.round(unreal).toLocaleString()}` : '—'}</td>
                     </tr>
                   )
@@ -230,7 +234,7 @@ function LiveTab() {
       <div className={card}>
         {/* 列表標頭 */}
         <div className="px-4 py-2 border-b border-[#253d5c] flex items-center gap-2">
-          <span className="text-sm font-semibold text-[#dde6f0]">今日選股</span>
+          <span className="text-sm font-semibold text-[#dde6f0]">明日選股</span>
           {list && <Badge text={`${list.count} 檔`} color="blue" />}
           {list?.date && <span className={`text-xs ${muted}`}>{list.date}</span>}
         </div>
@@ -255,9 +259,6 @@ function LiveTab() {
                   <th className="px-3 py-2 text-right" style={{minWidth:56}}>Open</th>
                   <th className="px-3 py-2 text-right" style={{minWidth:56}}>High</th>
                   <th className="px-3 py-2 text-right" style={{minWidth:56}}>Low</th>
-                  <th className="px-3 py-2 text-right" style={{minWidth:56}}>ORB↑</th>
-                  <th className="px-3 py-2 text-right" style={{minWidth:56}}>ORB↓</th>
-                  <th className="px-3 py-2 text-right" style={{minWidth:62}}>VWAP</th>
                   <th className="px-3 py-2 text-right" style={{minWidth:72}}>今量</th>
                 </tr>
               </thead>
@@ -269,8 +270,8 @@ function LiveTab() {
                   const rtChg = lp != null && ref ? lp - ref : s.change
                   const rtPct = lp != null && ref ? rtChg / ref * 100 : s.change_pct
                   const isUp  = rtChg >= 0
-                  const accent = isUp ? 'border-l-green-400' : 'border-l-red-400'
-                  const chgCls = isUp ? 'text-green-400' : 'text-red-400'
+                  const accent = isUp ? 'border-l-red-400' : 'border-l-green-400'
+                  const chgCls = isUp ? 'text-red-400' : 'text-green-400'
 
                   const bp     = tk.bid_pct ?? null
                   const ap     = bp != null ? 100 - bp : null
@@ -279,15 +280,11 @@ function LiveTab() {
                   const open_v  = tk.open      ?? null
                   const high_v  = tk.high      ?? null
                   const low_v   = tk.low       ?? null
-                  const orb_h   = tk.orb_high  ?? null
-                  const orb_l   = tk.orb_low   ?? null
-                  const vwap    = tk.vwap      ?? null
                   const vol     = tk.vol_lots  ?? null
                   const v1m     = tk.vol_1m    ?? null
                   const vpm     = tk.vol_prev_1m ?? null
                   const volRise = v1m != null && vpm != null && v1m > vpm
 
-                  const aboveVwap = lp != null && vwap != null && lp >= vwap
                   const dash = <span className={muted}>—</span>
 
                   return (
@@ -309,7 +306,7 @@ function LiveTab() {
                       </td>
                       {/* 漲跌% */}
                       <td className="px-3 py-2.5 text-right">
-                        <span className={`inline-block px-1.5 py-0.5 rounded text-xs font-semibold ${mono} ${isUp ? 'bg-green-400/15 text-green-400' : 'bg-red-400/15 text-red-400'}`}>
+                        <span className={`inline-block px-1.5 py-0.5 rounded text-xs font-semibold ${mono} ${isUp ? 'bg-red-400/15 text-red-400' : 'bg-green-400/15 text-green-400'}`}>
                           {`${isUp ? '+' : ''}${rtPct.toFixed(2)}%`}
                         </span>
                       </td>
@@ -317,15 +314,15 @@ function LiveTab() {
                       <td className="px-3 py-2.5">
                         {bp != null ? (
                           <div>
-                            <div className={`flex h-[5px] rounded overflow-hidden mb-0.5 ${bidStr ? 'ring-1 ring-blue-400/60' : ''}`} style={{width:86}}>
-                              <div className="bg-[#60a5fa]" style={{width:`${bp}%`}} />
-                              <div className="bg-[#f87171]" style={{width:`${ap}%`}} />
+                            <div className={`flex h-[5px] rounded overflow-hidden mb-0.5 ${bidStr ? 'ring-1 ring-red-400/60' : ''}`} style={{width:86}}>
+                              <div className="bg-red-400" style={{width:`${bp}%`}} />
+                              <div className="bg-green-400" style={{width:`${ap}%`}} />
                             </div>
                             <div className={`flex items-center justify-between text-[10px] ${mono}`} style={{width:86}}>
-                              <span className={bidStr ? 'text-blue-300 font-bold' : 'text-[#60a5fa]'}>
+                              <span className={bidStr ? 'text-red-400 font-bold' : 'text-red-300'}>
                                 買{bp.toFixed(0)}%{bidStr ? '▲' : ''}
                               </span>
-                              <span className="text-[#f87171]">賣{ap?.toFixed(0)}%</span>
+                              <span className="text-green-400">賣{ap?.toFixed(0)}%</span>
                             </div>
                           </div>
                         ) : dash}
@@ -350,41 +347,12 @@ function LiveTab() {
                         {open_v != null ? open_v.toFixed(1) : '—'}
                       </td>
                       {/* High */}
-                      <td className={`px-3 py-2.5 text-right ${mono} text-xs text-green-400`}>
+                      <td className={`px-3 py-2.5 text-right ${mono} text-xs text-red-400`}>
                         {high_v != null ? high_v.toFixed(1) : '—'}
                       </td>
                       {/* Low */}
-                      <td className={`px-3 py-2.5 text-right ${mono} text-xs text-red-400`}>
+                      <td className={`px-3 py-2.5 text-right ${mono} text-xs text-green-400`}>
                         {low_v != null ? low_v.toFixed(1) : '—'}
-                      </td>
-                      {/* ORB↑ (09:00–09:15 high) */}
-                      <td className={`px-3 py-2.5 text-right ${mono} text-xs`}>
-                        {orb_h != null ? (
-                          <span className={lp != null && lp > orb_h ? 'text-green-300 font-bold' : 'text-[#dde6f0]'}>
-                            {orb_h.toFixed(1)}{lp != null && lp > orb_h ? '↑' : ''}
-                          </span>
-                        ) : dash}
-                      </td>
-                      {/* ORB↓ (09:00–09:15 low) */}
-                      <td className={`px-3 py-2.5 text-right ${mono} text-xs`}>
-                        {orb_l != null ? (
-                          <span className={lp != null && lp < orb_l ? 'text-red-400 font-bold' : 'text-[#dde6f0]'}>
-                            {orb_l.toFixed(1)}
-                          </span>
-                        ) : dash}
-                      </td>
-                      {/* VWAP */}
-                      <td className={`px-3 py-2.5 text-right ${mono} text-xs`}>
-                        {vwap != null ? (
-                          <div>
-                            <span className={aboveVwap ? 'text-green-400' : 'text-red-400'}>
-                              {vwap.toFixed(1)}
-                            </span>
-                            <div className={`text-[10px] ${aboveVwap ? 'text-green-400/60' : 'text-red-400/60'}`}>
-                              {aboveVwap ? '▲上' : '▼下'}
-                            </div>
-                          </div>
-                        ) : dash}
                       </td>
                       {/* 今量 ratio bar */}
                       <td className="px-3 py-2.5">
@@ -420,43 +388,36 @@ function LiveTab() {
 }
 
 // ── 交易紀錄 ─────────────────────────────────────────────────────────────────
-type Period = '本月' | '上一月' | '上二月' | '上三月' | '今年' | '全部'
+type Period = '今日' | '本月' | '上一月' | '上二月' | '上三月' | '今年' | '全部'
 
-const SAMPLE_TRADES = [
-  { trade_date: '2026-06-11', symbol: '2330', name: '台積電', dry_run: 1,
-    pnl: 5199, commission: 964, brokerage_only: 629, trade_count: 1,
-    avg_entry: 218.5, avg_exit: 223.7 },
-  { trade_date: '2026-06-11', symbol: '2317', name: '鴻海', dry_run: 1,
-    pnl: -1799, commission: 421, brokerage_only: 277, trade_count: 1,
-    avg_entry: 98.3, avg_exit: 96.5 },
-  { trade_date: '2026-06-10', symbol: '2454', name: '聯發科', dry_run: 1,
-    pnl: 11500, commission: 3565, brokerage_only: 2330, trade_count: 1,
-    avg_entry: 812.0, avg_exit: 823.5 },
-  { trade_date: '2026-06-14', symbol: '2382', name: '廣達', dry_run: 1,
-    pnl: 2500, commission: 1076, brokerage_only: 704, trade_count: 1,
-    avg_entry: 246.0, avg_exit: 248.5 },
-  { trade_date: '2026-06-10', symbol: '2382', name: '廣達', dry_run: 1,
-    pnl: 2300, commission: 1073, brokerage_only: 702, trade_count: 1,
-    avg_entry: 245.5, avg_exit: 247.8 },
-  { trade_date: '2026-06-09', symbol: '2330', name: '台積電', dry_run: 1,
-    pnl: 8800, commission: 938, brokerage_only: 610, trade_count: 1,
-    avg_entry: 210.0, avg_exit: 218.8 },
-]
 
 function TradesTab() {
   const [allTrades, setAllTrades] = useState<any[]>([])
-  const [period, setPeriod] = useState<Period>('本月')
+  const [period, setPeriod] = useState<Period>('今日')
   const [loading, setLoading] = useState(true)
-  const [showSample, setShowSample] = useState(false)
+  const [deleting, setDeleting] = useState<string | null>(null)
 
-  useEffect(() => {
+  const loadTrades = () => {
     setLoading(true)
     axios.get(`${API}/trade-history`).then(r => setAllTrades(r.data)).catch(() => {}).finally(() => setLoading(false))
-  }, [])
+  }
+
+  useEffect(() => { loadTrades() }, [])
+
+  const deleteTrade = async (trade_date: string, symbol: string) => {
+    const key = `${trade_date}-${symbol}`
+    setDeleting(key)
+    try {
+      await axios.delete(`${API}/delete-trade`, { params: { trade_date, symbol } })
+      loadTrades()
+    } catch { }
+    setDeleting(null)
+  }
 
   const filterByPeriod = (rows: any[]) => {
     const now = new Date()
     const y = now.getFullYear(), m = now.getMonth()
+    const todayStr = `${y}-${String(m+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`
     const monthStart = (offset: number) => {
       const d = new Date(y, m - offset, 1)
       return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-01`
@@ -465,7 +426,8 @@ function TradesTab() {
       const d = new Date(y, m - offset + 1, 1)
       return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-01`
     }
-    if (period === '本月')  return rows.filter(r => r.trade_date >= monthStart(0))
+    if (period === '今日')   return rows.filter(r => r.trade_date === todayStr)
+    if (period === '本月')   return rows.filter(r => r.trade_date >= monthStart(0))
     if (period === '上一月') return rows.filter(r => r.trade_date >= monthStart(1) && r.trade_date < monthEnd(1))
     if (period === '上二月') return rows.filter(r => r.trade_date >= monthStart(2) && r.trade_date < monthEnd(2))
     if (period === '上三月') return rows.filter(r => r.trade_date >= monthStart(3) && r.trade_date < monthEnd(3))
@@ -473,46 +435,30 @@ function TradesTab() {
     return rows
   }
 
-  const activeTrades = showSample ? SAMPLE_TRADES : allTrades
+  const activeTrades = allTrades
   const trades = filterByPeriod(activeTrades)
   const totalPnl = trades.reduce((s, r) => s + (r.pnl || 0), 0)
   const totalFee = trades.reduce((s, r) => s + (r.commission || 0), 0)
   const totalNet = totalPnl - totalFee
   const totalRebate = trades.reduce((s, r) => s + Math.floor((r.brokerage_only || 0) * 0.72), 0)
-  const winRows = trades.filter(r => r.pnl > 0).length
+  const winRows = trades.filter(r => (r.pnl || 0) - (r.commission || 0) > 0).length
   const winRate = trades.length > 0 ? Math.round(winRows / trades.length * 100) : 0
 
-  const pnlColor = (v: number) => v > 0 ? 'text-green-400' : v < 0 ? 'text-red-400' : 'text-[#6b84a0]'
+  const pnlColor = (v: number) => v > 0 ? 'text-red-400' : v < 0 ? 'text-green-400' : 'text-[#6b84a0]'
 
   return (
     <div className="space-y-4">
-      {/* Period filter + sample toggle */}
-      <div className="flex items-center gap-1.5 flex-wrap justify-between">
-        <div className="flex items-center gap-1.5 flex-wrap">
-          <span className={`text-xs ${muted} mr-1`}>統計期間</span>
-          {(['本月', '上一月', '上二月', '上三月', '今年', '全部'] as Period[]).map(p => (
-            <button key={p} onClick={() => setPeriod(p)}
-              className={`px-3 py-1 rounded text-xs font-medium transition-colors ${
-                period === p ? 'bg-[#1e3a5f] text-[#dde6f0] ring-1 ring-[#60a5fa]'
-                            : 'bg-[#142035] border border-[#253d5c] text-[#6b84a0] hover:text-[#dde6f0]'
-              }`}>{p}</button>
-          ))}
-        </div>
-        <button onClick={() => setShowSample(v => !v)}
-          className={`text-xs px-3 py-1 rounded border transition-colors ${
-            showSample
-              ? 'bg-orange-900/30 border-orange-500/50 text-orange-300'
-              : `border-[#253d5c] ${muted} hover:text-[#dde6f0]`
-          }`}>
-          {showSample ? '▶ 樣本模式' : '查看樣本'}
-        </button>
+      {/* Period filter */}
+      <div className="flex items-center gap-1.5 flex-wrap">
+        <span className={`text-xs ${muted} mr-1`}>統計期間</span>
+        {(['今日', '本月', '上一月', '上二月', '上三月', '今年', '全部'] as Period[]).map(p => (
+          <button key={p} onClick={() => setPeriod(p)}
+            className={`px-3 py-1 rounded text-xs font-medium transition-colors ${
+              period === p ? 'bg-[#1e3a5f] text-[#dde6f0] ring-1 ring-[#60a5fa]'
+                          : 'bg-[#142035] border border-[#253d5c] text-[#6b84a0] hover:text-[#dde6f0]'
+            }`}>{p}</button>
+        ))}
       </div>
-
-      {showSample && (
-        <div className="bg-orange-900/20 border border-orange-500/30 rounded-lg px-4 py-2 text-xs text-orange-300">
-          ▶ DEMO 樣本（含廣達 2382），非真實交易記錄
-        </div>
-      )}
 
       {/* Summary */}
       {activeTrades.length === 0 && !loading ? (
@@ -528,7 +474,7 @@ function TradesTab() {
             { label: '交易手續費合計', value: `-${totalFee.toLocaleString()}`,                              color: muted },
             { label: '預估月退讓',     value: `+${totalRebate.toLocaleString()}`,                          color: 'text-blue-400' },
             { label: '筆數',           value: String(trades.length),                                        color: 'text-[#dde6f0]' },
-            { label: '獲利率',         value: `${winRate}%`,                                               color: winRate >= 50 ? 'text-green-400' : 'text-red-400' },
+            { label: '獲利率',         value: `${winRate}%`,                                               color: winRate >= 50 ? 'text-red-400' : 'text-green-400' },
           ].map(item => (
             <div key={item.label} className="flex-1 min-w-[90px] bg-[#142035] px-4 py-3 text-center">
               <div className={`text-[10px] ${muted} mb-1`}>{item.label}</div>
@@ -547,19 +493,21 @@ function TradesTab() {
           <div className={`text-center py-10 text-sm ${muted}`}>此期間無紀錄</div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full text-sm min-w-[860px]">
+            <table className="w-full text-sm min-w-[900px]">
               <thead>
                 <tr className={`text-[11px] ${muted} border-b border-[#253d5c] whitespace-nowrap`}>
                   <th className="px-3 py-2 text-left">日期</th>
                   <th className="px-3 py-2 text-left">模式</th>
                   <th className="px-3 py-2 text-left">代碼名稱</th>
+                  <th className="px-3 py-2 text-right">張數</th>
+                  <th className="px-3 py-2 text-right">總買額</th>
                   <th className="px-3 py-2 text-right">買價</th>
                   <th className="px-3 py-2 text-right">賣價</th>
                   <th className="px-3 py-2 text-right">損益</th>
-                  <th className="px-3 py-2 text-right">成交筆數</th>
                   <th className="px-3 py-2 text-right">交易手續費</th>
                   <th className="px-3 py-2 text-right">實際損益</th>
                   <th className="px-3 py-2 text-right">券商退讓</th>
+                  <th className="px-3 py-2 text-center w-8"></th>
                 </tr>
               </thead>
               <tbody>
@@ -567,6 +515,9 @@ function TradesTab() {
                   const fee = t.commission || 0
                   const net = (t.pnl || 0) - fee
                   const rebate = Math.floor((t.brokerage_only || 0) * 0.72)
+                  const lots = t.total_lots ?? t.trade_count ?? 1
+                  const totalBuy = t.avg_entry != null ? Math.round(t.avg_entry * lots * 1000) : null
+                  const delKey = `${t.trade_date}-${t.symbol}`
                   return (
                     <tr key={i} className="border-b border-[#253d5c] hover:bg-[#1a2d4a]">
                       <td className={`px-3 py-2.5 text-xs ${muted} ${mono}`}>{t.trade_date}</td>
@@ -579,13 +530,24 @@ function TradesTab() {
                         <span className={`${mono} text-[#60a5fa] font-bold`}>{t.symbol}</span>
                         {t.name && <span className={`text-xs ml-1.5 text-[#dde6f0]`}>{t.name}</span>}
                       </td>
+                      <td className={`px-3 py-2.5 text-right ${mono} text-[#dde6f0]`}>{lots} 張</td>
+                      <td className={`px-3 py-2.5 text-right ${mono} text-[#dde6f0]`}>
+                        {totalBuy != null ? totalBuy.toLocaleString() : '—'}
+                      </td>
                       <td className={`px-3 py-2.5 text-right ${mono} text-[#dde6f0]`}>{t.avg_entry?.toFixed(1) ?? '—'}</td>
                       <td className={`px-3 py-2.5 text-right ${mono} text-[#dde6f0]`}>{t.avg_exit?.toFixed(1) ?? '—'}</td>
                       <td className={`px-3 py-2.5 text-right ${mono} ${pnlColor(t.pnl)}`}>{t.pnl >= 0 ? '+' : ''}{t.pnl?.toLocaleString()}</td>
-                      <td className={`px-3 py-2.5 text-right ${mono} text-[#dde6f0]`}>{t.trade_count ?? 1}</td>
                       <td className={`px-3 py-2.5 text-right ${mono} ${muted}`}>-{fee.toLocaleString()}</td>
                       <td className={`px-3 py-2.5 text-right ${mono} ${pnlColor(net)}`}>{net >= 0 ? '+' : ''}{net.toLocaleString()}</td>
                       <td className={`px-3 py-2.5 text-right ${mono} text-blue-400`}>+{rebate.toLocaleString()}</td>
+                      <td className="px-3 py-2.5 text-center">
+                        <button
+                          onClick={() => deleteTrade(t.trade_date, t.symbol)}
+                          disabled={deleting === delKey}
+                          className="text-[11px] text-[#6b84a0] hover:text-red-400 transition-colors disabled:opacity-40"
+                          title="刪除"
+                        >✕</button>
+                      </td>
                     </tr>
                   )
                 })}
@@ -792,7 +754,7 @@ interface PD { id: string; group: string; label: string; desc: string; unit: str
 const PARAM_DEFS: PD[] = [
   // 倉位控制
   { id:'max_position_capital', group:'倉位控制', label:'每檔資金上限',   desc:'單一標的最多動用的資金；ATR 張數算完後再 cap 到此值', unit:'TWD', source:'rt', rtKey:'max_position_capital', type:'number', step:100000, min:100000, canDisable:false },
-  { id:'max_daily_positions',  group:'倉位控制', label:'最多同時持倉',   desc:'同時間最多幾檔持倉；超過後不再開新倉', unit:'檔', source:'rt', rtKey:'max_daily_positions', type:'number', step:1, min:1, canDisable:false },
+  { id:'max_daily_positions',  group:'倉位控制', label:'每日最多交易檔數', desc:'一天最多買賣幾檔股票；進場後即使出場也計入，達上限後當日不再開新倉', unit:'檔', source:'rt', rtKey:'max_daily_positions', type:'number', step:1, min:1, canDisable:false },
   { id:'risk_per_trade_pct',   group:'倉位控制', label:'每筆風險比例',   desc:'每筆交易最多承擔總資金×此%的風險，決定張數公式基數', unit:'%', source:'cfg', cfgPath:'risk.risk_per_trade_pct', type:'number', step:0.5, min:0.1, canDisable:false },
   // 交易時間
   { id:'force_exit_time',          group:'交易時間', label:'強制出場時間',  desc:'到達此時間所有持倉強制市價出清，不管盈虧', unit:'HH:MM', source:'cfg', cfgPath:'trading.force_exit_time', type:'time', canDisable:false },
@@ -803,8 +765,6 @@ const PARAM_DEFS: PD[] = [
   { id:'cb_window_min',     group:'大盤熔斷', label:'熔斷觀察視窗',  desc:'計算急跌的時間視窗（分鐘）', unit:'分鐘', source:'rt', rtKey:'cb_window_min', type:'number', step:1, min:1, canDisable:false },
   { id:'cb_pause_minutes',  group:'大盤熔斷', label:'熔斷暫停時間',  desc:'觸發熔斷後暫停新開倉的分鐘數（即時生效）', unit:'分鐘', source:'rt', rtKey:'cb_pause_minutes', type:'number', step:5, min:5, canDisable:false },
   // 進場信號
-  { id:'orb_window_minutes',    group:'進場信號', label:'ORB 視窗',          desc:'開盤後前幾分鐘確立 High/Low 範圍（觀察期），之後突破才進場', unit:'分', source:'cfg', cfgPath:'signal.orb_window_minutes', type:'number', step:5, min:5, canDisable:false },
-  { id:'orb_volume_multiplier', group:'進場信號', label:'ORB 突破量門檻',    desc:'突破 ORB 高點時，當分鐘量需超過觀察期均量×此倍數才視為有效突破', unit:'x', source:'cfg', cfgPath:'signal.orb_volume_multiplier', type:'number', step:0.5, min:0.5, canDisable:false },
   { id:'market_drop_threshold', group:'進場信號', label:'大盤日跌門檻',      desc:'加權今日較昨收跌超過此%時停止新開倉（例：-1.5 = 跌1.5%停買）', unit:'%', source:'cfg', cfgPath:'signal.market_drop_threshold', type:'number', step:0.5, canDisable:true },
   { id:'max_entry_gain_pct',    group:'進場信號', label:'最大進場漲幅',      desc:'個股當日漲幅超過此%不開倉，避免追高；ORB 突破時本條件仍生效', unit:'%', source:'cfg', cfgPath:'signal.max_entry_gain_pct', type:'number', step:0.5, min:0, canDisable:true },
   { id:'limit_up_buffer',       group:'進場信號', label:'漲停緩衝',          desc:'股價距漲停不足此%時不進場，避免追板買在最高點', unit:'%', source:'cfg', cfgPath:'signal.limit_up_buffer', type:'number', step:0.5, min:0, canDisable:true },
@@ -817,7 +777,6 @@ const PARAM_DEFS: PD[] = [
   { id:'futures_spread_fast_reversal_pct', group:'期貨過濾', label:'逆價差急惡化',   desc:'短窗口內逆差擴大速度超過此值時加速出場（趨勢惡化預警）', unit:'%', source:'cfg', cfgPath:'signal.futures_spread_fast_reversal_pct', type:'number', step:0.1, min:0, canDisable:true },
   // 風控
   { id:'atr_multiplier',         group:'風控', label:'ATR 倍數',       desc:'停損距離 = ATR × 此倍數；同時決定張數公式分母（資金×1% ÷ (ATR×倍數×1000)）', unit:'x', source:'cfg', cfgPath:'risk.atr_multiplier', type:'number', step:0.5, min:0.5, canDisable:false },
-  { id:'vwap_exit_volume_ratio', group:'風控', label:'VWAP 量比門檻', desc:'K棒量低於近期均量×此比例時不因VWAP訊號出場（縮量回調不賣）', unit:'', source:'cfg', cfgPath:'risk.vwap_exit_volume_ratio', type:'number', step:0.05, min:0, max:1, canDisable:true },
   // 停利/停損策略
   { id:'take_profit_pct',       group:'停利策略', label:'最終停利',          desc:'漲幅達此%時全部出清', unit:'%', source:'cfg', cfgPath:'risk.take_profit_pct', type:'number', step:0.5, min:0, canDisable:true },
   { id:'trailing_trigger_pct',  group:'停利策略', label:'移動停損啟動',      desc:'獲利達此%後啟動移動停損追蹤；之後從最高點回落 trailing_pullback_pct% 即出場', unit:'%', source:'cfg', cfgPath:'risk.trailing_trigger_pct', type:'number', step:0.5, min:0.5, canDisable:false },
@@ -1431,15 +1390,6 @@ function HealthTab() {
 // ── Main page ────────────────────────────────────────────────────────────────
 export function DayTradePage() {
   const [sub, setSub] = useState<SubTab>('live')
-  const [twNow, setTwNow] = useState(new Date())
-
-  useEffect(() => {
-    const tid = setInterval(() => setTwNow(new Date()), 1000)
-    return () => clearInterval(tid)
-  }, [])
-
-  const twDateStr = twNow.toLocaleDateString('zh-TW', { timeZone: 'Asia/Taipei', month: '2-digit', day: '2-digit' })
-  const twTimeStr = twNow.toLocaleTimeString('zh-TW', { timeZone: 'Asia/Taipei', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })
 
   return (
     <div className="min-h-screen bg-[#0c1929] text-[#dde6f0] p-6">
@@ -1449,28 +1399,21 @@ export function DayTradePage() {
           <p className={`text-sm mt-0.5 ${muted}`}>富邦證券自動交易系統</p>
         </div>
 
-        {/* Sub-tab bar + 右側時鐘 */}
-        <div className="flex items-center justify-between mb-6 gap-4">
-          <div className="flex gap-1 bg-[#142035] rounded-lg p-1 border border-[#253d5c] overflow-x-auto">
-            {SUB_TABS.map(t => (
-              <button
-                key={t.id}
-                onClick={() => setSub(t.id)}
-                className={`px-3 py-1.5 rounded text-sm font-medium transition-colors whitespace-nowrap ${
-                  sub === t.id
-                    ? 'bg-[#1e3a5f] text-[#dde6f0] ring-1 ring-[#60a5fa]'
-                    : `${muted} hover:text-[#dde6f0] hover:bg-[#1a2d4a]`
-                }`}
-              >
-                {t.label}
-              </button>
-            ))}
-          </div>
-          <div className="flex items-center border border-[#253d5c] rounded overflow-hidden text-xs shrink-0">
-            <span className={`px-2.5 py-1.5 ${muted} border-r border-[#253d5c] text-[10px] tracking-wider`}>台灣</span>
-            <span className={`px-2.5 py-1.5 ${mono} ${muted} border-r border-[#253d5c]`}>{twDateStr}</span>
-            <span className={`px-2.5 py-1.5 ${mono} font-bold text-[#dde6f0] tracking-widest`}>{twTimeStr}</span>
-          </div>
+        {/* Sub-tab bar */}
+        <div className="flex gap-1 bg-[#142035] rounded-lg p-1 border border-[#253d5c] overflow-x-auto mb-6">
+          {SUB_TABS.map(t => (
+            <button
+              key={t.id}
+              onClick={() => setSub(t.id)}
+              className={`px-3 py-1.5 rounded text-sm font-medium transition-colors whitespace-nowrap ${
+                sub === t.id
+                  ? 'bg-[#1e3a5f] text-[#dde6f0] ring-1 ring-[#60a5fa]'
+                  : `${muted} hover:text-[#dde6f0] hover:bg-[#1a2d4a]`
+              }`}
+            >
+              {t.label}
+            </button>
+          ))}
         </div>
 
         {sub === 'live'        && <LiveTab />}

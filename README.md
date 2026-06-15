@@ -345,6 +345,7 @@ institutional-investors/
 20:45  Job 2 — 抓融資借券（TWSE TWT93U，約 20:30 更新）
 18:30  Job 3 — 抓 TDCC 集保持股集中度（僅週日，週日晚間完成）
 21:00  Job 4 — 執行篩選計算，更新 screening_result，呼叫 Claude API 產生 AI 精選
+21:05  Job 8 — 當沖篩選（pool × score-a/b → PG daytrade_candidate，隔日引擎啟動時讀取）
 每月10-25日 12:00  Job 5 — 抓月營收（MOPS）
 每季（3/1, 5/16, 8/15, 11/15）  Job 6 — 抓季報 EPS（FinMind TaiwanStockFinancialStatements）
 每半年（1/1, 7/1）  Job 7 — 抓產業鏈分類（IC Chain），更新 ic_classification
@@ -517,6 +518,11 @@ docker compose up            # 全起（DB + 後端 + 前端）
 | `margin_trading` | 融資融券每日餘額 | `(code, trade_date)` |
 | `shareholding` | 千張大戶持股（TDCC 週報） | `(code, report_date)` |
 | `screening_result` | 每日篩選結果與評分 | `(code, calc_date)` |
+| `watchlist_a` | 策略A追蹤清單（手動加入/退出） | `(code, added_date)` |
+| `stock_pool` | 當沖監控股票池（fuel for job8） | `code` |
+| `daytrade_candidate` | 每日當沖候選（job8 篩出） | `(trade_date, code)` |
+| `daytrade_pre_session_log` | 盤前跑批紀錄 | `id` |
+| `us_watchlist` | 美股追蹤清單 | `symbol` |
 | `fetch_log` | 爬取作業紀錄（防重複） | `(job_name, fetch_date)` |
 
 ### 詳細欄位設計
@@ -714,6 +720,9 @@ LINE Bot 連結透過 ngrok tunnel 對外，開機自動重建 webhook URL。
 WSL 直接執行（非 Docker）
   cd services/fubon-dashboard && python run.py
     ├─ DailyScheduler：平日 08:30 自動登入富邦 SDK，09:00 前 WebSocket 就緒
+    ├─ 交易引擎啟動時：
+    │    ├─ GET localhost:8000/api/daytrade/list  → 取 PG daytrade_candidate 當日標的
+    │    └─ GET localhost:8000/api/pool          → 取 PG stock_pool 股票名稱
     ├─ 交易引擎（ORB strategy）：每 10 秒評估突破信號，自動下觸價單
     ├─ FastAPI :8090（REST + /ws/stream）
     │    └─ /ws/stream 每秒推送引擎狀態給前端
@@ -742,8 +751,8 @@ python run.py
 | 子頁 | 資料來源 | 說明 |
 |-----|---------|------|
 | 今日交易 | WebSocket `/fubon-api/ws/stream` | 即時持倉 + 盤中損益（WS 串流，每秒更新） |
-| 交易紀錄 | `/fubon-api/trades` | 今日成交記錄（SQLite） |
-| 盤前狀況 | `/fubon-api/pre-session/logs` | 盤前跑批紀錄 |
+| 交易紀錄 | `/fubon-api/trades` | 今日成交記錄（ticks.db） |
+| 盤前狀況 | `/fubon-api/pre-session/logs` | 盤前跑批紀錄（PG） |
 | 交易設定 | `/fubon-api/trading-params` | 資金限額、持倉數、dry run 開關 |
 | 系統設定 | `/fubon-api/config` | 讀取 config.yaml（密碼遮蔽） |
 | 系統健診 | `/fubon-api/health-check/results` + `/fubon-api/logs/today` | 引擎狀態、config、LINE 設定、tick 資料流 |

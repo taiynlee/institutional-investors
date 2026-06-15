@@ -6,10 +6,8 @@ from engine.scheduler import DailyScheduler
 
 _data_dir = os.environ.get("FUBON_DATA_DIR", "/fubon-data")
 _ticks_db = os.path.join(_data_dir, "ticks.db")
-_daily_db = os.path.join(_data_dir, "daily.db")
 
-_store = DailyStore(_daily_db)
-_store.init_db()
+_store = DailyStore()
 
 # 自動排程：每個交易日 08:55 啟動引擎，13:36 停止，次日重連
 _scheduler = DailyScheduler(engine)

@@ -231,7 +231,6 @@ def create_app(
                     "entry_price": pos.entry_price,
                     "stop_loss": pos.stop_loss,
                     "atr": getattr(pos, "atr", None),
-                    "orb_low": getattr(pos, "orb_low", None),
                 }
                 for sym, pos in _positions.items()
             ]
@@ -303,37 +302,37 @@ def create_app(
         except Exception:
             return []
 
+    # ── Delete trade ──────────────────────────────────────────────────────────
+    @app.delete("/delete-trade")
+    def delete_trade(trade_date: str, symbol: str):
+        try:
+            with sqlite3.connect(_ticks_db, check_same_thread=False) as c:
+                c.execute(
+                    "DELETE FROM intraday_trades WHERE trade_date=? AND symbol=? AND is_paper=0",
+                    (trade_date, symbol),
+                )
+            return {"ok": True}
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
     # ── Trade history (multi-day) ─────────────────────────────────────────────
     @app.get("/trade-history")
     def get_trade_history(limit: int = 500):
-        if _store is None:
-            daily_db_path = None
-        else:
-            daily_db_path = getattr(_store, "db_path", None)
-
         try:
             with sqlite3.connect(f"file:{_ticks_db}?mode=ro", uri=True,
                                  check_same_thread=False) as c:
                 c.row_factory = sqlite3.Row
-                if daily_db_path and Path(daily_db_path).exists():
-                    try:
-                        c.execute(f"ATTACH DATABASE 'file:{daily_db_path}?mode=ro' AS wldb")
-                        name_join = "LEFT JOIN wldb.watchlist w ON w.stock_id = t.symbol"
-                    except Exception:
-                        name_join = ""
-                else:
-                    name_join = ""
-
-                rows = c.execute(f"""
+                rows = c.execute("""
                     SELECT
                         t.trade_date,
                         t.symbol,
-                        COALESCE(w.name, '') AS name,
+                        '' AS name,
                         MAX(t.dry_run)       AS dry_run,
                         ROUND(SUM(t.pnl), 0) AS pnl,
                         COUNT(*)             AS trade_count,
-                        ROUND(AVG(NULLIF(COALESCE(t.entry_price,0),0)), 2) AS avg_entry,
-                        ROUND(AVG(NULLIF(COALESCE(t.exit_price,0), 0)), 2) AS avg_exit,
+                        SUM(t.lots)          AS total_lots,
+                        ROUND(SUM(CASE WHEN COALESCE(t.entry_price,0)>0 THEN t.entry_price*t.lots ELSE 0 END)/NULLIF(SUM(CASE WHEN COALESCE(t.entry_price,0)>0 THEN t.lots ELSE 0 END),0), 1) AS avg_entry,
+                        ROUND(SUM(CASE WHEN COALESCE(t.exit_price,0)>0  THEN t.exit_price *t.lots ELSE 0 END)/NULLIF(SUM(CASE WHEN COALESCE(t.exit_price,0)>0  THEN t.lots ELSE 0 END),0), 1) AS avg_exit,
                         SUM(
                             CAST(COALESCE(t.entry_price,0)*t.lots*1000*0.001425 AS INTEGER) +
                             CAST(COALESCE(t.exit_price,0) *t.lots*1000*0.001425 AS INTEGER) +
@@ -344,7 +343,6 @@ def create_app(
                             CAST(COALESCE(t.exit_price,0) *t.lots*1000*0.001425 AS INTEGER)
                         ) AS brokerage_only
                     FROM intraday_trades t
-                    {name_join}
                     WHERE t.is_paper = 0
                     GROUP BY t.trade_date, t.symbol
                     ORDER BY t.trade_date DESC, t.symbol
@@ -354,100 +352,80 @@ def create_app(
         except Exception:
             return []
 
-    # ── Daytrade list (pre-session screened stocks) ───────────────────────────
+    # ── Daytrade list — 全部改從 PG backend 讀取 ─────────────────────────────
+    _BACKEND = "http://localhost:8000"
+
     @app.get("/daytrade-list")
     def get_daytrade_list(date_str: str = ""):
-        if _store is None:
-            raise HTTPException(status_code=503, detail="daily_store 未初始化")
-        daily_db_path = getattr(_store, "db_path", None)
-        if not daily_db_path or not Path(daily_db_path).exists():
-            raise HTTPException(status_code=503, detail="daily.db 未就緒")
+        import httpx as _httpx
+        params = {"date_str": date_str} if date_str else {}
         try:
-            with sqlite3.connect(f"file:{daily_db_path}?mode=ro", uri=True,
-                                 check_same_thread=False) as c:
-                c.row_factory = sqlite3.Row
-                if date_str:
-                    target_date = date_str
-                else:
-                    row = c.execute("SELECT MAX(date) FROM daytrade_list").fetchone()
-                    target_date = row[0] if row and row[0] else _today()
+            r = _httpx.get(f"{_BACKEND}/api/daytrade/list", params=params, timeout=10)
+            return r.json()
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=str(e))
 
-                rows = c.execute("""
-                    SELECT
-                        d.stock_id,
-                        COALESCE(w.name, '') AS name,
-                        dp.close             AS prev_close,
-                        dp.volume            AS volume,
-                        (SELECT close FROM daily_price dp_p
-                         WHERE dp_p.stock_id = d.stock_id AND dp_p.date < dp.date
-                         ORDER BY dp_p.date DESC LIMIT 1) AS prev_prev_close,
-                        (SELECT AVG(volume) FROM (
-                            SELECT volume FROM daily_price dp3
-                            WHERE dp3.stock_id = d.stock_id
-                            ORDER BY dp3.date DESC LIMIT 5
-                        )) AS avg_vol5,
-                        (SELECT AVG(close) FROM (
-                            SELECT close FROM daily_price dp2
-                            WHERE dp2.stock_id = d.stock_id
-                            ORDER BY dp2.date DESC LIMIT 20
-                        )) AS ma20,
-                        COALESCE(inst.foreign_net, 0)   AS foreign_net,
-                        COALESCE(inst.trust_net, 0)     AS trust_net,
-                        COALESCE(inst.dealer_net, 0)    AS dealer_net,
-                        COALESCE(mgn.margin_balance, 0) AS margin_balance,
-                        COALESCE(mgn.margin_change, 0)  AS margin_change,
-                        COALESCE(mgn.short_balance, 0)  AS short_balance
-                    FROM daytrade_list d
-                    LEFT JOIN watchlist w ON w.stock_id = d.stock_id
-                    LEFT JOIN daily_price dp ON dp.stock_id = d.stock_id
-                        AND dp.date = (
-                            SELECT MAX(date) FROM daily_price m WHERE m.stock_id = d.stock_id
-                        )
-                    LEFT JOIN institutional inst ON inst.stock_id = d.stock_id
-                        AND inst.date = (
-                            SELECT MAX(date) FROM institutional i WHERE i.stock_id = d.stock_id
-                        )
-                    LEFT JOIN margin mgn ON mgn.stock_id = d.stock_id
-                        AND mgn.date = (
-                            SELECT MAX(date) FROM margin m WHERE m.stock_id = d.stock_id
-                        )
-                    WHERE d.date = ?
-                    ORDER BY d.stock_id
-                """, (target_date,)).fetchall()
+    @app.post("/daytrade-list/sync")
+    def sync_daytrade_list(date_str: str = ""):
+        """21:05 由 backend job8 觸發：PG pool × 選股篩選結果 → PG daytrade_candidate"""
+        from datetime import date as _date, timedelta
+        import httpx as _httpx
 
-                result = []
-                for r in rows:
-                    row_d = dict(r)
-                    prev = row_d.get("prev_prev_close") or row_d.get("prev_close") or 0
-                    cur  = row_d.get("prev_close") or 0
-                    change = round(cur - prev, 2) if prev else 0
-                    change_pct = round(change / prev * 100, 2) if prev else 0
-                    avg5 = row_d.get("avg_vol5") or 0
-                    row_d["change"] = change
-                    row_d["change_pct"] = change_pct
-                    row_d["avg_vol5"] = round(avg5)
-                    row_d["above_ma20"] = cur > (row_d.get("ma20") or 0)
-                    row_d["vol_ok"] = avg5 >= 2000
-                    # chip_count: 外資買 + 投信買 + 融資減
-                    row_d["chip_count"] = (
-                        (1 if row_d["foreign_net"] > 0 else 0) +
-                        (1 if row_d["trust_net"] > 0 else 0) +
-                        (1 if row_d["margin_change"] < 0 else 0)
-                    )
-                    result.append(row_d)
-                return {"date": target_date, "count": len(result), "stocks": result}
+        base = _date.fromisoformat(date_str) if date_str else _date.today()
+        nxt = base + timedelta(days=1)
+        while nxt.weekday() >= 5:
+            nxt += timedelta(days=1)
+        target_date = nxt.isoformat()
+
+        # 取 PG pool
+        pool_ids: list[str] = []
+        try:
+            pr = _httpx.get(f"{_BACKEND}/api/pool", timeout=10)
+            if pr.status_code == 200:
+                pool_ids = [p["code"] for p in pr.json()]
+        except Exception:
+            pass
+
+        # 取篩選結果 score-a + score-b
+        screened: set[str] = set()
+        try:
+            for ep in (f"{_BACKEND}/api/score-a", f"{_BACKEND}/api/score-b"):
+                r = _httpx.get(ep, timeout=10)
+                if r.status_code == 200:
+                    screened.update(row["code"] for row in r.json() if "code" in row)
+        except Exception:
+            pass
+
+        selected = [s for s in pool_ids if s in screened] if screened else pool_ids
+
+        # 寫入 PG（source of truth）
+        try:
+            _httpx.post(f"{_BACKEND}/api/daytrade/sync",
+                        json={"date": target_date, "codes": selected}, timeout=10)
+        except Exception:
+            pass
+
+        return {"ok": True, "date": target_date, "count": len(selected),
+                "pool": len(pool_ids), "screened": len(screened)}
+
+    @app.post("/sync-pool")
+    def sync_pool_from_pg():
+        """確認 PG stock_pool 可存取（SQLite 已廢棄）"""
+        import httpx as _httpx
+        try:
+            r = _httpx.get(f"{_BACKEND}/api/pool", timeout=10)
+            if r.status_code != 200:
+                raise HTTPException(status_code=502, detail=f"PG pool API 回傳 {r.status_code}")
+            return {"ok": True, "synced": len(r.json())}
+        except HTTPException:
+            raise
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
 
     @app.get("/daytrade-list/live")
     def get_daytrade_list_live():
-        """Fubon-style: INNER JOIN watchlist + criteria (above_ma20 & vol_ok & chip_count>=2) + dry_run_watchlist."""
-        if _store is None:
-            raise HTTPException(status_code=503, detail="daily_store 未初始化")
-        daily_db_path = getattr(_store, "db_path", None)
-        if not daily_db_path or not Path(daily_db_path).exists():
-            raise HTTPException(status_code=503, detail="daily.db 未就緒")
-
+        """PG-backed: 取最新 daytrade candidates，套用 above_ma20 & vol_ok & chip_count>=2"""
+        import httpx as _httpx
         config_watchlist: list = []
         try:
             import yaml
@@ -460,106 +438,24 @@ def create_app(
             ]
         except Exception:
             pass
-
         try:
-            with sqlite3.connect(f"file:{daily_db_path}?mode=ro", uri=True,
-                                 check_same_thread=False) as c:
-                c.row_factory = sqlite3.Row
-                date_row = c.execute("SELECT MAX(date) FROM daytrade_list").fetchone()
-                target_date = date_row[0] if date_row and date_row[0] else _today()
-
-                rows = c.execute("""
-                    SELECT
-                        d.stock_id,
-                        COALESCE(w.name, '') AS name,
-                        dp.close             AS prev_close,
-                        (SELECT close FROM daily_price dp_p
-                         WHERE dp_p.stock_id = d.stock_id AND dp_p.date < dp.date
-                         ORDER BY dp_p.date DESC LIMIT 1) AS prev_prev_close,
-                        (SELECT AVG(volume) FROM (
-                            SELECT volume FROM daily_price dp3
-                            WHERE dp3.stock_id = d.stock_id
-                            ORDER BY dp3.date DESC LIMIT 5
-                        )) AS avg_vol5,
-                        (SELECT AVG(close) FROM (
-                            SELECT close FROM daily_price dp2
-                            WHERE dp2.stock_id = d.stock_id
-                            ORDER BY dp2.date DESC LIMIT 20
-                        )) AS ma20,
-                        COALESCE(inst.foreign_net, 0)  AS foreign_net,
-                        COALESCE(inst.trust_net, 0)    AS trust_net,
-                        COALESCE(mgn.margin_change, 0) AS margin_change
-                    FROM daytrade_list d
-                    JOIN watchlist w ON w.stock_id = d.stock_id
-                    LEFT JOIN daily_price dp ON dp.stock_id = d.stock_id
-                        AND dp.date = (
-                            SELECT MAX(date) FROM daily_price m WHERE m.stock_id = d.stock_id
-                        )
-                    LEFT JOIN institutional inst ON inst.stock_id = d.stock_id
-                        AND inst.date = (
-                            SELECT MAX(date) FROM institutional i WHERE i.stock_id = d.stock_id
-                        )
-                    LEFT JOIN margin mgn ON mgn.stock_id = d.stock_id
-                        AND mgn.date = (
-                            SELECT MAX(date) FROM margin m WHERE m.stock_id = d.stock_id
-                        )
-                    WHERE d.date = ?
-                    ORDER BY d.stock_id
-                """, (target_date,)).fetchall()
-
-            result = []
-            for r in rows:
-                row_d = dict(r)
-                prev = row_d.get("prev_prev_close") or row_d.get("prev_close") or 0
-                cur  = row_d.get("prev_close") or 0
-                avg5 = row_d.get("avg_vol5") or 0
-                ma20 = row_d.get("ma20") or 0
-
-                above_ma20 = cur > ma20
-                vol_ok     = avg5 >= 2000
-                chip_count = (
-                    (1 if row_d["foreign_net"] > 0 else 0) +
-                    (1 if row_d["trust_net"] > 0 else 0) +
-                    (1 if row_d["margin_change"] < 0 else 0)
-                )
-
-                if not (above_ma20 and vol_ok and chip_count >= 2):
-                    continue
-                if config_watchlist and row_d["stock_id"] not in config_watchlist:
-                    continue
-
-                change = round(cur - prev, 2) if prev else 0
-                change_pct = round(change / prev * 100, 2) if prev else 0
-                row_d["change"] = change
-                row_d["change_pct"] = change_pct
-                row_d["avg_vol5"] = round(avg5)
-                row_d["above_ma20"] = above_ma20
-                row_d["vol_ok"] = vol_ok
-                row_d["chip_count"] = chip_count
-                result.append(row_d)
-
+            r = _httpx.get(f"{_BACKEND}/api/daytrade/list", params={"live": "true"}, timeout=10)
+            data = r.json()
+            stocks = data.get("stocks", [])
             if config_watchlist:
+                stocks = [s for s in stocks if s["stock_id"] in config_watchlist]
                 order_map = {sym: i for i, sym in enumerate(config_watchlist)}
-                result.sort(key=lambda x: order_map.get(x["stock_id"], len(config_watchlist)))
-
-            return {"date": target_date, "count": len(result), "stocks": result}
+                stocks.sort(key=lambda x: order_map.get(x["stock_id"], len(config_watchlist)))
+            return {"date": data.get("date"), "count": len(stocks), "stocks": stocks}
         except Exception as e:
-            raise HTTPException(status_code=500, detail=str(e))
+            raise HTTPException(status_code=502, detail=str(e))
 
     @app.get("/daytrade-list/dates")
     def get_daytrade_dates():
-        if _store is None:
-            return []
-        daily_db_path = getattr(_store, "db_path", None)
-        if not daily_db_path or not Path(daily_db_path).exists():
-            return []
+        import httpx as _httpx
         try:
-            with sqlite3.connect(f"file:{daily_db_path}?mode=ro", uri=True,
-                                 check_same_thread=False) as c:
-                rows = c.execute(
-                    "SELECT date, COUNT(*) as cnt FROM daytrade_list GROUP BY date ORDER BY date DESC LIMIT 30"
-                ).fetchall()
-            return [{"date": r[0], "count": r[1]} for r in rows]
+            r = _httpx.get(f"{_BACKEND}/api/daytrade/dates", timeout=10)
+            return r.json()
         except Exception:
             return []
 
@@ -774,25 +670,19 @@ def create_app(
             detail=engine_detail, data_source="ticks.db/ticks",
             logic="最後 tick < 15分 → 資料流正常（盤中）")
 
-        # 09-19: per-stock checks using first symbol from daytrade_list
+        # 09-19: per-stock checks using first symbol from daytrade_list (PG-backed)
         sample_sym = None
         prev_close = None
-        if _store is not None:
-            daily_db_path = getattr(_store, "db_path", None)
-            if daily_db_path and Path(daily_db_path).exists():
-                try:
-                    with sqlite3.connect(f"file:{daily_db_path}?mode=ro", uri=True,
-                                         check_same_thread=False) as c:
-                        row = c.execute(
-                            "SELECT d.stock_id, dp.close FROM daytrade_list d "
-                            "LEFT JOIN daily_price dp ON dp.stock_id=d.stock_id "
-                            "AND dp.date=(SELECT MAX(date) FROM daily_price m WHERE m.stock_id=d.stock_id) "
-                            "WHERE d.date=(SELECT MAX(date) FROM daytrade_list) LIMIT 1"
-                        ).fetchone()
-                        if row:
-                            sample_sym, prev_close = row[0], row[1]
-                except Exception:
-                    pass
+        try:
+            import httpx as _httpx
+            _dt_r = _httpx.get(f"{_BACKEND}/api/daytrade/list", timeout=5)
+            if _dt_r.status_code == 200:
+                _dt_stocks = _dt_r.json().get("stocks", [])
+                if _dt_stocks:
+                    sample_sym = _dt_stocks[0].get("stock_id")
+                    prev_close = _dt_stocks[0].get("prev_close")
+        except Exception:
+            pass
 
         if sample_sym:
             # 09: prev close
@@ -987,43 +877,28 @@ def create_app(
     def get_system_status():
         result: dict = {}
 
-        # daily.db stats
-        if _store is not None:
-            daily_db_path = getattr(_store, "db_path", None)
-            if daily_db_path and Path(daily_db_path).exists():
-                p = Path(daily_db_path)
-                result["daily_db_mb"] = round(p.stat().st_size / 1024 / 1024, 2)
-                try:
-                    with sqlite3.connect(f"file:{daily_db_path}?mode=ro", uri=True,
-                                         check_same_thread=False) as c:
-                        row = c.execute(
-                            "SELECT date, COUNT(*) FROM daytrade_list GROUP BY date ORDER BY date DESC LIMIT 1"
-                        ).fetchone()
-                        if row:
-                            result["daytrade_latest_date"] = row[0]
-                            result["daytrade_latest_count"] = row[1]
-                        else:
-                            result["daytrade_latest_date"] = None
-                            result["daytrade_latest_count"] = 0
-
-                        row2 = c.execute(
-                            "SELECT COUNT(*) FROM watchlist"
-                        ).fetchone()
-                        result["watchlist_count"] = row2[0] if row2 else 0
-
-                        row3 = c.execute(
-                            "SELECT run_date, status, success_stocks, total_stocks FROM pre_session_log "
-                            "ORDER BY run_date DESC LIMIT 1"
-                        ).fetchone()
-                        if row3:
-                            result["last_presession_date"] = row3[0]
-                            result["last_presession_status"] = row3[1]
-                            result["last_presession_success"] = row3[2]
-                            result["last_presession_total"] = row3[3]
-                except Exception:
-                    pass
-            else:
-                result["daily_db_mb"] = 0
+        # PG 當沖 / pool stats
+        result["daily_db_mb"] = 0  # SQLite 已廢棄
+        try:
+            import httpx as _httpx
+            _pool_r = _httpx.get(f"{_BACKEND}/api/pool", timeout=5)
+            if _pool_r.status_code == 200:
+                result["watchlist_count"] = len(_pool_r.json())
+            _dt_r = _httpx.get(f"{_BACKEND}/api/daytrade/list", timeout=5)
+            if _dt_r.status_code == 200:
+                _dt_resp = _dt_r.json()
+                result["daytrade_latest_date"] = _dt_resp.get("date")
+                result["daytrade_latest_count"] = _dt_resp.get("count", 0)
+            _ps_r = _httpx.get(f"{_BACKEND}/api/pre-session/logs", params={"limit": 1}, timeout=5)
+            if _ps_r.status_code == 200:
+                _ps = _ps_r.json()
+                if _ps:
+                    result["last_presession_date"] = _ps[0].get("run_date")
+                    result["last_presession_status"] = _ps[0].get("status")
+                    result["last_presession_success"] = _ps[0].get("success_stocks")
+                    result["last_presession_total"] = _ps[0].get("total_stocks")
+        except Exception:
+            pass
 
         # ticks.db stats
         if Path(_ticks_db).exists():
@@ -1072,15 +947,20 @@ def create_app(
     # ── Pre-session log ───────────────────────────────────────────────────────
     @app.get("/pre-session/logs")
     def get_pre_session_logs():
+        import httpx as _httpx
+        try:
+            r = _httpx.get(f"{_BACKEND}/api/pre-session/logs", timeout=8)
+            if r.status_code == 200:
+                return r.json()
+        except Exception:
+            pass
         if _store is None:
             return []
         return _store.get_pre_session_logs(limit=10)
 
     @app.get("/pre-session/db-size")
     def get_db_size():
-        if _store is None:
-            return {"size_mb": 0}
-        return {"size_mb": round(_store.get_db_size_mb(), 2)}
+        return {"size_mb": 0}
 
     # ── Config update (preserve comments via regex) ───────────────────────────
     _CONFIG_ALLOWED = {
@@ -1088,7 +968,6 @@ def create_app(
         'trading.force_exit_time', 'trading.latest_dynamic_add_time',
         'trading.time_stop_hour',
         # 進場信號
-        'signal.orb_window_minutes', 'signal.orb_volume_multiplier',
         'signal.market_drop_threshold', 'signal.limit_up_buffer',
         'signal.max_entry_gain_pct',
         'signal.futures_rocket_threshold', 'signal.futures_crash_threshold',
@@ -1096,7 +975,7 @@ def create_app(
         'signal.futures_spread_sell_pct', 'signal.futures_spread_fast_reversal_pct',
         # 風控
         'risk.atr_multiplier', 'risk.risk_per_trade_pct',
-        'risk.take_profit_pct', 'risk.vwap_exit_volume_ratio',
+        'risk.take_profit_pct',
         'risk.trailing_trigger_pct', 'risk.trailing_pullback_pct',
         # 委託（dry run 時無效，未來用）
         'order.buy_order_timeout_secs', 'order.buy_retry_ticks',
@@ -1263,66 +1142,51 @@ def create_app(
         trailing_trigger_pct = float(risk_cfg.get("trailing_trigger_pct", 2.0))
         trailing_pullback_pct = float(risk_cfg.get("trailing_pullback_pct", 1.5))
         take_profit_pct      = float(risk_cfg.get("take_profit_pct", 5.0))
-        orb_volume_mult      = float(signal_cfg.get("orb_volume_multiplier", 1.5))
-        orb_window           = int(signal_cfg.get("orb_window_minutes", 15))
         max_entry_gain_pct   = float(signal_cfg.get("max_entry_gain_pct", 4.0))
         limit_up_buffer_pct  = float(signal_cfg.get("limit_up_buffer", 4.0))
         max_pos_capital      = float(trading_cfg.get("max_position_capital", 1_000_000))
 
         step("設定讀取", "config.yaml 讀取完成",
              atr_multiplier=atr_multiplier, trailing_trigger_pct=trailing_trigger_pct,
-             trailing_pullback_pct=trailing_pullback_pct, orb_window=orb_window,
-             orb_volume_mult=orb_volume_mult)
+             trailing_pullback_pct=trailing_pullback_pct)
 
         # ── Phase 1: 選股 ────────────────────────────────────────────
-        atr = round(ref_price * 0.015, 1)          # 估算 ATR ≈ 1.5% of price
-        limitup_price = round(ref_price * 1.10, 1) # 漲停 ≈ +10%
-        step("選股", f"{symbol}  ref={ref_price}  ATR≈{atr}  漲停={limitup_price}  "
-                     f"策略={orb_window}分ORB",
+        atr = round(ref_price * 0.015, 1)
+        limitup_price = round(ref_price * 1.10, 1)
+        step("選股", f"{symbol}  ref={ref_price}  ATR≈{atr}  漲停={limitup_price}",
              symbol=symbol, ref_price=ref_price, atr=atr, limitup_price=limitup_price)
 
-        # ── Phase 2: ORB 觀察期 9:00–9:14 ───────────────────────────
-        sess = SymbolSession(symbol, ref_price, limitup_price, atr,
-                             orb_window_minutes=orb_window)
+        # ── Phase 2: 注入 1min K 棒（前10根盤整 → 後5根量價齊揚）────
+        sess = SymbolSession(symbol, ref_price, limitup_price, atr)
 
-        # 注入 15 根 1min bar（前10根盤整、後5根微升 → MA5 > MA20）
+        avg_vol = 900  # 模擬均量
         bar_closes = [ref_price] * 10 + [
             ref_price + 0.5, ref_price + 1.0,
             ref_price + 1.0, ref_price + 1.5,
             ref_price + 2.0,
         ]
-        bar_vols = [800] * 10 + [900, 950, 900, 920, 1000]
+        bar_vols = [avg_vol] * 10 + [900, 950, 900, 920, 1000]
 
         for i, (close, vol) in enumerate(zip(bar_closes, bar_vols)):
-            minute = datetime(2026, 6, 16, 9, i)
-            high = round(close + 0.5, 1)
-            low  = round(close - 0.5, 1)
             sess._df_1min.append({
-                "open": round(close - 0.2, 1), "high": high,
-                "low": low, "close": close, "volume": vol,
+                "open": round(close - 0.2, 1), "high": round(close + 0.5, 1),
+                "low": round(close - 0.5, 1), "close": close, "volume": vol,
             })
-            sess.orb.on_bar(high, low, minute)
             sess.prev_1min_volume = vol
             sess.prev_1min_close  = close
 
-        orb_high = sess.orb.orb_high
-        orb_low  = sess.orb.orb_low
-        sess.orb.is_locked = True  # 模擬 9:15 鎖定
-        avg_orb_vol = sum(bar_vols) / len(bar_vols)
+        # ── Phase 3: 模擬進場信號（量價齊揚）───────────────────────
+        surge_price = round(ref_price + 2.5, 1)   # 比前收高
+        surge_vol   = int(avg_vol * 2.0)           # 爆量 ≥ 均量×1.5
 
-        step("ORB鎖定", f"ORB high={orb_high}  low={orb_low}  均量={avg_orb_vol:.0f}",
-             orb_high=orb_high, orb_low=orb_low, avg_orb_vol=avg_orb_vol)
-
-        # ── Phase 3: 突破進場 9:16 ───────────────────────────────────
-        breakout_price = round(orb_high + 0.5, 1)  # 比 ORB high 高一個 tick
-        breakout_vol   = int(avg_orb_vol * orb_volume_mult * 1.2)  # 確保超過 1.5× 均量
-
-        sess.curr_price = breakout_price
-
-        # 讓 bar_builder.current_1min.volume = breakout_vol（ORB 信號需要）
+        sess.curr_price = surge_price
         class _FakeBar:
-            volume = breakout_vol
+            volume = surge_vol
         sess.bar_builder.current_1min = _FakeBar()
+
+        # 模擬委買壓力 ≥ 65%
+        sess.last_bids = [{"size": 700}]
+        sess.last_asks = [{"size": 300}]
 
         combiner = SignalCombiner(
             max_entry_gain_pct=max_entry_gain_pct,
@@ -1339,57 +1203,56 @@ def create_app(
             not_in_position=True,
             entry_cutoff_mins=13 * 60 + 10,
             market_ok=True,
-            orb_volume_multiplier=orb_volume_mult,
         )
 
-        orb_fired = sess.orb_signal(orb_volume_mult)
-        step("信號評估", f"should_enter={sig.should_enter}  orb_signal={orb_fired}  "
-                         f"reason={sig.reason or '—'}  breakout_vol={breakout_vol}(需>{avg_orb_vol*orb_volume_mult:.0f})",
-             should_enter=sig.should_enter, orb_signal=orb_fired,
-             breakout_price=breakout_price)
+        vp_score = sess.volume_price_score(vp)
+        step("信號評估", f"should_enter={sig.should_enter}  vp_score={vp_score}  "
+                         f"reason={sig.reason or '—'}  surge_vol={surge_vol}(均量={avg_vol}×2.0)",
+             should_enter=sig.should_enter, vp_score=vp_score,
+             surge_price=surge_price)
 
         # ── 計算張數 ─────────────────────────────────────────────────
         bm   = BudgetManager(total_capital=max_pos_capital * 3,
                              risk_per_trade_pct=risk_per_trade_pct,
                              max_position_capital=max_pos_capital)
         lots = bm.calculate_lots(atr=atr, atr_multiplier=atr_multiplier,
-                                 price=breakout_price, remaining_budget=max_pos_capital)
+                                 price=surge_price, remaining_budget=max_pos_capital)
         lots = max(lots, 1)
 
         # ── 建立持倉 ─────────────────────────────────────────────────
         pos = Position(
             symbol=symbol,
-            entry_price=breakout_price,
+            entry_price=surge_price,
             lots=lots,
             atr=atr,
             atr_multiplier=atr_multiplier,
             trailing_trigger_pct=trailing_trigger_pct,
             trailing_pullback_pct=trailing_pullback_pct,
-            orb_low=orb_low,
+            orb_low=None,
         )
         cond_stop = round_up_tick(pos.stop_loss)
 
-        step("進場", f"價={breakout_price}  張={lots}  "
+        step("進場", f"價={surge_price}  張={lots}  "
                      f"停損={pos.stop_loss:.2f}→tick捨入={cond_stop}  "
-                     f"資金={breakout_price*lots*1000:,.0f}",
-             entry_price=breakout_price, lots=lots,
+                     f"資金={surge_price*lots*1000:,.0f}",
+             entry_price=surge_price, lots=lots,
              stop_loss=pos.stop_loss, cond_stop=cond_stop,
-             capital_used=breakout_price*lots*1000)
+             capital_used=surge_price*lots*1000)
 
         notifier = LineNotifier(dry_run=False)
         buy_msg = (
             f"🟢【完整模擬進場】{symbol}\n"
-            f"時間=09:16  價={breakout_price}  張={lots}\n"
+            f"時間=09:16  價={surge_price}  張={lots}\n"
             f"ATR={atr}(×{atr_multiplier})  停損={pos.stop_loss:.2f}\n"
-            f"觸價單={cond_stop}  ORB突破({orb_high}→{breakout_price})"
+            f"觸價單={cond_stop}  量價齊揚(量={surge_vol}張)"
         )
         sent_buy = notifier.send(buy_msg)
         step("LINE進場通知", f"sent={sent_buy}")
 
         # ── Phase 4: 持倉追蹤（模擬漲到 +3%）───────────────────────
-        step("持倉追蹤", f"模擬價格從 {breakout_price} 上漲到 +3%")
+        step("持倉追蹤", f"模擬價格從 {surge_price} 上漲到 +3%")
         sim_prices = [
-            round(breakout_price * (1 + i * 0.005), 1)
+            round(surge_price * (1 + i * 0.005), 1)
             for i in range(7)  # +0%, +0.5%, +1%, +1.5%, +2%, +2.5%, +3%
         ]
 
@@ -1401,7 +1264,7 @@ def create_app(
             if pos.trailing_active and not before_trail:
                 trail_step = step("移動停利啟動",
                                   f"價={p}  peak={pos.peak_price}  "
-                                  f"漲幅={((p-breakout_price)/breakout_price*100):.1f}%",
+                                  f"漲幅={((p-surge_price)/surge_price*100):.1f}%",
                                   trigger_price=p, peak=pos.peak_price)
             if r:
                 exit_reason = r
@@ -1420,11 +1283,11 @@ def create_app(
         else:
             pullback_price = pos.peak_price  # 已提前出場
 
-        pnl = (pullback_price - breakout_price) * lots * 1000
+        pnl = (pullback_price - surge_price) * lots * 1000
 
         sell_msg = (
             f"🔴【完整模擬出場】{symbol}\n"
-            f"原因={exit_reason}  {breakout_price}→{pullback_price}  {lots}張\n"
+            f"原因={exit_reason}  {surge_price}→{pullback_price}  {lots}張\n"
             f"損益={pnl:+,.0f}  peak={pos.peak_price}"
         )
         sent_sell = notifier.send(sell_msg)
@@ -1432,8 +1295,8 @@ def create_app(
 
         step("結算",
              f"損益={pnl:+,.0f}  {'獲利' if pnl > 0 else '虧損'}  "
-             f"進={breakout_price}→出={pullback_price}  {lots}張",
-             pnl=pnl, win=pnl > 0, entry=breakout_price, exit=pullback_price, lots=lots)
+             f"進={surge_price}→出={pullback_price}  {lots}張",
+             pnl=pnl, win=pnl > 0, entry=surge_price, exit=pullback_price, lots=lots)
 
         return {"ok": True, "pnl": pnl, "win": pnl > 0, "log": log}
 
@@ -1518,11 +1381,9 @@ def create_app(
         data_dir = os.environ.get("FUBON_DATA_DIR", "/fubon-data")
         log_dir = os.environ.get("FUBON_LOG_DIR", "/fubon-logs")
         ticks_db_path = os.path.join(data_dir, "ticks.db")
-        daily_db_path = os.path.join(data_dir, "daily.db")
         ok = _engine.start(
             config_path=config_path,
             ticks_db=ticks_db_path,
-            daily_db=daily_db_path,
             log_dir=log_dir,
         )
         if not ok:
@@ -1562,7 +1423,6 @@ def create_app(
         this_min_str  = this_min.strftime("%Y-%m-%d %H:%M:%S")
         prev_min_str  = (this_min - timedelta(minutes=1)).strftime("%Y-%m-%d %H:%M:%S")
         prev2_min_str = (this_min - timedelta(minutes=2)).strftime("%Y-%m-%d %H:%M:%S")
-        orb_end = f"{today} 09:15:00"
 
         c = _get_live_conn()
         if c is None:
@@ -1603,29 +1463,6 @@ def create_app(
                     bid_vol=bv or 0, ask_vol=av or 0,
                     bid_pct=round(bv / total * 100) if total else 50,
                 )
-
-            # VWAP (today, volume-weighted)
-            for sym, vwap in c.execute(
-                f"""SELECT symbol,
-                    CASE WHEN SUM(volume) > 0
-                         THEN ROUND(SUM(CAST(price AS REAL) * volume) / SUM(volume), 2)
-                         ELSE NULL END
-                    FROM ticks WHERE ts LIKE ? AND symbol IN ({ph})
-                    GROUP BY symbol""",
-                [today_pct] + symbols,
-            ).fetchall():
-                if vwap is not None:
-                    out.setdefault(sym, {})["vwap"] = vwap
-
-            # ORB (09:00–09:15 today)
-            for sym, orb_h, orb_l in c.execute(
-                f"""SELECT symbol, MAX(price), MIN(price)
-                    FROM ticks WHERE ts >= ? AND ts <= ? AND symbol IN ({ph})
-                    GROUP BY symbol""",
-                [f"{today} 09:00:00", orb_end] + symbols,
-            ).fetchall():
-                if orb_h is not None:
-                    out.setdefault(sym, {}).update(orb_high=orb_h, orb_low=orb_l)
 
             # 1-minute volume comparison
             for sym, cv, pv in c.execute(

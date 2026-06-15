@@ -1,5 +1,5 @@
 from collections import defaultdict
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Optional
 from fastapi import APIRouter, Depends, Query, HTTPException
 from pydantic import BaseModel
@@ -7,10 +7,12 @@ from sqlalchemy import select, and_, func, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_db
 from app.db.base import engine
+import asyncio
 from app.db.models import (
     ScreeningResult, FetchLog, DailyPrice, MarginTrading, AIPick,
     StockList, Institutional, Shareholding, IcClassification,
     CompanyTag, MonthlyRevenue, QuarterlyEps, WatchlistA, StockPool, UsWatchlist,
+    DaytradeCandidate, DaytradePreSessionLog,
 )
 from app.services.screener import calc_bb_position
 
@@ -401,6 +403,7 @@ _JOB_SCHEDULE = {
     "job2": "20:45（週一～五）",
     "job3": "18:30（週日）",
     "job4": "21:00（週一～五）",
+    "job8": "21:05（週一～五）",
     "job5": "每月10-25日 12:00",
     "job6": "每季（3/1, 5/16, 8/15, 11/15）",
     "job7": "每半年（1/1, 7/1）",
@@ -411,6 +414,7 @@ _JOB_DISPLAY_NAME = {
     "job2": "融資借券",
     "job3": "大戶持股",
     "job4": "選股篩選",
+    "job8": "當沖篩選",
     "job5": "月營收",
     "job6": "季報EPS",
     "job7": "產業鏈",
@@ -439,6 +443,7 @@ async def get_data_status(db: AsyncSession = Depends(get_db)):
         "job2": next((l for l in logs if l.job_name == "job2" and str(l.fetch_date) == str(date.today())), None),
         "job3": next((l for l in logs if l.job_name == "job3"), None),
         "job4": next((l for l in logs if l.job_name == "job4" and str(l.fetch_date) == str(date.today())), None),
+        "job8": next((l for l in logs if l.job_name == "job8" and str(l.fetch_date) == str(date.today())), None),
         "job5": _best_log("job5_"),
         "job6": _best_log("job6_"),
         "job7": _best_log("job7_"),
@@ -464,7 +469,7 @@ async def get_data_status(db: AsyncSession = Depends(get_db)):
 
     return {
         "date": str(date.today()),
-        "jobs": [_fmt_job(j) for j in ("job1", "job2", "job3", "job4", "job5", "job6", "job7")],
+        "jobs": [_fmt_job(j) for j in ("job1", "job2", "job3", "job4", "job8", "job5", "job6", "job7")],
         "is_reliable": log_map.get("job4") is not None and log_map["job4"].status == "success",
         "data_sources": {
             "institutional": {"label": "法人買賣超", "source": "TWSE T86", "via": "job1 18:00"},
@@ -583,7 +588,7 @@ async def get_market_overview():
         for sym, name in symbols.items():
             try:
                 t = yf.Ticker(sym)
-                hist = t.history(period="2d")
+                hist = t.history(period="5d")
                 if len(hist) < 2:
                     continue
                 prev_close = hist["Close"].iloc[-2]
@@ -1420,6 +1425,15 @@ async def get_pool(db: AsyncSession = Depends(get_db)):
     ]
 
 
+async def _trigger_fubon_pool_sync():
+    import httpx
+    try:
+        async with httpx.AsyncClient() as client:
+            await client.post("http://host.docker.internal:8090/sync-pool", timeout=10)
+    except Exception:
+        pass
+
+
 @router.post("/api/pool")
 async def add_to_pool(body: PoolAddBody, db: AsyncSession = Depends(get_db)):
     """加入股票到池"""
@@ -1439,6 +1453,7 @@ async def add_to_pool(body: PoolAddBody, db: AsyncSession = Depends(get_db)):
     await db.commit()
     from app.services.scheduler import backfill_financials_for_codes
     asyncio.create_task(backfill_financials_for_codes([body.code]))
+    asyncio.create_task(_trigger_fubon_pool_sync())
     return {"ok": True, "code": body.code, "name": name}
 
 
@@ -1452,7 +1467,20 @@ async def remove_from_pool(code: str, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Not in pool")
     await db.delete(row)
     await db.commit()
+    asyncio.create_task(_trigger_fubon_pool_sync())
     return {"ok": True}
+
+
+@router.post("/api/admin/sync-fubon-pool")
+async def sync_fubon_pool():
+    """手動觸發 PG pool → SQLite watchlist 同步"""
+    import httpx
+    try:
+        async with httpx.AsyncClient() as client:
+            r = await client.post("http://host.docker.internal:8090/sync-pool", timeout=15)
+            return r.json()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
 
 
 @router.get("/api/stocks/search")
@@ -1503,12 +1531,28 @@ async def trigger_ic_chain_refresh():
     return {"status": "triggered"}
 
 
+@router.post("/api/admin/run_institutional")
+async def trigger_institutional():
+    import asyncio
+    from app.services.scheduler import job1_institutional_price
+    asyncio.create_task(job1_institutional_price())
+    return {"status": "triggered"}
+
+
 @router.post("/api/admin/run_screener")
 async def trigger_screener(force: bool = False):
     import asyncio
     from app.services.scheduler import job4_screener
     asyncio.create_task(job4_screener(force=force))
     return {"status": "force triggered" if force else "triggered"}
+
+
+@router.post("/api/admin/run_daytrade_screener")
+async def trigger_daytrade_screener():
+    import asyncio
+    from app.services.scheduler import job8_daytrade_screener
+    asyncio.create_task(job8_daytrade_screener())
+    return {"status": "triggered"}
 
 
 @router.post("/api/admin/run_revenue")
@@ -1571,6 +1615,79 @@ async def trigger_eps(force: bool = True):
     return {"status": "triggered"}
 
 
+@router.get("/api/pool/financials-status")
+async def get_pool_financials_status(db: AsyncSession = Depends(get_db)):
+    """回傳每個 pool 股票是否有月營收 / 季報EPS 資料，及最新更新時間"""
+    from sqlalchemy import func as sqlfunc
+    pool_rows = (await db.execute(select(StockPool).order_by(StockPool.code))).scalars().all()
+    codes = [r.code for r in pool_rows]
+    if not codes:
+        return []
+
+    rev_q = await db.execute(
+        select(MonthlyRevenue.code, sqlfunc.max(MonthlyRevenue.updated_at).label("updated_at"))
+        .where(MonthlyRevenue.code.in_(codes))
+        .group_by(MonthlyRevenue.code)
+    )
+    rev_map = {r[0]: r[1] for r in rev_q.all()}
+
+    eps_q = await db.execute(
+        select(QuarterlyEps.code, sqlfunc.max(QuarterlyEps.updated_at).label("updated_at"))
+        .where(QuarterlyEps.code.in_(codes))
+        .group_by(QuarterlyEps.code)
+    )
+    eps_map = {r[0]: r[1] for r in eps_q.all()}
+
+    def _fmt(dt):
+        if dt is None:
+            return None
+        from zoneinfo import ZoneInfo
+        taipei = dt.replace(tzinfo=ZoneInfo("UTC")).astimezone(ZoneInfo("Asia/Taipei"))
+        return taipei.strftime("%m/%d %H:%M")
+
+    name_map = {r.code: r.name for r in pool_rows}
+    return [
+        {
+            "code": c,
+            "name": name_map.get(c, ""),
+            "has_revenue": c in rev_map,
+            "has_eps": c in eps_map,
+            "revenue_updated_at": _fmt(rev_map.get(c)),
+            "eps_updated_at": _fmt(eps_map.get(c)),
+        }
+        for c in codes
+    ]
+
+
+@router.post("/api/pool/backfill-missing")
+async def backfill_missing_financials(db: AsyncSession = Depends(get_db)):
+    """只補抓月營收或季EPS缺失的 pool 股票"""
+    import asyncio
+    from app.services.scheduler import backfill_financials_for_codes
+
+    pool_rows = (await db.execute(select(StockPool).order_by(StockPool.code))).scalars().all()
+    codes = [r.code for r in pool_rows]
+    if not codes:
+        return {"status": "skipped", "reason": "pool is empty"}
+
+    rev_q = await db.execute(
+        select(MonthlyRevenue.code).where(MonthlyRevenue.code.in_(codes)).distinct()
+    )
+    has_rev = {r[0] for r in rev_q.all()}
+
+    eps_q = await db.execute(
+        select(QuarterlyEps.code).where(QuarterlyEps.code.in_(codes)).distinct()
+    )
+    has_eps = {r[0] for r in eps_q.all()}
+
+    missing = [c for c in codes if c not in has_rev or c not in has_eps]
+    if not missing:
+        return {"status": "ok", "missing": 0}
+
+    asyncio.create_task(backfill_financials_for_codes(missing))
+    return {"status": "triggered", "missing": len(missing), "codes": missing}
+
+
 @router.post("/api/admin/backfill_pool_financials")
 async def trigger_backfill_pool_financials(
     start_date: str = "2023-01-01",
@@ -1584,3 +1701,226 @@ async def trigger_backfill_pool_financials(
         return {"status": "skipped", "reason": "pool is empty"}
     asyncio.create_task(backfill_financials_for_codes(codes, start_date))
     return {"status": "triggered", "codes": len(codes), "start_date": start_date}
+
+
+# ── Daytrade (PG-backed, replaces SQLite daytrade_list) ─────────────────────
+
+class DaytradeSyncBody(BaseModel):
+    date: str
+    codes: list[str]
+
+
+@router.get("/api/daytrade/dates")
+async def get_daytrade_dates(db: AsyncSession = Depends(get_db)):
+    rows = (await db.execute(
+        select(DaytradeCandidate.trade_date, func.count(DaytradeCandidate.code).label("cnt"))
+        .group_by(DaytradeCandidate.trade_date)
+        .order_by(DaytradeCandidate.trade_date.desc())
+        .limit(30)
+    )).all()
+    return [{"date": r[0].isoformat(), "count": r[1]} for r in rows]
+
+
+@router.get("/api/daytrade/list")
+async def get_daytrade_list(
+    db: AsyncSession = Depends(get_db),
+    date_str: Optional[str] = Query(None),
+    live: bool = Query(False),
+):
+    from sqlalchemy import text as _text
+    if date_str:
+        target_date = date.fromisoformat(date_str)
+    else:
+        target_date = (await db.execute(
+            select(func.max(DaytradeCandidate.trade_date))
+        )).scalar_one_or_none()
+        if not target_date:
+            return {"date": None, "count": 0, "stocks": []}
+
+    codes = (await db.execute(
+        select(DaytradeCandidate.code).where(DaytradeCandidate.trade_date == target_date)
+    )).scalars().all()
+    if not codes:
+        return {"date": target_date.isoformat(), "count": 0, "stocks": []}
+
+    pool_map = {r.code: r.name for r in (await db.execute(
+        select(StockPool.code, StockPool.name).where(StockPool.code.in_(codes))
+    )).all()}
+
+    # Batch fetch latest prices (last 20 rows each)
+    prices_raw = (await db.execute(_text("""
+        SELECT code, trade_date, open, high, low, close, volume
+        FROM daily_price
+        WHERE code = ANY(:codes)
+          AND trade_date >= (
+            SELECT MAX(trade_date) - INTERVAL '30 days'
+            FROM daily_price WHERE code = daily_price.code
+          )
+        ORDER BY code, trade_date DESC
+    """), {"codes": list(codes)})).mappings().all()
+
+    from collections import defaultdict
+    price_by_code: dict[str, list] = defaultdict(list)
+    for r in prices_raw:
+        price_by_code[r["code"]].append(r)
+
+    inst_raw = (await db.execute(_text("""
+        SELECT DISTINCT ON (code) code, foreign_net, trust_net, dealer_net
+        FROM institutional WHERE code = ANY(:codes)
+        ORDER BY code, trade_date DESC
+    """), {"codes": list(codes)})).mappings().all()
+    inst_map = {r["code"]: r for r in inst_raw}
+
+    margin_raw = (await db.execute(_text("""
+        SELECT DISTINCT ON (code) code, margin_balance, margin_change, short_balance
+        FROM margin_trading WHERE code = ANY(:codes)
+        ORDER BY code, trade_date DESC
+    """), {"codes": list(codes)})).mappings().all()
+    margin_map = {r["code"]: r for r in margin_raw}
+
+    result = []
+    for code in codes:
+        prices = price_by_code.get(code, [])
+        inst = inst_map.get(code)
+        margin = margin_map.get(code)
+
+        prev_close = prices[0]["close"] if prices else None
+        volume = prices[0]["volume"] if prices else None
+        prev_prev_close = prices[1]["close"] if len(prices) > 1 else prev_close
+        avg_vol5 = round(sum(p["volume"] for p in prices[:5]) / min(5, len(prices))) if prices else 0
+        ma20 = sum(p["close"] for p in prices[:20]) / min(20, len(prices)) if prices else 0
+
+        foreign_net = float(inst["foreign_net"]) if inst else 0
+        trust_net = float(inst["trust_net"]) if inst else 0
+        dealer_net = float(inst["dealer_net"]) if inst else 0
+        margin_balance = int(margin["margin_balance"]) if margin else 0
+        margin_change = int(margin["margin_change"]) if margin else 0
+        short_balance = int(margin["short_balance"]) if margin else 0
+
+        change = round((prev_close or 0) - (prev_prev_close or prev_close or 0), 2)
+        change_pct = round(change / prev_prev_close * 100, 2) if prev_prev_close else 0
+        above_ma20 = (prev_close or 0) > ma20
+        vol_ok = avg_vol5 >= 2000
+        chip_count = (
+            (1 if foreign_net > 0 else 0) +
+            (1 if trust_net > 0 else 0) +
+            (1 if margin_change < 0 else 0)
+        )
+
+        if live and not (above_ma20 and vol_ok and chip_count >= 2):
+            continue
+
+        result.append({
+            "stock_id": code,
+            "name": pool_map.get(code, code),
+            "prev_close": prev_close,
+            "volume": volume,
+            "prev_prev_close": prev_prev_close,
+            "avg_vol5": avg_vol5,
+            "ma20": round(ma20, 4),
+            "foreign_net": foreign_net,
+            "trust_net": trust_net,
+            "dealer_net": dealer_net,
+            "margin_balance": margin_balance,
+            "margin_change": margin_change,
+            "short_balance": short_balance,
+            "change": change,
+            "change_pct": change_pct,
+            "above_ma20": above_ma20,
+            "vol_ok": vol_ok,
+            "chip_count": chip_count,
+        })
+
+    return {"date": target_date.isoformat(), "count": len(result), "stocks": result}
+
+
+@router.post("/api/daytrade/sync")
+async def sync_daytrade_candidates(body: DaytradeSyncBody, db: AsyncSession = Depends(get_db)):
+    from sqlalchemy import delete as _delete
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+    trade_date = date.fromisoformat(body.date)
+    await db.execute(_delete(DaytradeCandidate).where(DaytradeCandidate.trade_date == trade_date))
+    if body.codes:
+        await db.execute(
+            pg_insert(DaytradeCandidate).values(
+                [{"trade_date": trade_date, "code": c} for c in body.codes]
+            ).on_conflict_do_nothing()
+        )
+    await db.commit()
+    return {"ok": True, "date": body.date, "count": len(body.codes)}
+
+
+# ── Pre-session log (PG-backed) ──────────────────────────────────────────────
+
+class PreSessionLogStartBody(BaseModel):
+    run_date: str
+    total_stocks: int = 0
+
+
+class PreSessionLogFinishBody(BaseModel):
+    finished_at: Optional[str] = None
+    status: str = "ok"
+    success_stocks: int = 0
+    error_msg: Optional[str] = None
+
+
+@router.post("/api/pre-session/log/start")
+async def start_pre_session_log(body: PreSessionLogStartBody, db: AsyncSession = Depends(get_db)):
+    log = DaytradePreSessionLog(
+        run_date=date.fromisoformat(body.run_date),
+        total_stocks=body.total_stocks,
+    )
+    db.add(log)
+    await db.commit()
+    await db.refresh(log)
+    return {"id": log.id}
+
+
+@router.patch("/api/pre-session/log/{log_id}")
+async def finish_pre_session_log(
+    log_id: int,
+    body: PreSessionLogFinishBody,
+    db: AsyncSession = Depends(get_db),
+):
+    log = (await db.execute(
+        select(DaytradePreSessionLog).where(DaytradePreSessionLog.id == log_id)
+    )).scalar_one_or_none()
+    if not log:
+        raise HTTPException(status_code=404, detail="log not found")
+    log.status = body.status
+    log.success_stocks = body.success_stocks
+    log.error_msg = body.error_msg
+    log.finished_at = (
+        datetime.fromisoformat(body.finished_at) if body.finished_at else datetime.utcnow()
+    )
+    await db.commit()
+    return {"ok": True}
+
+
+@router.get("/api/pre-session/logs")
+async def get_pre_session_logs(db: AsyncSession = Depends(get_db)):
+    from zoneinfo import ZoneInfo
+    rows = (await db.execute(
+        select(DaytradePreSessionLog)
+        .order_by(DaytradePreSessionLog.id.desc())
+        .limit(20)
+    )).scalars().all()
+
+    def _fmt_dt(dt):
+        if dt is None:
+            return None
+        return dt.replace(tzinfo=ZoneInfo("UTC")).astimezone(ZoneInfo("Asia/Taipei")).strftime("%Y-%m-%d %H:%M:%S")
+
+    return [
+        {
+            "id": r.id,
+            "run_date": r.run_date.isoformat() if r.run_date else None,
+            "started_at": _fmt_dt(r.started_at),
+            "finished_at": _fmt_dt(r.finished_at),
+            "status": r.status,
+            "total_stocks": r.total_stocks,
+            "success_stocks": r.success_stocks,
+            "error_msg": r.error_msg,
+        }
+        for r in rows
+    ]

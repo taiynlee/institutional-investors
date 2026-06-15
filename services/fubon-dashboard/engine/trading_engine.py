@@ -70,7 +70,6 @@ class TradingEngine:
         _data = os.environ.get("FUBON_DATA_DIR", "/home/tommy0322/fubon-data")
         self._default_config = os.environ.get("FUBON_CONFIG", "/home/tommy0322/fubon-config/config.yaml")
         self._default_ticks_db = os.path.join(_data, "ticks.db")
-        self._default_daily_db = os.path.join(_data, "daily.db")
         self._default_log_dir = os.environ.get("FUBON_LOG_DIR", "/home/tommy0322/fubon-logs")
 
     @property
@@ -91,7 +90,6 @@ class TradingEngine:
                 "entry_price": pos.entry_price,
                 "stop_loss": pos.stop_loss,
                 "atr": pos.atr,
-                "orb_low": pos.orb_low,
                 "curr_price": self.sessions.get(sym, None) and self.sessions[sym].curr_price,
             }
             for sym, pos in self.om.positions.items()
@@ -110,6 +108,8 @@ class TradingEngine:
             "actual_pnl": self.dt.total_pnl,
             "actual_trades": self.dt.trade_count,
             "actual_unrealized": round(unrealized),
+            "daily_entries": self.dt.daily_entries,
+            "max_daily": self._state.get("max_daily_positions", 3),
             "paper_pnl": self.paper.total_pnl if self.paper else 0.0,
             "paper_trades": self.paper.trade_count if self.paper else 0,
             "paper_unrealized": round(paper_unrealized),
@@ -119,12 +119,11 @@ class TradingEngine:
         self,
         config_path: Optional[str] = None,
         ticks_db: Optional[str] = None,
-        daily_db: Optional[str] = None,
         log_dir: Optional[str] = None,
+        **_kwargs,  # 忽略廢棄的 daily_db 參數
     ) -> bool:
         config_path = config_path or self._default_config
         ticks_db    = ticks_db    or self._default_ticks_db
-        daily_db    = daily_db    or self._default_daily_db
         log_dir     = log_dir     or self._default_log_dir
         with self._lock:
             if self._state["status"] in ("running", "starting"):
@@ -135,7 +134,7 @@ class TradingEngine:
 
         self._thread = threading.Thread(
             target=self._run,
-            args=(config_path, ticks_db, daily_db, log_dir),
+            args=(config_path, ticks_db, log_dir),
             daemon=True,
             name="trading-engine",
         )
@@ -152,11 +151,11 @@ class TradingEngine:
 
     # ── 主執行迴圈 ────────────────────────────────────────────────────────────
 
-    def _run(self, config_path: str, ticks_db: str, daily_db: str, log_dir: str):
+    def _run(self, config_path: str, ticks_db: str, log_dir: str):
         today_str = today_tw().isoformat()
         self.session_date = today_str
         try:
-            self._run_inner(config_path, ticks_db, daily_db, log_dir, today_str)
+            self._run_inner(config_path, ticks_db, log_dir, today_str)
         except Exception as e:
             logger.error("交易引擎異常終止: %s", e, exc_info=True)
             with self._lock:
@@ -170,7 +169,7 @@ class TradingEngine:
                 with self._lock:
                     self._state["status"] = "stopped"
 
-    def _run_inner(self, config_path: str, ticks_db: str, daily_db: str, log_dir: str, today_str: str):
+    def _run_inner(self, config_path: str, ticks_db: str, log_dir: str, today_str: str):
         # ── 日誌 ─────────────────────────────────────────────────────────────
         Path(log_dir).mkdir(parents=True, exist_ok=True)
         log_file = Path(log_dir) / f"dry_run_{today_str}.log"
@@ -213,17 +212,15 @@ class TradingEngine:
         trailing_trigger_pct  = risk_cfg.get("trailing_trigger_pct", 2.0)
         trailing_pullback_pct = float(risk_cfg.get("trailing_pullback_pct", 1.5))
         take_profit_pct       = risk_cfg.get("take_profit_pct", 5.0)
-        vwap_exit_vol_ratio   = risk_cfg.get("vwap_exit_volume_ratio", 0.7)
         time_stop_hour        = float(trading.get("time_stop_hour", 11))
         cb_pause_min_cfg      = int(trading.get("cb_pause_minutes", 30))
-        orb_window_minutes    = int(signal_cfg.get("orb_window_minutes", 15))
-        orb_volume_mult       = float(signal_cfg.get("orb_volume_multiplier", 1.5))
         max_entry_gain_pct    = float(signal_cfg.get("max_entry_gain_pct", 4.0))
         limit_up_buffer_pct   = float(signal_cfg.get("limit_up_buffer", 4.0))
         MKT_DAY_GATE_PCT      = float(signal_cfg.get("market_drop_threshold", -1.5))
 
         with self._lock:
             self._state["dry_run"] = dry_run
+            self._state["max_daily_positions"] = max_daily_positions
 
         logger.info("=== 引擎啟動 | dry_run=%s | %s ===", dry_run, today_str)
         log_event("engine_start", dry_run=dry_run, today=today_str)
@@ -273,37 +270,31 @@ class TradingEngine:
         rc        = sdk.marketdata.rest_client.stock
         rc_futopt = sdk.marketdata.rest_client.futopt
 
-        # ── 標的清單（優先從 daytrade_list 取，fallback config） ───────────────
+        # ── 標的清單（優先從 PG backend 取，fallback config） ────────────────
         symbols: list[str] = trading.get("dry_run_watchlist", ["2330"])
-        if Path(daily_db).exists():
-            try:
-                with sqlite3.connect(f"file:{daily_db}?mode=ro", uri=True,
-                                     check_same_thread=False) as c:
-                    row = c.execute("SELECT MAX(date) FROM daytrade_list").fetchone()
-                    if row and row[0]:
-                        rows = c.execute(
-                            "SELECT stock_id FROM daytrade_list WHERE date=? ORDER BY stock_id",
-                            (row[0],)
-                        ).fetchall()
-                        if rows:
-                            symbols = [r[0] for r in rows]
-                            logger.info("從 daytrade_list 取得 %d 檔標的 (%s)", len(symbols), row[0])
-            except Exception as e:
-                logger.warning("daytrade_list 讀取失敗，使用 config: %s", e)
+        try:
+            import httpx as _httpx
+            _r = _httpx.get("http://localhost:8000/api/daytrade/list", timeout=8)
+            if _r.status_code == 200:
+                _codes = [row["code"] for row in _r.json() if "code" in row]
+                if _codes:
+                    symbols = _codes
+                    logger.info("從 PG daytrade_candidate 取得 %d 檔標的", len(symbols))
+        except Exception as e:
+            logger.warning("daytrade_list 讀取失敗，使用 config: %s", e)
 
         with self._lock:
             self._state["symbols"] = symbols
 
-        # 股票名稱
+        # 股票名稱（從 PG pool 取）
         stock_names: dict[str, str] = {}
-        if Path(daily_db).exists():
-            try:
-                with sqlite3.connect(f"file:{daily_db}?mode=ro", uri=True,
-                                     check_same_thread=False) as c:
-                    rows = c.execute("SELECT stock_id, name FROM watchlist").fetchall()
-                    stock_names = {r[0]: r[1] for r in rows}
-            except Exception:
-                pass
+        try:
+            import httpx as _httpx
+            _r = _httpx.get("http://localhost:8000/api/pool", timeout=8)
+            if _r.status_code == 200:
+                stock_names = {s["code"]: s.get("name", "") for s in _r.json()}
+        except Exception:
+            pass
 
         def sname(sym: str) -> str:
             return stock_names.get(sym, sym)
@@ -360,10 +351,10 @@ class TradingEngine:
             else:
                 logger.info("%s 昨收=%.0f 漲停=%.0f ATR=%.2f", sym, ref, limitup, atr)
 
-            sessions[sym] = SymbolSession(sym, float(ref), float(limitup), float(atr),
-                                           orb_window_minutes=orb_window_minutes)
+            sessions[sym] = SymbolSession(sym, float(ref), float(limitup), float(atr))
 
         self.sessions = sessions
+
 
         # ── 個股期貨訊號 ──────────────────────────────────────────────────────
         futures_signals: dict[str, FuturesSignal] = {
@@ -439,8 +430,6 @@ class TradingEngine:
             take_profit_pct=take_profit_pct,
             time_stop_hour=time_stop_hour,
             force_exit_time=time(force_exit_h, force_exit_m),
-            vwap_exit=True,
-            vwap_exit_volume_ratio=vwap_exit_vol_ratio,
         )
         combiner = SignalCombiner(
             max_entry_gain_pct=max_entry_gain_pct,
@@ -454,8 +443,6 @@ class TradingEngine:
             take_profit_pct=take_profit_pct,
             time_stop_hour=time_stop_hour,
             force_exit_time=time(force_exit_h, force_exit_m),
-            vwap_exit=True,
-            vwap_exit_volume_ratio=vwap_exit_vol_ratio,
             atr_multiplier=atr_multiplier_cfg,
         )
 
@@ -466,6 +453,8 @@ class TradingEngine:
         # 重啟恢復
         if is_market_hours():
             restore_daily_tracker(ticks_db, dt)
+            # 從已出場紀錄重建 entered_symbols（避免重啟後計數歸零）
+            dt.entered_symbols = {t["symbol"] for t in dt.trades}
             restore_paper_tracker(ticks_db, paper)
 
         # ── 大盤熔斷狀態 ──────────────────────────────────────────────────────
@@ -540,10 +529,9 @@ class TradingEngine:
             sess.on_tick(price, size, ts_ns)
             now = now_tw()
 
-            vwap_now = sess.bar_builder.vwap or sess.reference_price
             pos_before = om.positions.get(symbol)
             exit_reason = rm.on_tick(
-                symbol=symbol, price=price, vwap=vwap_now, now=now,
+                symbol=symbol, price=price, now=now,
                 futures_signal=futures_signals.get(symbol),
                 current_volume=sess.bar_builder.current_1min.volume if sess.bar_builder.current_1min else 0,
                 avg_volume=float(sess.prev_1min_volume or 1),
@@ -567,7 +555,7 @@ class TradingEngine:
                 )
 
             paper_exit = paper.on_tick(
-                symbol=symbol, price=price, now=now, vwap=vwap_now,
+                symbol=symbol, price=price, now=now,
                 current_volume=sess.bar_builder.current_1min.volume if sess.bar_builder.current_1min else 0,
                 avg_volume=float(sess.prev_1min_volume or 1),
             )
@@ -684,8 +672,10 @@ class TradingEngine:
                 paper.close(sym, price, now, reason=reason)
 
         def _evaluate_signal(symbol: str, sess: SymbolSession, now_time: time):
-            not_in_pos = symbol not in om.positions
-            pos_count = len(om.positions)
+            # 今日已進場過（含已出場）→ 不再重入，避免出場後立即重買同一支
+            not_in_pos = symbol not in om.positions and symbol not in dt.entered_symbols
+            # 今日已進場檔數（進場後即使出場也不歸還額度）
+            trades_today = dt.daily_entries
             now = now_tw()
 
             # 大盤日跌幅 gate：昨收取得失敗（_idx_ref=0）時放行
@@ -694,13 +684,12 @@ class TradingEngine:
             result = sess.evaluate(
                 combiner=combiner, vp=vp, tech=tech,
                 current_time=now_time,
-                positions_count=pos_count,
+                positions_count=trades_today,
                 max_positions=max_daily_positions,
                 not_in_position=not_in_pos,
                 futures_signal=futures_signals.get(symbol),
                 entry_cutoff_mins=entry_cutoff_mins,
                 market_ok=market_ok,
-                orb_volume_multiplier=orb_volume_mult,
             )
             theory = sess.evaluate_theoretical(
                 combiner=combiner, vp=vp, tech=tech,
@@ -708,7 +697,6 @@ class TradingEngine:
                 futures_signal=futures_signals.get(symbol),
                 entry_cutoff_mins=entry_cutoff_mins,
                 market_ok=market_ok,
-                orb_volume_multiplier=orb_volume_mult,
             )
 
             logger.info(
@@ -736,7 +724,7 @@ class TradingEngine:
                                          price=price, remaining_budget=total_capital)
                 lots = max(1, int(lots * theory.position_size_ratio))
                 if paper.enter(symbol=symbol, price=price, lots=lots,
-                               atr=sess.atr, now=now, orb_low=sess.orb.orb_low):
+                               atr=sess.atr, now=now, orb_low=None):
                     logger.info("📄 [理論] 買進 %s  價=%.2f  張=%d", symbol, price, lots)
                     log_event("paper_buy", symbol=symbol, price=price, lots=lots)
 
@@ -752,19 +740,19 @@ class TradingEngine:
                 logger.info("DRY RUN %s 計算張數=0，跳過", symbol)
                 return
 
-            orb_low = sess.orb.orb_low
             pos = Position(
                 symbol=symbol, entry_price=price, lots=lots,
-                atr=sess.atr, atr_multiplier=atr_multiplier_cfg, orb_low=orb_low,
+                atr=sess.atr, atr_multiplier=atr_multiplier_cfg, orb_low=None,
                 trailing_trigger_pct=trailing_trigger_pct,
                 trailing_pullback_pct=trailing_pullback_pct,
             )
             om.positions[symbol] = pos
             _entry_times[symbol] = now_tw()
+            dt.record_entry(symbol)  # 計入今日已交易檔數（出場後不歸還額度）
 
             logger.info("🟢 DRY RUN 買進 %s  價=%.2f  張=%d  停損=%.2f", symbol, price, lots, pos.stop_loss)
             log_event("order_buy", symbol=symbol, price=price, lots=lots,
-                      stop_loss=pos.stop_loss, orb_low=orb_low,
+                      stop_loss=pos.stop_loss,
                       capital_used=price * lots * 1000, atr=sess.atr)
             notifier.send(
                 f"🟢 進場 {symbol} {sname(symbol)}\n"
