@@ -587,12 +587,16 @@ async def get_market_overview():
         result = []
         for sym, name in symbols.items():
             try:
+                import math
                 t = yf.Ticker(sym)
                 hist = t.history(period="5d")
+                hist = hist.dropna(subset=["Close"])
                 if len(hist) < 2:
                     continue
-                prev_close = hist["Close"].iloc[-2]
-                last_close = hist["Close"].iloc[-1]
+                prev_close = float(hist["Close"].iloc[-2])
+                last_close = float(hist["Close"].iloc[-1])
+                if math.isnan(prev_close) or math.isnan(last_close) or prev_close == 0:
+                    continue
                 chg_pct = (last_close - prev_close) / prev_close * 100
                 chg_pts = last_close - prev_close
                 result.append({
