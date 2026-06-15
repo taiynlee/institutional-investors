@@ -175,7 +175,7 @@ PG stock_pool + daytrade_candidate（由 job8 每日 21:05 更新）
 
 - [ ] 借券賣出歷史補填（目前只有當日資料，需選擇時間執行 90 日回填）
 - [ ] CORS allow_origins 加入 `http://localhost:6174`（目前允許 3000 / 5173，前端實際跑 6174）
-- [ ] 策略A追蹤清單退出機制（BB<0 跌破月線自動標記 triggered，使用者確認後 exited）
+- [x] 策略A追蹤清單退出機制：tracking 超過10個交易日未觸發 BB≤5 → 自動刪除，等下次重新突破再加入
 - [ ] 當沖篩選邏輯優化（chip_count 條件/標的數不足時顯示最高分備援）
 - [ ] v2：八大官股行庫買賣超（WantGoo，API 需 session+CSRF，待研究）
 - [ ] v2：券商分點前5大買超（CMoney，URL 需修正）

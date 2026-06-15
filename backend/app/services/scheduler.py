@@ -3,7 +3,7 @@ import logging
 import numpy as np
 from datetime import date, timedelta
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from sqlalchemy import select, and_
+from sqlalchemy import select, and_, func
 from app.db.base import AsyncSessionLocal
 from app.db.models import (
     FetchLog, DailyPrice, Institutional, MarginTrading,
@@ -364,13 +364,31 @@ async def job4_screener(force: bool = False):
                 )
                 await db.commit()
 
-        # 追蹤清單：檢查是否拉回 BB ≤ 5
+        # 追蹤清單：超過10個交易日未觸發 → 自動刪除；否則檢查 BB ≤ 5
         async with AsyncSessionLocal() as db:
             tracking = (await db.execute(
                 select(WatchlistA).where(WatchlistA.status == "tracking")
             )).scalars().all()
         for item in tracking:
             try:
+                async with AsyncSessionLocal() as db:
+                    trading_days = (await db.execute(
+                        select(func.count()).where(
+                            DailyPrice.code == item.code,
+                            DailyPrice.trade_date > item.added_date,
+                            DailyPrice.trade_date <= target_date,
+                        )
+                    )).scalar() or 0
+                if trading_days >= 10:
+                    async with AsyncSessionLocal() as db:
+                        item_db = (await db.execute(
+                            select(WatchlistA).where(WatchlistA.id == item.id)
+                        )).scalar_one_or_none()
+                        if item_db:
+                            await db.delete(item_db)
+                            await db.commit()
+                    logger.info(f"WatchlistA auto-expired {item.code} after {trading_days} trading days")
+                    continue
                 opens, highs, lows, closes, volumes, _ = await _get_price_series(item.code, price_date=today)
                 if not closes:
                     continue
@@ -386,9 +404,6 @@ async def job4_screener(force: bool = False):
                         item_db.triggered_close = closes[-1]
                         item_db.triggered_bb_position = round(bb_now, 2)
                         await db.commit()
-                    asyncio.create_task(_notify_watchlist_triggered(
-                        item.code, item.name, closes[-1], bb_now, item.added_date, item.added_close
-                    ))
             except Exception as e:
                 logger.error(f"WatchlistA trigger check failed for {item.code}: {e}", exc_info=True)
 

@@ -518,7 +518,7 @@ docker compose up            # 全起（DB + 後端 + 前端）
 | `margin_trading` | 融資融券每日餘額 | `(code, trade_date)` |
 | `shareholding` | 千張大戶持股（TDCC 週報） | `(code, report_date)` |
 | `screening_result` | 每日篩選結果與評分 | `(code, calc_date)` |
-| `watchlist_a` | 策略A追蹤清單（手動加入/退出） | `(code, added_date)` |
+| `watchlist_a` | 策略A追蹤清單（自動加入；tracking 超過10交易日未觸發自動刪除） | `(code, added_date)` |
 | `stock_pool` | 當沖監控股票池（fuel for job8） | `code` |
 | `daytrade_candidate` | 每日當沖候選（job8 篩出） | `(trade_date, code)` |
 | `daytrade_pre_session_log` | 盤前跑批紀錄 | `id` |
