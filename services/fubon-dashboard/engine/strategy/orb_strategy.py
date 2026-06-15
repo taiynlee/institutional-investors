@@ -1,8 +1,13 @@
-from datetime import datetime
+from datetime import datetime, time as dtime
+from engine.utils.tz import now_tw
 
 
 class ORBStrategy:
     """09:00–09:15 記錄 ORB 高低點，之後偵測突破訊號。"""
+
+    # ORB 觀察窗口：09:00–09:15（固定台股開盤時段）
+    _ORB_START = dtime(9, 0)
+    _ORB_END   = dtime(9, 15)
 
     def __init__(self, window_minutes: int = 15):
         self.window_minutes = window_minutes
@@ -12,18 +17,29 @@ class ORBStrategy:
         self._start_time: datetime | None = None
 
     def on_bar(self, high: float, low: float, time: datetime):
-        if self._start_time is None:
-            self._start_time = time
-
-        elapsed = (time - self._start_time).seconds // 60
         if self.is_locked:
             return
 
-        if elapsed < self.window_minutes:
-            self.orb_high = max(self.orb_high or high, high)
-            self.orb_low = min(self.orb_low or low, low)
-        else:
+        # 以牆上時鐘判斷 ORB 窗口，避免引擎重啟後錯判 elapsed
+        now = now_tw().time().replace(second=0, microsecond=0)
+
+        if now >= self._ORB_END:
+            # 已過 09:15 → 直接 lock（用目前累積的高低，若無則用當前 bar）
+            if self.orb_high is None:
+                self.orb_high = high
+            if self.orb_low is None:
+                self.orb_low = low
             self.is_locked = True
+            return
+
+        if now < self._ORB_START:
+            return  # 開盤前不計入
+
+        # 09:00–09:14：累積 ORB 高低
+        if self._start_time is None:
+            self._start_time = time
+        self.orb_high = max(self.orb_high or high, high)
+        self.orb_low = min(self.orb_low or low, low)
 
     def check_breakout(
         self,

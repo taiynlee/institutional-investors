@@ -41,7 +41,8 @@ class SymbolSession:
 
     def on_tick(self, price: float, size: int, ts_ns: int):
         self.curr_price = price
-        dt = from_ts_ns(ts_ns) if ts_ns > 0 else now_tw()
+        # 富邦 SDK 送毫秒(ms)而非奈秒(ns)，from_ts_ns 會得到 1970 年 → 改用系統時間
+        dt = now_tw()
         self.bar_builder.on_tick({"price": price, "volume": size, "time": dt})
 
     def on_quote(self, bids: list[dict], asks: list[dict]):
