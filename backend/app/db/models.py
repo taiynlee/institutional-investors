@@ -1,6 +1,6 @@
 from datetime import date, datetime
 from typing import Optional
-from sqlalchemy import String, Integer, BigInteger, Float, Boolean, Date, DateTime, Text, UniqueConstraint
+from sqlalchemy import String, Integer, BigInteger, SmallInteger, Float, Boolean, Numeric, Date, DateTime, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 from app.db.base import Base
 
@@ -215,6 +215,12 @@ class DaytradeCandidate(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     trade_date: Mapped[date] = mapped_column(Date, index=True)
     code: Mapped[str] = mapped_column(String(10), index=True)
+    # snapshot at screening time — prevents stale display when daily_price updated later
+    ref_close: Mapped[Optional[float]] = mapped_column(Numeric(10, 2), nullable=True)
+    ref_close_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    avg_vol5_lot: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    chip_count: Mapped[Optional[int]] = mapped_column(SmallInteger, nullable=True)
+    above_ma20: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
 
 
 class DaytradePreSessionLog(Base):

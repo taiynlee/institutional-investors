@@ -1728,6 +1728,8 @@ async def trigger_backfill_pool_financials(
 class DaytradeSyncBody(BaseModel):
     date: str
     codes: list[str]
+    # {code: {ref_close, ref_close_date, avg_vol5_lot, chip_count, above_ma20}}
+    snapshots: dict[str, dict] = {}
 
 
 @router.get("/api/daytrade/dates")
@@ -1765,13 +1767,23 @@ async def get_daytrade_list(
             if not target_date:
                 return {"date": None, "count": 0, "stocks": []}
 
-        codes = (await db.execute(
-            select(DaytradeCandidate.code).where(DaytradeCandidate.trade_date == target_date)
-        )).scalars().all()
+        snap_rows = (await db.execute(
+            select(
+                DaytradeCandidate.code,
+                DaytradeCandidate.ref_close,
+                DaytradeCandidate.ref_close_date,
+                DaytradeCandidate.avg_vol5_lot,
+                DaytradeCandidate.chip_count,
+                DaytradeCandidate.above_ma20,
+            ).where(DaytradeCandidate.trade_date == target_date)
+        )).mappings().all()
+        codes = [r["code"] for r in snap_rows]
+        snap_map = {r["code"]: dict(r) for r in snap_rows}
         if not codes:
             return {"date": target_date.isoformat(), "count": 0, "stocks": []}
 
     if source == "pool":
+        snap_map = {}
         pool_map = {r.code: r.name for r in pool_rows}
     else:
         pool_map = {r.code: r.name for r in (await db.execute(
@@ -1814,14 +1826,12 @@ async def get_daytrade_list(
         prices = price_by_code.get(code, [])
         inst = inst_map.get(code)
         margin = margin_map.get(code)
+        snap = snap_map.get(code, {}) if snap_map else {}
 
-        prev_close = prices[0]["close"] if prices else None
         # daily_price.volume 單位為股(shares)，除以 1000 換算成張
         volume_shares = prices[0]["volume"] if prices else None
         volume = round(volume_shares / 1000) if volume_shares else None
-        prev_prev_close = prices[1]["close"] if len(prices) > 1 else prev_close
         avg_vol5_shares = round(sum(p["volume"] for p in prices[:5]) / min(5, len(prices))) if prices else 0
-        avg_vol5 = round(avg_vol5_shares / 1000)  # 換算成張
         ma20 = sum(p["close"] for p in prices[:20]) / min(20, len(prices)) if prices else 0
 
         foreign_net = float(inst["foreign_net"]) if inst else 0
@@ -1832,15 +1842,29 @@ async def get_daytrade_list(
         # short_balance 來自 TWT93U 欄位，實際儲存為股；除以 1000 換算成張
         short_balance = round(int(margin["short_balance"]) / 1000) if margin else 0
 
-        change = round((prev_close or 0) - (prev_prev_close or prev_close or 0), 2)
-        change_pct = round(change / prev_prev_close * 100, 2) if prev_prev_close else 0
-        above_ma20 = (prev_close or 0) > ma20
-        vol_ok = avg_vol5 >= 2000  # avg_vol5 已換算成張，2000張門檻正確
-        chip_count = (
+        live_chip_count = (
             (1 if foreign_net > 0 else 0) +
             (1 if trust_net > 0 else 0) +
             (1 if margin_change < 0 else 0)
         )
+
+        # Use stored screening snapshot if available; prevents display drift when daily_price updated after sync
+        has_snap = snap.get("ref_close") is not None
+        if has_snap:
+            prev_close = float(snap["ref_close"])
+            avg_vol5 = snap["avg_vol5_lot"] if snap.get("avg_vol5_lot") is not None else round(avg_vol5_shares / 1000)
+            chip_count = snap["chip_count"] if snap.get("chip_count") is not None else live_chip_count
+            above_ma20 = snap["above_ma20"] if snap.get("above_ma20") is not None else ((prev_close or 0) > ma20)
+        else:
+            prev_close = prices[0]["close"] if prices else None
+            avg_vol5 = round(avg_vol5_shares / 1000)
+            chip_count = live_chip_count
+            above_ma20 = (prev_close or 0) > ma20
+
+        vol_ok = avg_vol5 >= 2000  # avg_vol5 已換算成張，2000張門檻正確
+        prev_prev_close = prices[1]["close"] if len(prices) > 1 else prev_close
+        change = round((prev_close or 0) - (prev_prev_close or prev_close or 0), 2)
+        change_pct = round(change / prev_prev_close * 100, 2) if prev_prev_close else 0
 
         if live and not (above_ma20 and vol_ok and chip_count >= 2):
             continue
@@ -1849,6 +1873,7 @@ async def get_daytrade_list(
             "stock_id": code,
             "name": pool_map.get(code, code),
             "prev_close": prev_close,
+            "prev_close_date": snap.get("ref_close_date").isoformat() if snap.get("ref_close_date") else (str(prices[0]["trade_date"]) if prices else None),
             "volume": volume,            # 張
             "prev_prev_close": prev_prev_close,
             "avg_vol5": avg_vol5,        # 張
@@ -1876,10 +1901,20 @@ async def sync_daytrade_candidates(body: DaytradeSyncBody, db: AsyncSession = De
     trade_date = date.fromisoformat(body.date)
     await db.execute(_delete(DaytradeCandidate).where(DaytradeCandidate.trade_date == trade_date))
     if body.codes:
+        rows = []
+        for c in body.codes:
+            snap = body.snapshots.get(c, {})
+            row: dict = {"trade_date": trade_date, "code": c}
+            if snap.get("ref_close") is not None:
+                row["ref_close"] = snap["ref_close"]
+                ref_d = snap.get("ref_close_date")
+                row["ref_close_date"] = date.fromisoformat(ref_d) if ref_d else None
+                row["avg_vol5_lot"] = snap.get("avg_vol5_lot")
+                row["chip_count"] = snap.get("chip_count")
+                row["above_ma20"] = snap.get("above_ma20")
+            rows.append(row)
         await db.execute(
-            pg_insert(DaytradeCandidate).values(
-                [{"trade_date": trade_date, "code": c} for c in body.codes]
-            ).on_conflict_do_nothing()
+            pg_insert(DaytradeCandidate).values(rows).on_conflict_do_nothing()
         )
     await db.commit()
     return {"ok": True, "date": body.date, "count": len(body.codes)}

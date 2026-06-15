@@ -69,6 +69,11 @@ async def _apply_migrations():
             ("screening_result", "dip_bonus",     "FLOAT DEFAULT 0"),
             ("screening_result", "holders_bonus", "FLOAT DEFAULT 0"),
             ("shareholding",     "pct_400_lot",   "FLOAT"),
+            ("daytrade_candidate", "ref_close",      "NUMERIC(10,2)"),
+            ("daytrade_candidate", "ref_close_date", "DATE"),
+            ("daytrade_candidate", "avg_vol5_lot",   "INTEGER"),
+            ("daytrade_candidate", "chip_count",     "SMALLINT"),
+            ("daytrade_candidate", "above_ma20",     "BOOLEAN"),
         ]
         for table, col, col_type in adds:
             await conn.execute(text(

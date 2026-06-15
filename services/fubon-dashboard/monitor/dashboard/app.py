@@ -391,6 +391,8 @@ def create_app(
         price_min = _trading_params.get("daytrade_price_min", 200.0)
         price_max = _trading_params.get("daytrade_price_max", 990.0)
         selected: set[str] = set()
+        # snapshot: {code: {ref_close, ref_close_date, avg_vol5_lot, chip_count, above_ma20}}
+        snapshots: dict = {}
 
         # 1. Pool live-filter（above_ma20 + vol_ok + chip_count≥2）
         live_count = 0
@@ -400,7 +402,16 @@ def create_app(
             if r.status_code == 200:
                 stocks = r.json().get("stocks", [])
                 live_count = len(stocks)
-                selected.update(s["stock_id"] for s in stocks)
+                for s in stocks:
+                    c = s["stock_id"]
+                    selected.add(c)
+                    snapshots[c] = {
+                        "ref_close": s.get("prev_close"),
+                        "ref_close_date": s.get("prev_close_date"),
+                        "avg_vol5_lot": s.get("avg_vol5"),
+                        "chip_count": s.get("chip_count"),
+                        "above_ma20": s.get("above_ma20"),
+                    }
         except Exception:
             pass
 
@@ -436,10 +447,13 @@ def create_app(
                 exit_codes = {row["code"] for row in r.json()}
                 exit_count = len(exit_codes & selected)
                 selected -= exit_codes
+                for c in exit_codes:
+                    snapshots.pop(c, None)
         except Exception:
             pass
 
         # 5. 股價範圍過濾（批次取昨收，過濾 < price_min 或 > price_max）
+        # 同時補全非 pool 股票的 ref_close snapshot
         price_excluded = 0
         if selected:
             try:
@@ -447,20 +461,31 @@ def create_app(
                                params={"codes": ",".join(selected)}, timeout=15)
                 if r.status_code == 200:
                     prices = r.json()
+                    # 補 ref_close 給 score-a/b / watchlist-a（pool 已有完整 snapshot）
+                    for c, close in prices.items():
+                        if c not in snapshots:
+                            snapshots[c] = {"ref_close": close}
+                        elif snapshots[c].get("ref_close") is None:
+                            snapshots[c]["ref_close"] = close
                     before = len(selected)
                     selected = {
                         c for c in selected
                         if price_min <= prices.get(c, price_min) <= price_max
                     }
                     price_excluded = before - len(selected)
+                    # 清除被排除的 snapshot
+                    for c in list(snapshots):
+                        if c not in selected:
+                            del snapshots[c]
             except Exception:
                 pass
 
-        # 寫入 PG
+        # 寫入 PG（含快照）
         codes_list = list(selected)
         try:
             _httpx.post(f"{_BACKEND}/api/daytrade/sync",
-                        json={"date": target_date, "codes": codes_list}, timeout=10)
+                        json={"date": target_date, "codes": codes_list, "snapshots": snapshots},
+                        timeout=10)
         except Exception:
             pass
 
