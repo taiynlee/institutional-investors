@@ -126,7 +126,10 @@ async def job2_margin():
         return
     try:
         async with AsyncSessionLocal() as db:
-            stock_codes = set(r[0] for r in (await db.execute(select(StockList.code))).all())
+            from app.db.models import StockPool
+            pool_codes = set(r[0] for r in (await db.execute(select(StockPool.code))).all())
+            sl_codes = set(r[0] for r in (await db.execute(select(StockList.code))).all())
+            stock_codes = pool_codes | sl_codes
         twse_rows = await fetch_margin(today)
         tpex_rows = await fetch_tpex_margin(today)
         margin_rows = [r for r in twse_rows + tpex_rows if r["code"] in stock_codes]
