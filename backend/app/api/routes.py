@@ -12,7 +12,7 @@ from app.db.models import (
     ScreeningResult, FetchLog, DailyPrice, MarginTrading, AIPick,
     StockList, Institutional, Shareholding, IcClassification,
     CompanyTag, MonthlyRevenue, QuarterlyEps, WatchlistA, StockPool, UsWatchlist,
-    DaytradeCandidate, DaytradePreSessionLog,
+    DaytradeCandidate, DaytradePreSessionLog, TradingSetting,
 )
 from app.services.screener import calc_bb_position
 
@@ -615,6 +615,30 @@ async def get_market_overview():
         return result
     except ImportError:
         return []
+
+
+@router.get("/api/trading-settings")
+async def get_trading_settings(db: AsyncSession = Depends(get_db)):
+    """回傳所有交易引擎設定（key-value dict）"""
+    rows = (await db.execute(select(TradingSetting))).scalars().all()
+    return {r.key: r.value for r in rows}
+
+
+@router.post("/api/trading-settings")
+async def update_trading_settings(body: dict, db: AsyncSession = Depends(get_db)):
+    """Upsert 交易引擎設定。body = {key: value, ...}（value 皆為字串）"""
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+    from datetime import datetime as _dt
+    now_ts = _dt.utcnow()
+    for k, v in body.items():
+        await db.execute(
+            pg_insert(TradingSetting)
+            .values(key=k, value=str(v), updated_at=now_ts)
+            .on_conflict_do_update(index_elements=["key"], set_={"value": str(v), "updated_at": now_ts})
+        )
+    await db.commit()
+    rows = (await db.execute(select(TradingSetting))).scalars().all()
+    return {r.key: r.value for r in rows}
 
 
 @router.get("/api/server-time")

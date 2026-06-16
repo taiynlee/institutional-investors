@@ -284,15 +284,30 @@ class FubonFeed:
                 if isinstance(item, dict):
                     self._on_futopt_message(item)
             return
-        event = msg.get("event", "")
-        data  = msg.get("data", {})
-        if event == "data" and data.get("channel") == "trades":
-            fsym   = data.get("symbol", "")
-            price  = data.get("price")
-            ts     = data.get("time", 0)
-            stock_id = self._fsym_to_stock.get(fsym)
-            if stock_id and price is not None and self._on_futures_tick:
-                self._on_futures_tick(stock_id, float(price), ts)
+        event   = msg.get("event", "")
+        data    = msg.get("data", {})
+        # channel can be at top-level OR inside data, depending on SDK version
+        channel = msg.get("channel", "") or (data.get("channel", "") if isinstance(data, dict) else "")
+        if event == "data" and channel == "trades":
+            if isinstance(data, list):
+                for item in data:
+                    if not isinstance(item, dict):
+                        continue
+                    fsym  = item.get("symbol", "")
+                    price = item.get("price")
+                    ts    = item.get("time", 0)
+                    sid   = self._fsym_to_stock.get(fsym)
+                    if sid and price is not None and self._on_futures_tick:
+                        self._on_futures_tick(sid, float(price), ts)
+            else:
+                fsym     = data.get("symbol", "")
+                price    = data.get("price")
+                ts       = data.get("time", 0)
+                stock_id = self._fsym_to_stock.get(fsym)
+                if stock_id and price is not None and self._on_futures_tick:
+                    self._on_futures_tick(stock_id, float(price), ts)
+                elif price is not None:
+                    logger.debug("期貨 tick fsym=%s 未在 map 中 (map=%s)", fsym, list(self._fsym_to_stock.keys())[:5])
         elif event in ("authenticated", "subscribed"):
             logger.debug("期貨 WS %s: %s", event, data)
         elif event == "error":

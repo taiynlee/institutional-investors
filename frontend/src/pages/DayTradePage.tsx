@@ -751,9 +751,11 @@ const PARAM_DEFS: PD[] = [
   { id:'max_position_capital', group:'倉位控制', label:'每次進場資金上限', desc:'每次進場最多動用的資金（超過就截斷）；張數 = floor(min(上限, 剩餘總資金) / (價格 × 1000))', unit:'TWD', rtKey:'max_position_capital', type:'number', step:100000, min:100000, canDisable:false },
   { id:'max_daily_positions',  group:'倉位控制', label:'每日進場次數上限', desc:'一天最多進場幾次（同標的可重複計入）；達上限後當日不再開新倉', unit:'次', rtKey:'max_daily_positions', type:'number', step:1, min:1, canDisable:false },
   // 進場條件
-  { id:'tick_rise_threshold',  group:'進場條件', label:'60秒 tick 上漲門檻', desc:'過去 60 秒內股價上漲需 ≥ 此 tick 數才觸發進場；tick 依各價位不同計算', unit:'tick', rtKey:'tick_rise_threshold', type:'number', step:1, min:1, canDisable:false },
-  { id:'max_change_pct',       group:'進場條件', label:'最大漲跌幅',          desc:'個股當日漲跌幅（絕對值）超過此%不進場，避免追高或跌太多', unit:'%', rtKey:'max_change_pct', type:'number', step:0.5, min:0.5, canDisable:false },
-  { id:'market_rise_min',      group:'進場條件', label:'大盤日漲幅門檻',      desc:'加權今日較昨收漲幅須 > 此%才允許開倉；0 = 不限制', unit:'%', rtKey:'market_rise_min', type:'number', step:0.5, canDisable:false },
+  { id:'entry_start_time',     group:'進場條件', label:'進場開始時間',         desc:'此時間之前不開新倉（例：09:15 = 開盤後觀察15分鐘再進場）', unit:'HH:MM', rtKey:'entry_start_time', type:'time', canDisable:false },
+  { id:'tick_window_seconds',  group:'進場條件', label:'tick 觀察窗口',        desc:'計算 tick_rise 用的滾動時間窗口（秒）；預設60秒 = 看過去1分鐘漲了幾tick', unit:'秒', rtKey:'tick_window_seconds', type:'number', step:10, min:10, max:300, canDisable:false },
+  { id:'tick_rise_threshold',  group:'進場條件', label:'tick 上漲門檻',        desc:'觀察窗口內股價上漲需 ≥ 此 tick 數才觸發進場；tick 依各價位不同計算', unit:'tick', rtKey:'tick_rise_threshold', type:'number', step:1, min:1, canDisable:false },
+  { id:'max_change_pct',       group:'進場條件', label:'最大漲跌幅',           desc:'個股當日漲跌幅（絕對值）超過此%不進場，避免追高或跌太多', unit:'%', rtKey:'max_change_pct', type:'number', step:0.5, min:0.5, canDisable:false },
+  { id:'market_rise_min',      group:'進場條件', label:'大盤日漲幅門檻',       desc:'加權今日較昨收漲幅須 > 此%才允許開倉；0 = 不限制', unit:'%', rtKey:'market_rise_min', type:'number', step:0.5, canDisable:false },
   // 停損停利
   { id:'stop_loss_ticks',      group:'停損停利', label:'停損 tick 數',    desc:'進場後向下跌超過此 tick 數觸發停損（觸價單）；停損價 = 進場價 - N × tick_size，向上捨入', unit:'tick', rtKey:'stop_loss_ticks', type:'number', step:1, min:1, canDisable:false },
   { id:'take_profit_add_pct',  group:'停損停利', label:'停利附加漲幅',    desc:'停利觸價單 = 昨收 × (1 + (進場時漲幅 + 此%) / 100)，向下捨入 tick；例：進場漲4%、附加4% → 停利在昨收漲8%', unit:'%', rtKey:'take_profit_add_pct', type:'number', step:0.5, min:0.5, canDisable:false },

@@ -22,20 +22,26 @@ from pydantic import BaseModel
 
 
 class TradingParamsBody(BaseModel):
-    max_position_capital: int
-    max_daily_positions: int
-    dry_run: bool
+    # 倉位控制
+    max_position_capital: int = 1000000
+    max_daily_positions: int = 5
+    dry_run: bool = True
     commission_discount: float = 0.28
-    daytrade_price_min: float = 200.0
-    daytrade_price_max: float = 990.0
-    # 進場條件 — ticks.db 熱重載
-    force_exit_time: str = "13:20"
-    latest_dynamic_add_time: str = "13:10"
+    # 進場條件
     tick_rise_threshold: int = 4
-    stop_loss_ticks: int = 4
-    take_profit_add_pct: float = 4.0
+    tick_window_seconds: int = 60
     max_change_pct: float = 5.0
     market_rise_min: float = 1.0
+    # 停損停利
+    stop_loss_ticks: int = 4
+    take_profit_add_pct: float = 4.0
+    # 交易時間
+    entry_start_time: str = "09:15"
+    latest_dynamic_add_time: str = "13:09"
+    force_exit_time: str = "13:20"
+    # 當沖篩選
+    daytrade_price_min: float = 180.0
+    daytrade_price_max: float = 990.0
 
 
 def _today() -> str:
@@ -102,67 +108,83 @@ def create_app(
     _store = daily_store
     _ticks_db = ticks_db
     _engine = trading_engine
-    _trading_params = {
+    _PARAM_KEYS = [
+        "dry_run", "max_position_capital", "max_daily_positions", "commission_discount",
+        "tick_rise_threshold", "tick_window_seconds", "max_change_pct", "market_rise_min",
+        "stop_loss_ticks", "take_profit_add_pct",
+        "entry_start_time", "latest_dynamic_add_time", "force_exit_time",
+        "daytrade_price_min", "daytrade_price_max",
+    ]
+    _trading_params: dict = {
+        "dry_run": dry_run,
         "max_position_capital": max_position_capital,
         "max_daily_positions": max_daily_positions,
-        "dry_run": dry_run,
         "commission_discount": 0.28,
-        "daytrade_price_min": 200.0,
-        "daytrade_price_max": 990.0,
-        # 進場條件 — engine 熱重載
-        "force_exit_time": "13:20",
-        "latest_dynamic_add_time": "13:10",
         "tick_rise_threshold": 4,
-        "stop_loss_ticks": 4,
-        "take_profit_add_pct": 4.0,
+        "tick_window_seconds": 60,
         "max_change_pct": 5.0,
         "market_rise_min": 1.0,
+        "stop_loss_ticks": 4,
+        "take_profit_add_pct": 4.0,
+        "entry_start_time": "09:15",
+        "latest_dynamic_add_time": "13:09",
+        "force_exit_time": "13:20",
+        "daytrade_price_min": 180.0,
+        "daytrade_price_max": 990.0,
     }
 
-    def _load_trading_params_from_db():
-        """從 SQLite settings 表還原所有交易參數（重啟後不遺失）"""
+    def _cast_param(k: str, v: str):
+        """字串 → 正確型別"""
+        if k == "dry_run":
+            return str(v).lower() in ("true", "1", "yes")
+        if k in ("max_position_capital", "max_daily_positions",
+                 "tick_rise_threshold", "tick_window_seconds", "stop_loss_ticks"):
+            return int(v)
+        if k in ("commission_discount", "take_profit_add_pct", "max_change_pct",
+                 "market_rise_min", "daytrade_price_min", "daytrade_price_max"):
+            return float(v)
+        return str(v)  # time strings
+
+    def _sync_to_ticks_db(kv: dict):
+        """把最新設定同步到 ticks.db，讓 engine _gs() 熱重載用"""
+        try:
+            with sqlite3.connect(_ticks_db, check_same_thread=False) as c:
+                c.execute("""CREATE TABLE IF NOT EXISTS settings (
+                    key TEXT PRIMARY KEY, value TEXT NOT NULL)""")
+                for k, v in kv.items():
+                    c.execute("INSERT OR REPLACE INTO settings(key,value) VALUES(?,?)",
+                              (k, str(v)))
+        except Exception:
+            pass
+
+    def _load_trading_params_from_pg():
+        """從 PG backend 載入設定；失敗時 fallback SQLite"""
+        try:
+            import httpx as _httpx
+            r = _httpx.get(f"{_BACKEND}/api/trading-settings", timeout=5)
+            if r.status_code == 200:
+                for k, v in r.json().items():
+                    if k in _PARAM_KEYS:
+                        _trading_params[k] = _cast_param(k, v)
+                _sync_to_ticks_db({k: _trading_params[k] for k in _PARAM_KEYS})
+                return
+        except Exception:
+            pass
+        # fallback: SQLite
         try:
             with sqlite3.connect(f"file:{_ticks_db}?mode=ro", uri=True,
                                  check_same_thread=False) as c:
                 rows = c.execute(
-                    "SELECT key, value FROM settings WHERE key IN "
-                    "('max_position_capital','max_daily_positions','dry_run','commission_discount',"
-                    "'daytrade_price_min','daytrade_price_max',"
-                    "'force_exit_time','latest_dynamic_add_time',"
-                    "'tick_rise_threshold','stop_loss_ticks','take_profit_add_pct',"
-                    "'max_change_pct','market_rise_min')"
+                    f"SELECT key, value FROM settings WHERE key IN "
+                    f"({','.join('?' * len(_PARAM_KEYS))})", _PARAM_KEYS
                 ).fetchall()
             for k, v in rows:
-                if k == 'max_position_capital':
-                    _trading_params['max_position_capital'] = int(v)
-                elif k == 'max_daily_positions':
-                    _trading_params['max_daily_positions'] = int(v)
-                elif k == 'dry_run':
-                    _trading_params['dry_run'] = v.lower() in ('true', '1', 'yes')
-                elif k == 'commission_discount':
-                    _trading_params['commission_discount'] = float(v)
-                elif k == 'daytrade_price_min':
-                    _trading_params['daytrade_price_min'] = float(v)
-                elif k == 'daytrade_price_max':
-                    _trading_params['daytrade_price_max'] = float(v)
-                elif k == 'force_exit_time':
-                    _trading_params['force_exit_time'] = v
-                elif k == 'latest_dynamic_add_time':
-                    _trading_params['latest_dynamic_add_time'] = v
-                elif k == 'tick_rise_threshold':
-                    _trading_params['tick_rise_threshold'] = int(v)
-                elif k == 'stop_loss_ticks':
-                    _trading_params['stop_loss_ticks'] = int(v)
-                elif k == 'take_profit_add_pct':
-                    _trading_params['take_profit_add_pct'] = float(v)
-                elif k == 'max_change_pct':
-                    _trading_params['max_change_pct'] = float(v)
-                elif k == 'market_rise_min':
-                    _trading_params['market_rise_min'] = float(v)
+                if k in _PARAM_KEYS:
+                    _trading_params[k] = _cast_param(k, v)
         except Exception:
             pass
 
-    _load_trading_params_from_db()
+    _load_trading_params_from_pg()
 
     # ── WebSocket push ────────────────────────────────────────────────────────
     _ws_clients: set = set()
@@ -634,7 +656,7 @@ def create_app(
     # ── Health check (19-item, port of premarket_check.py) ────────────────────
     @app.post("/health-check/run")
     def run_health_check(mode: str = "quick"):
-        """19-item 系統健診。mode=quick 略過 SDK 呼叫；mode=full 執行所有項目。"""
+        """18-item 系統健診。mode=quick 略過 SDK 呼叫；mode=full 執行所有項目。"""
         import datetime as dt
         ts = datetime.now().isoformat()
         items: list = []
@@ -678,29 +700,25 @@ def create_app(
         except Exception as e:
             add(3, "持倉數", False, detail=f"讀取失敗: {e}", data_source="ticks.db/intraday_positions")
 
-        # 04-06: index
-        idx_price = idx_chg5 = None
-        idx_circuit = "normal"
+        # 04-05: index
+        idx_price = idx_day_pct = None
         try:
             with sqlite3.connect(f"file:{_ticks_db}?mode=ro", uri=True,
                                  check_same_thread=False) as c:
                 row = c.execute(
-                    "SELECT price, change_5min, circuit FROM index_ticks ORDER BY id DESC LIMIT 1"
+                    "SELECT price, chg_day_pct FROM index_ticks ORDER BY id DESC LIMIT 1"
                 ).fetchone()
                 if row:
-                    idx_price, idx_chg5, idx_circuit = row[0], row[1], row[2] or "normal"
+                    idx_price, idx_day_pct = row[0], row[1]
         except Exception:
             pass
         mkt = idx_price is not None and idx_price > 0
         add(4, "加權指數", True, warn=not mkt,
             detail=f"{idx_price:,.0f} 點" if mkt else "盤前/休市 - 無 tick 屬正常",
             data_source="ticks.db/index_ticks", logic="最新一筆 price")
-        add(5, "指數5min變化", True, warn=not mkt,
-            detail=f"{idx_chg5:+.0f} 點" if idx_chg5 is not None else "尚無資料",
-            data_source="ticks.db/index_ticks", logic="change_5min 欄位")
-        cok = idx_circuit == "normal"
-        add(6, "熔斷狀態", cok, warn=not cok and mkt,
-            detail=f"circuit={idx_circuit}", data_source="ticks.db/index_ticks")
+        add(5, "指數日漲幅%", True, warn=not mkt,
+            detail=f"{idx_day_pct:+.2f}%" if idx_day_pct is not None else "尚無資料",
+            data_source="ticks.db/index_ticks", logic="chg_day_pct 欄位")
 
         # 07: engine direct status
         if _engine is not None:
@@ -1130,43 +1148,35 @@ def create_app(
 
     @app.post("/trading-params")
     def update_trading_params(body: TradingParamsBody):
+        import httpx as _httpx
         if body.max_position_capital <= 0:
             raise HTTPException(status_code=400, detail="max_position_capital must be > 0")
         if body.max_daily_positions <= 0:
             raise HTTPException(status_code=400, detail="max_daily_positions must be > 0")
+        # 更新 in-memory dict
+        _trading_params["dry_run"] = body.dry_run
         _trading_params["max_position_capital"] = body.max_position_capital
         _trading_params["max_daily_positions"] = body.max_daily_positions
-        _trading_params["dry_run"] = body.dry_run
         _trading_params["commission_discount"] = max(0.0, min(1.0, body.commission_discount))
-        _trading_params["daytrade_price_min"] = max(0.0, body.daytrade_price_min)
-        _trading_params["daytrade_price_max"] = max(0.0, body.daytrade_price_max)
-        _trading_params["force_exit_time"] = body.force_exit_time
-        _trading_params["latest_dynamic_add_time"] = body.latest_dynamic_add_time
         _trading_params["tick_rise_threshold"] = max(1, body.tick_rise_threshold)
-        _trading_params["stop_loss_ticks"] = max(1, body.stop_loss_ticks)
-        _trading_params["take_profit_add_pct"] = max(0.1, body.take_profit_add_pct)
+        _trading_params["tick_window_seconds"] = max(10, body.tick_window_seconds)
         _trading_params["max_change_pct"] = max(0.1, body.max_change_pct)
         _trading_params["market_rise_min"] = body.market_rise_min
+        _trading_params["stop_loss_ticks"] = max(1, body.stop_loss_ticks)
+        _trading_params["take_profit_add_pct"] = max(0.1, body.take_profit_add_pct)
+        _trading_params["entry_start_time"] = body.entry_start_time
+        _trading_params["latest_dynamic_add_time"] = body.latest_dynamic_add_time
+        _trading_params["force_exit_time"] = body.force_exit_time
+        _trading_params["daytrade_price_min"] = max(0.0, body.daytrade_price_min)
+        _trading_params["daytrade_price_max"] = max(0.0, body.daytrade_price_max)
+        # 持久化到 PG
         try:
-            with sqlite3.connect(_ticks_db, check_same_thread=False) as c:
-                for k, v in [
-                    ('max_position_capital', str(body.max_position_capital)),
-                    ('max_daily_positions', str(body.max_daily_positions)),
-                    ('dry_run', str(body.dry_run)),
-                    ('commission_discount', str(body.commission_discount)),
-                    ('daytrade_price_min', str(body.daytrade_price_min)),
-                    ('daytrade_price_max', str(body.daytrade_price_max)),
-                    ('force_exit_time', body.force_exit_time),
-                    ('latest_dynamic_add_time', body.latest_dynamic_add_time),
-                    ('tick_rise_threshold', str(body.tick_rise_threshold)),
-                    ('stop_loss_ticks', str(body.stop_loss_ticks)),
-                    ('take_profit_add_pct', str(body.take_profit_add_pct)),
-                    ('max_change_pct', str(body.max_change_pct)),
-                    ('market_rise_min', str(body.market_rise_min)),
-                ]:
-                    c.execute("INSERT OR REPLACE INTO settings(key,value) VALUES(?,?)", (k, v))
+            pg_body = {k: str(v) for k, v in _trading_params.items() if k in _PARAM_KEYS}
+            _httpx.post(f"{_BACKEND}/api/trading-settings", json=pg_body, timeout=5)
         except Exception:
             pass
+        # 同步到 ticks.db（engine _gs() 熱重載用）
+        _sync_to_ticks_db({k: _trading_params[k] for k in _PARAM_KEYS})
         return {"ok": True, "note": "✓ 已儲存，即時生效", **_trading_params}
 
     # ── Debug: 模擬買賣（送真實 LINE 通知，不影響引擎狀態）──────────────────────

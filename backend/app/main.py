@@ -108,6 +108,32 @@ async def _apply_migrations():
                     " ON CONFLICT (symbol) DO NOTHING"
                 ), {"s": sym, "n": name, "t": now})
 
+        # seed trading_settings defaults (INSERT only if key not yet present)
+        _TRADING_DEFAULTS = {
+            "dry_run":                  "true",
+            "max_position_capital":     "1000000",
+            "max_daily_positions":      "5",
+            "tick_rise_threshold":      "4",
+            "tick_window_seconds":      "60",
+            "max_change_pct":           "5.0",
+            "market_rise_min":          "1.0",
+            "stop_loss_ticks":          "4",
+            "take_profit_add_pct":      "4.0",
+            "entry_start_time":         "09:15",
+            "latest_dynamic_add_time":  "13:09",
+            "force_exit_time":          "13:20",
+            "commission_discount":      "0.28",
+            "daytrade_price_min":       "180.0",
+            "daytrade_price_max":       "990.0",
+        }
+        from datetime import datetime as _dt
+        now_ts = _dt.utcnow()
+        for k, v in _TRADING_DEFAULTS.items():
+            await conn.execute(text(
+                "INSERT INTO trading_settings (key, value, updated_at) VALUES (:k, :v, :t)"
+                " ON CONFLICT (key) DO NOTHING"
+            ), {"k": k, "v": v, "t": now_ts})
+
 
 _log = __import__("logging").getLogger(__name__)
 

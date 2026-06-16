@@ -247,6 +247,17 @@ class TradingEngine:
             try: return float(_gs("market_rise_min", "1.0"))
             except Exception: return 1.0
 
+        def _entry_start_mins() -> int:
+            try:
+                s = _gs("entry_start_time", "09:15")
+                h, m = map(int, s.split(":"))
+                return h * 60 + m
+            except Exception: return 9 * 60 + 15
+
+        def _tick_window_seconds() -> int:
+            try: return max(10, int(_gs("tick_window_seconds", "60")))
+            except Exception: return 60
+
         with self._lock:
             self._state["dry_run"] = dry_run
             self._state["max_daily_positions"] = max_daily_positions
@@ -401,13 +412,18 @@ class TradingEngine:
             )
             _bucket = _dd(list)
             for _p in _products_list:
-                if not isinstance(_p, dict):
-                    continue
-                _underlying = str(_p.get("underlyingSymbol", ""))
-                _psym = str(_p.get("symbol", ""))
-                _size = int(_p.get("contractSize") or 0)
-                if _underlying and _underlying.isdigit() and _psym:
+                if isinstance(_p, dict):
+                    _underlying = str(_p.get("underlyingSymbol", "") or "")
+                    _psym       = str(_p.get("symbol", "") or "")
+                    _size       = int(_p.get("contractSize") or 0)
+                else:
+                    _underlying = str(getattr(_p, "underlyingSymbol", "") or "")
+                    _psym       = str(getattr(_p, "symbol", "") or "")
+                    _size       = int(getattr(_p, "contractSize", 0) or 0)
+                if _underlying and _psym:
                     _bucket[_underlying].append((_size, _psym))
+            logger.info("futopt products: %d 標的有個股期  map keys(前10)=%s",
+                        len(_bucket), list(_bucket.keys())[:10])
             for _sym in symbols:
                 if _sym in _bucket:
                     _entries = sorted(_bucket[_sym], key=lambda x: -x[0])
@@ -504,7 +520,7 @@ class TradingEngine:
             except Exception:
                 pass
 
-            sess.on_tick(price, size, ts_ns)
+            sess.on_tick(price, size, ts_ns, tick_window_seconds=_tick_window_seconds())
             now = now_tw()
 
             pos_before = om.positions.get(symbol)
@@ -626,6 +642,7 @@ class TradingEngine:
                 tick_rise_threshold=_tick_rise_threshold(),
                 futures_signal=futures_signals.get(symbol),
                 entry_cutoff_mins=_entry_cutoff(),
+                entry_start_mins=_entry_start_mins(),
             )
             theory = sess.evaluate_theoretical(
                 combiner=combiner,
@@ -634,6 +651,7 @@ class TradingEngine:
                 tick_rise_threshold=_tick_rise_threshold(),
                 futures_signal=futures_signals.get(symbol),
                 entry_cutoff_mins=_entry_cutoff(),
+                entry_start_mins=_entry_start_mins(),
             )
 
             logger.info(

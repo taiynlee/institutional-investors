@@ -30,13 +30,13 @@ class SymbolSession:
         # 60秒滾動價格歷史（用於 tick_rise_60s 計算）
         self._price_history: deque = deque()  # (datetime, price)
 
-    def on_tick(self, price: float, size: int, ts_ns: int):
+    def on_tick(self, price: float, size: int, ts_ns: int, tick_window_seconds: int = 60):
         self.curr_price = price
         dt = now_tw()
         self.bar_builder.on_tick({"price": price, "volume": size, "time": dt})
         # 更新滾動價格歷史
         self._price_history.append((dt, price))
-        cutoff = dt - timedelta(seconds=60)
+        cutoff = dt - timedelta(seconds=tick_window_seconds)
         while self._price_history and self._price_history[0][0] < cutoff:
             self._price_history.popleft()
 
@@ -75,9 +75,10 @@ class SymbolSession:
         tick_rise_threshold: int,
         futures_signal=None,
         entry_cutoff_mins: int = 13 * 60 + 10,
+        entry_start_mins: int = 9 * 60 + 15,
     ) -> SignalResult:
         current_mins = current_time.hour * 60 + current_time.minute
-        time_ok = current_mins >= 9 * 60 + 15 and current_mins < entry_cutoff_mins
+        time_ok = current_mins >= entry_start_mins and current_mins < entry_cutoff_mins
         return combiner.evaluate(
             symbol=self.symbol,
             time_ok=time_ok,
@@ -99,9 +100,10 @@ class SymbolSession:
         tick_rise_threshold: int,
         futures_signal=None,
         entry_cutoff_mins: int = 13 * 60 + 10,
+        entry_start_mins: int = 9 * 60 + 15,
     ) -> SignalResult:
         current_mins = current_time.hour * 60 + current_time.minute
-        time_ok = current_mins >= 9 * 60 + 15 and current_mins < entry_cutoff_mins
+        time_ok = current_mins >= entry_start_mins and current_mins < entry_cutoff_mins
         return combiner.evaluate(
             symbol=self.symbol,
             time_ok=time_ok,

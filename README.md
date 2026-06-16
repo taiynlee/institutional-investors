@@ -524,6 +524,7 @@ docker compose up            # 全起（DB + 後端 + 前端）
 | `daytrade_pre_session_log` | 盤前跑批紀錄 | `id` |
 | `us_watchlist` | 美股追蹤清單 | `symbol` |
 | `fetch_log` | 爬取作業紀錄（防重複） | `(job_name, fetch_date)` |
+| `trading_settings` | 當沖引擎可調參數（key-value，15 項，即時熱重載） | `key` |
 
 ### 詳細欄位設計
 
@@ -727,18 +728,20 @@ LINE Bot 連結透過 ngrok tunnel 對外，開機自動重建 webhook URL。
 ### 進場/出場策略
 
 **進場條件（全部滿足）：**
-1. 時間：09:15 ~ 13:09
-2. 60 秒內上漲 ≥ 4 tick（滾動窗口）
-3. 個股漲跌幅在 ±5% 以內
-4. 大盤日漲幅 > 1%（vs 昨收）
-5. 今日進場次數 < 5（可同標的重複進場）
+1. 時間：`entry_start_time`（預設 09:15）~ `latest_dynamic_add_time`（預設 13:09）
+2. `tick_window_seconds`（預設 60 秒）內上漲 ≥ `tick_rise_threshold`（預設 4）tick
+3. 個股漲跌幅在 ±`max_change_pct`（預設 5%）以內
+4. 大盤日漲幅 > `market_rise_min`（預設 1%，vs 昨收）
+5. 今日進場次數 < `max_daily_positions`（預設 5，可同標的重複進場）
 6. 個股期貨（有資料時）：期貨價 > 現價（正價差）
 
-**進場同時掛出觸價單：**
-- 停損：進場價 - 4 tick（向上捨入）→ LessThanOrEqual 條件單
-- 停利：昨收 × (1 + (進場時漲幅 + 4%) / 100)（向下捨入）→ GreaterThanOrEqual 條件單
+所有參數儲存於 PostgreSQL `trading_settings`，透過前端「交易設定」頁面修改後**立即生效**（寫入 PG + 同步 ticks.db 熱重載快取，引擎每 tick 重讀，無需重啟）。
 
-**強制出場：** 13:20 市價賣出所有持倉
+**進場同時掛出觸價單：**
+- 停損：進場價 - `stop_loss_ticks`（預設 4）tick（向上捨入）→ LessThanOrEqual 條件單
+- 停利：昨收 × (1 + (進場時漲幅 + `take_profit_add_pct`（預設 4%）) / 100)（向下捨入）→ GreaterThanOrEqual 條件單
+
+**強制出場：** `force_exit_time`（預設 13:20）市價賣出所有持倉
 
 ### 架構說明
 
@@ -782,7 +785,7 @@ python run.py
 | 今日交易 | WebSocket `/fubon-api/ws/stream` | 即時持倉 + 盤中損益（WS 串流，每秒更新） |
 | 交易紀錄 | `/fubon-api/trades` | 今日成交記錄（ticks.db） |
 | 盤前狀況 | `/fubon-api/pre-session/logs` | 盤前跑批紀錄（PG） |
-| 交易設定 | `/fubon-api/trading-params` | 所有引擎參數（即時生效，存入 ticks.db，無需重啟引擎） |
+| 交易設定 | `/fubon-api/trading-params` + PG `trading_settings` | 所有引擎參數（即時生效：寫入 PG 持久化 + ticks.db 熱重載，引擎無需重啟） |
 | 系統設定 | `/fubon-api/config` | 讀取 config.yaml（帳密/憑證，只讀，密碼遮蔽） |
 | 系統健診 | `/fubon-api/health-check/results` + `/fubon-api/logs/today` | 引擎狀態、config、LINE 設定、tick 資料流 |
 
