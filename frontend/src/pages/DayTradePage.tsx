@@ -750,59 +750,51 @@ function PreSessionTab() {
 }
 
 // ── 交易設定 ─────────────────────────────────────────────────────────────────
-interface PD { id: string; group: string; label: string; desc: string; unit: string; source: 'rt'|'cfg'; rtKey?: string; cfgPath?: string; type: 'number'|'time'; step?: number; min?: number; max?: number; canDisable: boolean }
+interface PD { id: string; group: string; label: string; desc: string; unit: string; rtKey: string; type: 'number'|'time'; step?: number; min?: number; max?: number; canDisable: boolean }
 const PARAM_DEFS: PD[] = [
   // 倉位控制
-  { id:'max_position_capital', group:'倉位控制', label:'每檔資金上限',   desc:'單一標的最多動用的資金；ATR 張數算完後再 cap 到此值', unit:'TWD', source:'rt', rtKey:'max_position_capital', type:'number', step:100000, min:100000, canDisable:false },
-  { id:'max_daily_positions',  group:'倉位控制', label:'每日最多交易檔數', desc:'一天最多買賣幾檔股票；進場後即使出場也計入，達上限後當日不再開新倉', unit:'檔', source:'rt', rtKey:'max_daily_positions', type:'number', step:1, min:1, canDisable:false },
-  { id:'risk_per_trade_pct',   group:'倉位控制', label:'每筆風險比例',   desc:'每筆交易最多承擔總資金×此%的風險，決定張數公式基數', unit:'%', source:'cfg', cfgPath:'risk.risk_per_trade_pct', type:'number', step:0.5, min:0.1, canDisable:false },
+  { id:'max_position_capital', group:'倉位控制', label:'每檔資金上限',   desc:'單一標的最多動用的資金；ATR 張數算完後再 cap 到此值', unit:'TWD', rtKey:'max_position_capital', type:'number', step:100000, min:100000, canDisable:false },
+  { id:'max_daily_positions',  group:'倉位控制', label:'每日最多交易檔數', desc:'一天最多買賣幾檔股票；進場後即使出場也計入，達上限後當日不再開新倉', unit:'檔', rtKey:'max_daily_positions', type:'number', step:1, min:1, canDisable:false },
+  { id:'risk_per_trade_pct',   group:'倉位控制', label:'每筆風險比例',   desc:'每筆交易最多承擔總資金×此%的風險，決定張數公式基數', unit:'%', rtKey:'risk_per_trade_pct', type:'number', step:0.5, min:0.1, canDisable:false },
   // 交易時間
-  { id:'force_exit_time',          group:'交易時間', label:'強制出場時間',  desc:'到達此時間所有持倉強制市價出清，不管盈虧', unit:'HH:MM', source:'cfg', cfgPath:'trading.force_exit_time', type:'time', canDisable:false },
-  { id:'latest_dynamic_add_time',  group:'交易時間', label:'動態加入截止',  desc:'此時間後不接受新進場信號，距收盤太近避免來不及出清', unit:'HH:MM', source:'cfg', cfgPath:'trading.latest_dynamic_add_time', type:'time', canDisable:false },
-  { id:'time_stop_hour',           group:'交易時間', label:'時間止損',  desc:'持倉超過此時間仍虧損（price < entry）→ 自動出場（12.5 = 12:30）', unit:'時', source:'cfg', cfgPath:'trading.time_stop_hour', type:'number', step:0.5, min:9, max:13.5, canDisable:false },
+  { id:'force_exit_time',          group:'交易時間', label:'強制出場時間',  desc:'到達此時間所有持倉強制市價出清，不管盈虧', unit:'HH:MM', rtKey:'force_exit_time', type:'time', canDisable:false },
+  { id:'latest_dynamic_add_time',  group:'交易時間', label:'動態加入截止',  desc:'此時間後不接受新進場信號，距收盤太近避免來不及出清', unit:'HH:MM', rtKey:'latest_dynamic_add_time', type:'time', canDisable:false },
+  { id:'time_stop_hour',           group:'交易時間', label:'時間止損',  desc:'持倉超過此時間仍虧損（price < entry）→ 自動出場（12.5 = 12:30）', unit:'時', rtKey:'time_stop_hour', type:'number', step:0.5, min:9, max:13.5, canDisable:false },
   // 大盤熔斷
-  { id:'cb_crash_pct',      group:'大盤熔斷', label:'急跌熔斷門檻',  desc:'觀察視窗內大盤跌幅超過此% → 出清全倉並暫停進場；同比例急漲視為 surge 狀態', unit:'%', source:'rt', rtKey:'cb_crash_pct', type:'number', step:0.5, min:0.5, canDisable:true },
-  { id:'cb_window_min',     group:'大盤熔斷', label:'熔斷觀察視窗',  desc:'計算急跌的時間視窗（分鐘）', unit:'分鐘', source:'rt', rtKey:'cb_window_min', type:'number', step:1, min:1, canDisable:false },
-  { id:'cb_pause_minutes',  group:'大盤熔斷', label:'熔斷暫停時間',  desc:'觸發熔斷後暫停新開倉的分鐘數（即時生效）', unit:'分鐘', source:'rt', rtKey:'cb_pause_minutes', type:'number', step:5, min:5, canDisable:false },
+  { id:'cb_crash_pct',      group:'大盤熔斷', label:'急跌熔斷門檻',  desc:'觀察視窗內大盤跌幅超過此% → 出清全倉並暫停進場；同比例急漲視為 surge 狀態', unit:'%', rtKey:'cb_crash_pct', type:'number', step:0.5, min:0.5, canDisable:true },
+  { id:'cb_window_min',     group:'大盤熔斷', label:'熔斷觀察視窗',  desc:'計算急跌的時間視窗（分鐘）', unit:'分鐘', rtKey:'cb_window_min', type:'number', step:1, min:1, canDisable:false },
+  { id:'cb_pause_minutes',  group:'大盤熔斷', label:'熔斷暫停時間',  desc:'觸發熔斷後暫停新開倉的分鐘數', unit:'分鐘', rtKey:'cb_pause_minutes', type:'number', step:5, min:5, canDisable:false },
   // 進場信號
-  { id:'market_drop_threshold', group:'進場信號', label:'大盤日跌門檻',      desc:'加權今日較昨收跌超過此%時停止新開倉（例：-1.5 = 跌1.5%停買）', unit:'%', source:'cfg', cfgPath:'signal.market_drop_threshold', type:'number', step:0.5, canDisable:true },
-  { id:'max_entry_gain_pct',    group:'進場信號', label:'最大進場漲幅',      desc:'個股當日漲幅超過此%不開倉，避免追高；ORB 突破時本條件仍生效', unit:'%', source:'cfg', cfgPath:'signal.max_entry_gain_pct', type:'number', step:0.5, min:0, canDisable:true },
-  { id:'limit_up_buffer',       group:'進場信號', label:'漲停緩衝',          desc:'股價距漲停不足此%時不進場，避免追板買在最高點', unit:'%', source:'cfg', cfgPath:'signal.limit_up_buffer', type:'number', step:0.5, min:0, canDisable:true },
+  { id:'market_drop_threshold', group:'進場信號', label:'大盤日跌門檻',      desc:'加權今日較昨收跌超過此%時停止新開倉（例：-1.5 = 跌1.5%停買）', unit:'%', rtKey:'market_drop_threshold', type:'number', step:0.5, canDisable:true },
+  { id:'max_entry_gain_pct',    group:'進場信號', label:'最大進場漲幅',      desc:'個股當日漲幅超過此%不開倉，避免追高；ORB 突破時本條件仍生效', unit:'%', rtKey:'max_entry_gain_pct', type:'number', step:0.5, min:0, canDisable:true },
+  { id:'limit_up_buffer',       group:'進場信號', label:'漲停緩衝',          desc:'股價距漲停不足此%時不進場，避免追板買在最高點', unit:'%', rtKey:'limit_up_buffer', type:'number', step:0.5, min:0, canDisable:true },
   // 期貨過濾
-  { id:'futures_rocket_threshold',         group:'期貨過濾', label:'期貨急漲門檻',   desc:'個股期貨漲幅超過此% → 視為強勢標的，取消正常停利等漲停賣', unit:'%', source:'cfg', cfgPath:'signal.futures_rocket_threshold', type:'number', step:0.5, min:0, canDisable:true },
-  { id:'futures_crash_threshold',          group:'期貨過濾', label:'期貨急跌門檻',   desc:'個股期貨跌幅超過此% → 視為崩跌，立即市價出清', unit:'%', source:'cfg', cfgPath:'signal.futures_crash_threshold', type:'number', step:0.5, min:0, canDisable:true },
-  { id:'futures_spread_no_buy_pct',        group:'期貨過濾', label:'逆價差—禁止買',  desc:'期現差呈逆差超過此%時不開新倉（期貨端空方壓力警示）', unit:'%', source:'cfg', cfgPath:'signal.futures_spread_no_buy_pct', type:'number', step:0.1, min:0, canDisable:true },
-  { id:'futures_spread_reduce_pct',        group:'期貨過濾', label:'逆價差—減半倉',  desc:'逆差超過此%時，計算張數後減半，控制暴露風險', unit:'%', source:'cfg', cfgPath:'signal.futures_spread_reduce_pct', type:'number', step:0.1, min:0, canDisable:true },
-  { id:'futures_spread_sell_pct',          group:'期貨過濾', label:'逆價差—立即賣',  desc:'逆差超過此%時，持倉全數立即出清', unit:'%', source:'cfg', cfgPath:'signal.futures_spread_sell_pct', type:'number', step:0.5, min:0, canDisable:true },
-  { id:'futures_spread_fast_reversal_pct', group:'期貨過濾', label:'逆價差急惡化',   desc:'短窗口內逆差擴大速度超過此值時加速出場（趨勢惡化預警）', unit:'%', source:'cfg', cfgPath:'signal.futures_spread_fast_reversal_pct', type:'number', step:0.1, min:0, canDisable:true },
+  { id:'futures_rocket_threshold',         group:'期貨過濾', label:'期貨急漲門檻',   desc:'個股期貨漲幅超過此% → 視為強勢標的，取消正常停利等漲停賣', unit:'%', rtKey:'futures_rocket_threshold', type:'number', step:0.5, min:0, canDisable:true },
+  { id:'futures_crash_threshold',          group:'期貨過濾', label:'期貨急跌門檻',   desc:'個股期貨跌幅超過此% → 視為崩跌，立即市價出清', unit:'%', rtKey:'futures_crash_threshold', type:'number', step:0.5, min:0, canDisable:true },
+  { id:'futures_spread_no_buy_pct',        group:'期貨過濾', label:'逆價差—禁止買',  desc:'期現差呈逆差超過此%時不開新倉（期貨端空方壓力警示）', unit:'%', rtKey:'futures_spread_no_buy_pct', type:'number', step:0.1, min:0, canDisable:true },
+  { id:'futures_spread_reduce_pct',        group:'期貨過濾', label:'逆價差—減半倉',  desc:'逆差超過此%時，計算張數後減半，控制暴露風險', unit:'%', rtKey:'futures_spread_reduce_pct', type:'number', step:0.1, min:0, canDisable:true },
+  { id:'futures_spread_sell_pct',          group:'期貨過濾', label:'逆價差—立即賣',  desc:'逆差超過此%時，持倉全數立即出清', unit:'%', rtKey:'futures_spread_sell_pct', type:'number', step:0.5, min:0, canDisable:true },
+  { id:'futures_spread_fast_reversal_pct', group:'期貨過濾', label:'逆價差急惡化',   desc:'短窗口內逆差擴大速度超過此值時加速出場（趨勢惡化預警）', unit:'%', rtKey:'futures_spread_fast_reversal_pct', type:'number', step:0.1, min:0, canDisable:true },
   // 風控
-  { id:'atr_multiplier',         group:'風控', label:'ATR 倍數',       desc:'停損距離 = ATR × 此倍數；同時決定張數公式分母（資金×1% ÷ (ATR×倍數×1000)）', unit:'x', source:'cfg', cfgPath:'risk.atr_multiplier', type:'number', step:0.5, min:0.5, canDisable:false },
+  { id:'atr_multiplier',         group:'風控', label:'ATR 倍數',       desc:'停損距離 = ATR × 此倍數；同時決定張數公式分母（資金×1% ÷ (ATR×倍數×1000)）', unit:'x', rtKey:'atr_multiplier', type:'number', step:0.5, min:0.5, canDisable:false },
   // 停利/停損策略
-  { id:'take_profit_pct',       group:'停利策略', label:'最終停利',          desc:'漲幅達此%時全部出清', unit:'%', source:'cfg', cfgPath:'risk.take_profit_pct', type:'number', step:0.5, min:0, canDisable:true },
-  { id:'trailing_trigger_pct',  group:'停利策略', label:'移動停損啟動',      desc:'獲利達此%後啟動移動停損追蹤；之後從最高點回落 trailing_pullback_pct% 即出場', unit:'%', source:'cfg', cfgPath:'risk.trailing_trigger_pct', type:'number', step:0.5, min:0.5, canDisable:false },
-  { id:'trailing_pullback_pct', group:'停利策略', label:'移動停損回落幅度',  desc:'啟動移動停損後，從歷史最高點回落此%即觸發出場', unit:'%', source:'cfg', cfgPath:'risk.trailing_pullback_pct', type:'number', step:0.5, min:0.5, canDisable:false },
+  { id:'take_profit_pct',       group:'停利策略', label:'最終停利',          desc:'漲幅達此%時全部出清', unit:'%', rtKey:'take_profit_pct', type:'number', step:0.5, min:0, canDisable:true },
+  { id:'trailing_trigger_pct',  group:'停利策略', label:'移動停損啟動',      desc:'獲利達此%後啟動移動停損追蹤；之後從最高點回落 trailing_pullback_pct% 即出場', unit:'%', rtKey:'trailing_trigger_pct', type:'number', step:0.5, min:0.5, canDisable:false },
+  { id:'trailing_pullback_pct', group:'停利策略', label:'移動停損回落幅度',  desc:'啟動移動停損後，從歷史最高點回落此%即觸發出場', unit:'%', rtKey:'trailing_pullback_pct', type:'number', step:0.5, min:0.5, canDisable:false },
   // 委託設定
-  { id:'buy_order_timeout_secs',     group:'委託設定', label:'買單逾時',      desc:'買單掛出後超過此秒數未成交，自動取消並追價重試（dry run 無效）', unit:'秒', source:'cfg', cfgPath:'order.buy_order_timeout_secs', type:'number', step:10, min:10, canDisable:false },
-  { id:'buy_retry_ticks',            group:'委託設定', label:'追價 tick 數',  desc:'追價委託時在最新成交價上加幾個 tick，避免又追不到（dry run 無效）', unit:'tick', source:'cfg', cfgPath:'order.buy_retry_ticks', type:'number', step:1, min:0, canDisable:false },
-  { id:'commission_discount',        group:'委託設定', label:'手續費折扣',    desc:'券商手續費折讓倍率：0.28 = 付28%，72% 月底退還', unit:'折', source:'rt', rtKey:'commission_discount', type:'number', step:0.01, min:0.01, max:1, canDisable:false },
-  { id:'futures_poll_interval_secs', group:'委託設定', label:'期貨輪詢間隔',  desc:'主動查詢個股期貨價格的間隔秒數（REST API，非 WebSocket）', unit:'秒', source:'cfg', cfgPath:'order.futures_poll_interval_secs', type:'number', step:5, min:5, canDisable:false },
+  { id:'buy_order_timeout_secs',     group:'委託設定', label:'買單逾時',      desc:'買單掛出後超過此秒數未成交，自動取消並追價重試（dry run 無效）', unit:'秒', rtKey:'buy_order_timeout_secs', type:'number', step:10, min:10, canDisable:false },
+  { id:'buy_retry_ticks',            group:'委託設定', label:'追價 tick 數',  desc:'追價委託時在最新成交價上加幾個 tick，避免又追不到（dry run 無效）', unit:'tick', rtKey:'buy_retry_ticks', type:'number', step:1, min:0, canDisable:false },
+  { id:'commission_discount',        group:'委託設定', label:'手續費折扣',    desc:'券商手續費折讓倍率：0.28 = 付28%，72% 月底退還', unit:'折', rtKey:'commission_discount', type:'number', step:0.01, min:0.01, max:1, canDisable:false },
+  { id:'futures_poll_interval_secs', group:'委託設定', label:'期貨輪詢間隔',  desc:'主動查詢個股期貨價格的間隔秒數（REST API，非 WebSocket）', unit:'秒', rtKey:'futures_poll_interval_secs', type:'number', step:5, min:5, canDisable:false },
   // 當沖篩選條件
-  { id:'daytrade_price_min', group:'當沖篩選', label:'股價下限', desc:'當沖候選昨收低於此值排除（太便宜流動性差、跳動幅度小）', unit:'元', source:'rt', rtKey:'daytrade_price_min', type:'number', step:50, min:0, canDisable:false },
-  { id:'daytrade_price_max', group:'當沖篩選', label:'股價上限', desc:'當沖候選昨收高於此值排除（太貴每張成本高，不利當沖資金配置）', unit:'元', source:'rt', rtKey:'daytrade_price_max', type:'number', step:50, min:0, canDisable:false },
+  { id:'daytrade_price_min', group:'當沖篩選', label:'股價下限', desc:'當沖候選昨收低於此值排除（太便宜流動性差、跳動幅度小）', unit:'元', rtKey:'daytrade_price_min', type:'number', step:50, min:0, canDisable:false },
+  { id:'daytrade_price_max', group:'當沖篩選', label:'股價上限', desc:'當沖候選昨收高於此值排除（太貴每張成本高，不利當沖資金配置）', unit:'元', rtKey:'daytrade_price_max', type:'number', step:50, min:0, canDisable:false },
 ]
 
 const _PARAM_GROUPS = Array.from(new Set(PARAM_DEFS.map(p => p.group)))
 
-function getCfgVal(cfg: any, dotted: string): any {
-  const parts = dotted.split('.')
-  let v: any = cfg
-  for (const p of parts) v = v?.[p]
-  return v
-}
-
 function ParamsTab() {
   const [rtParams, setRtParams] = useState<any>(null)
-  const [cfgData,  setCfgData]  = useState<any>(null)
   const [vals, setVals] = useState<Record<string, any>>({})
   const [enabled, setEnabled] = useState<Record<string, boolean>>(() => {
     try { const s = localStorage.getItem('fubon_param_enabled'); if (s) return JSON.parse(s) } catch {}
@@ -812,17 +804,11 @@ function ParamsTab() {
   const [note, setNote] = useState<{ok: boolean; msg: string} | null>(null)
 
   useEffect(() => {
-    Promise.all([
-      axios.get(`${API}/trading-params`),
-      axios.get(`${API}/config`),
-    ]).then(([r1, r2]) => {
+    axios.get(`${API}/trading-params`).then(r1 => {
       setRtParams(r1.data)
-      setCfgData(r2.data)
       const v: Record<string, any> = {}
       for (const p of PARAM_DEFS) {
-        v[p.id] = p.source === 'rt'
-          ? r1.data[p.rtKey!]
-          : getCfgVal(r2.data, p.cfgPath!)
+        v[p.id] = r1.data[p.rtKey]
       }
       setVals(v)
     }).catch(() => {})
@@ -838,30 +824,18 @@ function ParamsTab() {
     if (!rtParams) return
     setSaving(true); setNote(null)
     try {
-      await axios.post(`${API}/trading-params`, {
-        dry_run:              rtParams.dry_run ?? true,
-        max_position_capital: Number(vals.max_position_capital) || 1000000,
-        max_daily_positions:  Number(vals.max_daily_positions)  || 3,
-        commission_discount:  Number(vals.commission_discount)  || 0.28,
-        cb_crash_pct:         Number(vals.cb_crash_pct)         || 1.5,
-        cb_window_min:        Number(vals.cb_window_min)        || 5,
-        cb_pause_minutes:     Number(vals.cb_pause_minutes)     || 30,
-        daytrade_price_min:   Number(vals.daytrade_price_min)   ?? 200,
-        daytrade_price_max:   Number(vals.daytrade_price_max)   ?? 990,
-      })
-      const cfgUpdate: Record<string, any> = {}
+      const body: Record<string, any> = { dry_run: rtParams.dry_run ?? true }
       for (const p of PARAM_DEFS) {
-        if (p.source === 'cfg' && (enabled[p.id] ?? true) && vals[p.id] != null)
-          cfgUpdate[p.cfgPath!] = vals[p.id]
+        if (vals[p.id] != null) body[p.rtKey] = vals[p.id]
       }
-      if (Object.keys(cfgUpdate).length) await axios.post(`${API}/config/update`, cfgUpdate)
-      setNote({ ok: true, msg: '✓ 已儲存。config.yaml 參數需重啟引擎後生效。' })
+      await axios.post(`${API}/trading-params`, body)
+      setNote({ ok: true, msg: '✓ 已儲存' })
     } catch (e: any) {
       setNote({ ok: false, msg: `✕ 儲存失敗：${e?.response?.data?.detail ?? e.message}` })
     } finally { setSaving(false) }
   }
 
-  if (!rtParams || !cfgData)
+  if (!rtParams)
     return <div className={`text-center py-12 text-sm ${muted}`}>載入中...</div>
 
   const isDry = rtParams?.dry_run ?? true
@@ -896,7 +870,7 @@ function ParamsTab() {
           {saving ? '儲存中...' : '儲存全部設定'}
         </button>
         <span className={`text-xs ${muted}`}>
-          ⚡ <span className="text-blue-400/80">即時生效</span>　⚙ <span className="text-amber-400/80">yaml — 需重啟引擎</span>
+          ⚡ <span className="text-blue-400/80">所有參數即時生效，無需重啟引擎</span>
         </span>
         {note && <span className={`text-xs font-medium ${note.ok ? 'text-green-400' : 'text-red-400'}`}>{note.msg}</span>}
       </div>
@@ -943,9 +917,7 @@ function ParamsTab() {
                       </td>
                       <td className="px-3 py-2.5">
                         <div className={`text-xs font-semibold text-[#dde6f0] ${!on ? 'line-through' : ''}`}>{p.label}</div>
-                        <div className={`text-[10px] mt-0.5 ${p.source === 'cfg' ? 'text-amber-400/70' : 'text-blue-400/70'}`}>
-                          {p.source === 'cfg' ? '⚙ yaml' : '⚡ 即時'}
-                        </div>
+                        <div className="text-[10px] mt-0.5 text-blue-400/70">⚡ 即時</div>
                       </td>
                       <td className={`px-3 py-2.5 text-xs ${muted} leading-relaxed`}>{p.desc}</td>
                       <td className="px-3 py-2.5 text-right">

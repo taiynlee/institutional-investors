@@ -753,8 +753,8 @@ python run.py
 | 今日交易 | WebSocket `/fubon-api/ws/stream` | 即時持倉 + 盤中損益（WS 串流，每秒更新） |
 | 交易紀錄 | `/fubon-api/trades` | 今日成交記錄（ticks.db） |
 | 盤前狀況 | `/fubon-api/pre-session/logs` | 盤前跑批紀錄（PG） |
-| 交易設定 | `/fubon-api/trading-params` | 資金限額、持倉數、dry run 開關 |
-| 系統設定 | `/fubon-api/config` | 讀取 config.yaml（密碼遮蔽） |
+| 交易設定 | `/fubon-api/trading-params` | 所有引擎參數（即時生效，存入 ticks.db，無需重啟引擎） |
+| 系統設定 | `/fubon-api/config` | 讀取 config.yaml（帳密/憑證，只讀，密碼遮蔽） |
 | 系統健診 | `/fubon-api/health-check/results` + `/fubon-api/logs/today` | 引擎狀態、config、LINE 設定、tick 資料流 |
 
 ### 安全注意

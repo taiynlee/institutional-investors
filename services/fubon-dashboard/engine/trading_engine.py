@@ -197,26 +197,88 @@ class TradingEngine:
         signal_cfg = cfg.get("signal", {})
 
         dry_run = True  # 永遠 dry_run（安全護欄）
-        force_exit_str = trading.get("force_exit_time", "13:20")
-        force_exit_h, force_exit_m = map(int, force_exit_str.split(":"))
-        dynamic_add_str = trading.get("latest_dynamic_add_time", "13:10")
-        _da_h, _da_m = map(int, dynamic_add_str.split(":"))
-        entry_cutoff_mins = _da_h * 60 + _da_m
+        # 從 yaml 讀初始值（fallback）；運行時改由 ticks.db settings 熱重載
+        force_exit_str    = trading.get("force_exit_time", "13:20")
+        dynamic_add_str   = trading.get("latest_dynamic_add_time", "13:10")
         max_position_capital = trading.get("max_position_capital", 0)
-        max_daily_positions = trading.get("max_daily_positions", 3)
-        total_capital = trading.get("max_daily_buy_amount", 10_000_000)
+        max_daily_positions  = trading.get("max_daily_positions", 3)
+        total_capital        = trading.get("max_daily_buy_amount", 10_000_000)
+        atr_multiplier_cfg   = float(risk_cfg.get("atr_multiplier", 1.8))
+        risk_per_trade_pct   = float(risk_cfg.get("risk_per_trade_pct", 1.0))
+        trailing_trigger_pct = float(risk_cfg.get("trailing_trigger_pct", 2.0))
+        trailing_pullback_pct= float(risk_cfg.get("trailing_pullback_pct", 1.5))
+        take_profit_pct      = float(risk_cfg.get("take_profit_pct", 5.0))
+        time_stop_hour       = float(trading.get("time_stop_hour", 12.5))
+        cb_pause_min_cfg     = int(trading.get("cb_pause_minutes", 30))
+        max_entry_gain_pct   = float(signal_cfg.get("max_entry_gain_pct", 4.0))
+        limit_up_buffer_pct  = float(signal_cfg.get("limit_up_buffer", 4.0))
+        MKT_DAY_GATE_PCT     = float(signal_cfg.get("market_drop_threshold", -1.5))
 
-        # 從 config 讀取可設定參數
-        atr_multiplier_cfg    = float(risk_cfg.get("atr_multiplier", 1.8))
-        risk_per_trade_pct    = risk_cfg.get("risk_per_trade_pct", 1.0)
-        trailing_trigger_pct  = risk_cfg.get("trailing_trigger_pct", 2.0)
-        trailing_pullback_pct = float(risk_cfg.get("trailing_pullback_pct", 1.5))
-        take_profit_pct       = risk_cfg.get("take_profit_pct", 5.0)
-        time_stop_hour        = float(trading.get("time_stop_hour", 11))
-        cb_pause_min_cfg      = int(trading.get("cb_pause_minutes", 30))
-        max_entry_gain_pct    = float(signal_cfg.get("max_entry_gain_pct", 4.0))
-        limit_up_buffer_pct   = float(signal_cfg.get("limit_up_buffer", 4.0))
-        MKT_DAY_GATE_PCT      = float(signal_cfg.get("market_drop_threshold", -1.5))
+        # ── 熱重載 helpers：每次被呼叫時從 ticks.db 讀取最新值 ─────────────────
+        def _gs(key: str, default: str) -> str:
+            return get_setting(ticks_db, key, default)
+
+        def _max_position_capital() -> float:
+            try: return max(0, float(_gs("max_position_capital", str(max_position_capital))))
+            except Exception: return max_position_capital
+
+        def _max_daily_positions() -> int:
+            try: return max(1, int(_gs("max_daily_positions", str(max_daily_positions))))
+            except Exception: return max_daily_positions
+
+        def _atr_multiplier() -> float:
+            try: return max(0.5, float(_gs("atr_multiplier", str(atr_multiplier_cfg))))
+            except Exception: return atr_multiplier_cfg
+
+        def _risk_per_trade() -> float:
+            try: return max(0.1, float(_gs("risk_per_trade_pct", str(risk_per_trade_pct))))
+            except Exception: return risk_per_trade_pct
+
+        def _trailing_trigger() -> float:
+            try: return max(0.5, float(_gs("trailing_trigger_pct", str(trailing_trigger_pct))))
+            except Exception: return trailing_trigger_pct
+
+        def _trailing_pullback() -> float:
+            try: return max(0.5, float(_gs("trailing_pullback_pct", str(trailing_pullback_pct))))
+            except Exception: return trailing_pullback_pct
+
+        def _take_profit() -> float:
+            try: return max(0.5, float(_gs("take_profit_pct", str(take_profit_pct))))
+            except Exception: return take_profit_pct
+
+        def _time_stop_h() -> float:
+            try: return float(_gs("time_stop_hour", str(time_stop_hour)))
+            except Exception: return time_stop_hour
+
+        def _force_exit_time() -> time:
+            try:
+                s = _gs("force_exit_time", force_exit_str)
+                h, m = map(int, s.split(":"))
+                return time(h, m)
+            except Exception:
+                h, m = map(int, force_exit_str.split(":"))
+                return time(h, m)
+
+        def _entry_cutoff() -> int:
+            try:
+                s = _gs("latest_dynamic_add_time", dynamic_add_str)
+                h, m = map(int, s.split(":"))
+                return h * 60 + m
+            except Exception:
+                h, m = map(int, dynamic_add_str.split(":"))
+                return h * 60 + m
+
+        def _market_drop_threshold() -> float:
+            try: return float(_gs("market_drop_threshold", str(MKT_DAY_GATE_PCT)))
+            except Exception: return MKT_DAY_GATE_PCT
+
+        def _max_entry_gain() -> float:
+            try: return float(_gs("max_entry_gain_pct", str(max_entry_gain_pct)))
+            except Exception: return max_entry_gain_pct
+
+        def _limit_up_buf() -> float:
+            try: return max(0.5, float(_gs("limit_up_buffer", str(limit_up_buffer_pct))))
+            except Exception: return limit_up_buffer_pct
 
         with self._lock:
             self._state["dry_run"] = dry_run
@@ -429,7 +491,7 @@ class TradingEngine:
             om,
             take_profit_pct=take_profit_pct,
             time_stop_hour=time_stop_hour,
-            force_exit_time=time(force_exit_h, force_exit_m),
+            force_exit_time=_force_exit_time(),
         )
         combiner = SignalCombiner(
             max_entry_gain_pct=max_entry_gain_pct,
@@ -442,7 +504,7 @@ class TradingEngine:
         paper = PaperTracker(
             take_profit_pct=take_profit_pct,
             time_stop_hour=time_stop_hour,
-            force_exit_time=time(force_exit_h, force_exit_m),
+            force_exit_time=_force_exit_time(),
             atr_multiplier=atr_multiplier_cfg,
         )
 
@@ -678,24 +740,34 @@ class TradingEngine:
             trades_today = dt.daily_entries
             now = now_tw()
 
+            # 熱重載可調參數（每次 evaluate 前從 ticks.db 拉最新）
+            combiner.max_entry_gain_pct = _max_entry_gain()
+            combiner.limit_up_buffer_pct = _limit_up_buf()
+            rm.take_profit_pct = _take_profit()
+            rm.time_stop_hour = _time_stop_h()
+            rm.force_exit_time = _force_exit_time()
+            paper.take_profit_pct = _take_profit()
+            paper.time_stop_hour = _time_stop_h()
+            paper.force_exit_time = _force_exit_time()
+
             # 大盤日跌幅 gate：昨收取得失敗（_idx_ref=0）時放行
-            market_ok = (_idx_ref <= 0 or _idx.get("chg_day_pct", 0.0) > MKT_DAY_GATE_PCT)
+            market_ok = (_idx_ref <= 0 or _idx.get("chg_day_pct", 0.0) > _market_drop_threshold())
 
             result = sess.evaluate(
                 combiner=combiner, vp=vp, tech=tech,
                 current_time=now_time,
                 positions_count=trades_today,
-                max_positions=max_daily_positions,
+                max_positions=_max_daily_positions(),
                 not_in_position=not_in_pos,
                 futures_signal=futures_signals.get(symbol),
-                entry_cutoff_mins=entry_cutoff_mins,
+                entry_cutoff_mins=_entry_cutoff(),
                 market_ok=market_ok,
             )
             theory = sess.evaluate_theoretical(
                 combiner=combiner, vp=vp, tech=tech,
                 current_time=now_time,
                 futures_signal=futures_signals.get(symbol),
-                entry_cutoff_mins=entry_cutoff_mins,
+                entry_cutoff_mins=_entry_cutoff(),
                 market_ok=market_ok,
             )
 
@@ -720,7 +792,7 @@ class TradingEngine:
 
             if theory.should_enter and symbol not in paper.positions:
                 price = sess.curr_price
-                lots = bm.calculate_lots(atr=sess.atr, atr_multiplier=atr_multiplier_cfg,
+                lots = bm.calculate_lots(atr=sess.atr, atr_multiplier=_atr_multiplier(),
                                          price=price, remaining_budget=total_capital)
                 lots = max(1, int(lots * theory.position_size_ratio))
                 if paper.enter(symbol=symbol, price=price, lots=lots,
@@ -733,7 +805,11 @@ class TradingEngine:
             remaining = total_capital - sum(
                 p.entry_price * p.lots * 1000 for p in om.positions.values()
             )
-            lots = bm.calculate_lots(atr=sess.atr, atr_multiplier=atr_multiplier_cfg,
+            # 熱重載倉控參數
+            bm.max_position_capital = _max_position_capital()
+            bm.risk_per_trade_pct = _risk_per_trade()
+            _atr_mult = _atr_multiplier()
+            lots = bm.calculate_lots(atr=sess.atr, atr_multiplier=_atr_mult,
                                      price=price, remaining_budget=remaining)
             lots = max(0, int(lots * size_ratio))
             if lots <= 0:
@@ -742,9 +818,9 @@ class TradingEngine:
 
             pos = Position(
                 symbol=symbol, entry_price=price, lots=lots,
-                atr=sess.atr, atr_multiplier=atr_multiplier_cfg, orb_low=None,
-                trailing_trigger_pct=trailing_trigger_pct,
-                trailing_pullback_pct=trailing_pullback_pct,
+                atr=sess.atr, atr_multiplier=_atr_mult, orb_low=None,
+                trailing_trigger_pct=_trailing_trigger(),
+                trailing_pullback_pct=_trailing_pullback(),
             )
             om.positions[symbol] = pos
             _entry_times[symbol] = now_tw()

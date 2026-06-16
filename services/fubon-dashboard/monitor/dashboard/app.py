@@ -26,11 +26,32 @@ class TradingParamsBody(BaseModel):
     max_daily_positions: int
     dry_run: bool
     commission_discount: float = 0.28
-    cb_crash_pct: float = 1.5   # N分鐘跌幅觸發熔斷（%）
+    cb_crash_pct: float = 1.5
     cb_window_min: int = 5
-    cb_pause_minutes: int = 30  # 熔斷後暫停進場分鐘數
-    daytrade_price_min: float = 200.0  # 當沖篩選股價下限
-    daytrade_price_max: float = 990.0  # 當沖篩選股價上限
+    cb_pause_minutes: int = 30
+    daytrade_price_min: float = 200.0
+    daytrade_price_max: float = 990.0
+    # formerly yaml-only params — now in ticks.db, hot-reload by engine
+    risk_per_trade_pct: float = 1.0
+    atr_multiplier: float = 1.8
+    force_exit_time: str = "13:20"
+    latest_dynamic_add_time: str = "13:10"
+    time_stop_hour: float = 12.5
+    market_drop_threshold: float = -2.0
+    max_entry_gain_pct: float = 4.0
+    limit_up_buffer: float = 4.0
+    futures_rocket_threshold: float = 9.5
+    futures_crash_threshold: float = 9.5
+    futures_spread_no_buy_pct: float = 0.3
+    futures_spread_reduce_pct: float = 0.8
+    futures_spread_sell_pct: float = 1.5
+    futures_spread_fast_reversal_pct: float = 0.5
+    take_profit_pct: float = 5.0
+    trailing_trigger_pct: float = 2.0
+    trailing_pullback_pct: float = 1.5
+    buy_order_timeout_secs: int = 60
+    buy_retry_ticks: int = 2
+    futures_poll_interval_secs: int = 30
 
 
 def _today() -> str:
@@ -107,6 +128,27 @@ def create_app(
         "cb_pause_minutes": 30,
         "daytrade_price_min": 200.0,
         "daytrade_price_max": 990.0,
+        # engine hot-reload params (formerly yaml-only)
+        "risk_per_trade_pct": 1.0,
+        "atr_multiplier": 1.8,
+        "force_exit_time": "13:20",
+        "latest_dynamic_add_time": "13:10",
+        "time_stop_hour": 12.5,
+        "market_drop_threshold": -2.0,
+        "max_entry_gain_pct": 4.0,
+        "limit_up_buffer": 4.0,
+        "futures_rocket_threshold": 9.5,
+        "futures_crash_threshold": 9.5,
+        "futures_spread_no_buy_pct": 0.3,
+        "futures_spread_reduce_pct": 0.8,
+        "futures_spread_sell_pct": 1.5,
+        "futures_spread_fast_reversal_pct": 0.5,
+        "take_profit_pct": 5.0,
+        "trailing_trigger_pct": 2.0,
+        "trailing_pullback_pct": 1.5,
+        "buy_order_timeout_secs": 60,
+        "buy_retry_ticks": 2,
+        "futures_poll_interval_secs": 30,
     }
 
     def _load_trading_params_from_db():
@@ -118,7 +160,14 @@ def create_app(
                     "SELECT key, value FROM settings WHERE key IN "
                     "('cb_crash_pct','cb_window_min','cb_pause_minutes',"
                     "'max_position_capital','max_daily_positions','dry_run','commission_discount',"
-                    "'daytrade_price_min','daytrade_price_max')"
+                    "'daytrade_price_min','daytrade_price_max',"
+                    "'risk_per_trade_pct','atr_multiplier','force_exit_time',"
+                    "'latest_dynamic_add_time','time_stop_hour','market_drop_threshold',"
+                    "'max_entry_gain_pct','limit_up_buffer','futures_rocket_threshold',"
+                    "'futures_crash_threshold','futures_spread_no_buy_pct','futures_spread_reduce_pct',"
+                    "'futures_spread_sell_pct','futures_spread_fast_reversal_pct',"
+                    "'take_profit_pct','trailing_trigger_pct','trailing_pullback_pct',"
+                    "'buy_order_timeout_secs','buy_retry_ticks','futures_poll_interval_secs')"
                 ).fetchall()
             for k, v in rows:
                 if k == 'cb_crash_pct':
@@ -139,6 +188,46 @@ def create_app(
                     _trading_params['daytrade_price_min'] = float(v)
                 elif k == 'daytrade_price_max':
                     _trading_params['daytrade_price_max'] = float(v)
+                elif k == 'risk_per_trade_pct':
+                    _trading_params['risk_per_trade_pct'] = float(v)
+                elif k == 'atr_multiplier':
+                    _trading_params['atr_multiplier'] = float(v)
+                elif k == 'force_exit_time':
+                    _trading_params['force_exit_time'] = v
+                elif k == 'latest_dynamic_add_time':
+                    _trading_params['latest_dynamic_add_time'] = v
+                elif k == 'time_stop_hour':
+                    _trading_params['time_stop_hour'] = float(v)
+                elif k == 'market_drop_threshold':
+                    _trading_params['market_drop_threshold'] = float(v)
+                elif k == 'max_entry_gain_pct':
+                    _trading_params['max_entry_gain_pct'] = float(v)
+                elif k == 'limit_up_buffer':
+                    _trading_params['limit_up_buffer'] = float(v)
+                elif k == 'futures_rocket_threshold':
+                    _trading_params['futures_rocket_threshold'] = float(v)
+                elif k == 'futures_crash_threshold':
+                    _trading_params['futures_crash_threshold'] = float(v)
+                elif k == 'futures_spread_no_buy_pct':
+                    _trading_params['futures_spread_no_buy_pct'] = float(v)
+                elif k == 'futures_spread_reduce_pct':
+                    _trading_params['futures_spread_reduce_pct'] = float(v)
+                elif k == 'futures_spread_sell_pct':
+                    _trading_params['futures_spread_sell_pct'] = float(v)
+                elif k == 'futures_spread_fast_reversal_pct':
+                    _trading_params['futures_spread_fast_reversal_pct'] = float(v)
+                elif k == 'take_profit_pct':
+                    _trading_params['take_profit_pct'] = float(v)
+                elif k == 'trailing_trigger_pct':
+                    _trading_params['trailing_trigger_pct'] = float(v)
+                elif k == 'trailing_pullback_pct':
+                    _trading_params['trailing_pullback_pct'] = float(v)
+                elif k == 'buy_order_timeout_secs':
+                    _trading_params['buy_order_timeout_secs'] = int(v)
+                elif k == 'buy_retry_ticks':
+                    _trading_params['buy_retry_ticks'] = int(v)
+                elif k == 'futures_poll_interval_secs':
+                    _trading_params['futures_poll_interval_secs'] = int(v)
         except Exception:
             pass
 
@@ -1123,6 +1212,26 @@ def create_app(
         _trading_params["cb_pause_minutes"] = max(5, body.cb_pause_minutes)
         _trading_params["daytrade_price_min"] = max(0.0, body.daytrade_price_min)
         _trading_params["daytrade_price_max"] = max(0.0, body.daytrade_price_max)
+        _trading_params["risk_per_trade_pct"] = max(0.1, body.risk_per_trade_pct)
+        _trading_params["atr_multiplier"] = max(0.5, body.atr_multiplier)
+        _trading_params["force_exit_time"] = body.force_exit_time
+        _trading_params["latest_dynamic_add_time"] = body.latest_dynamic_add_time
+        _trading_params["time_stop_hour"] = body.time_stop_hour
+        _trading_params["market_drop_threshold"] = body.market_drop_threshold
+        _trading_params["max_entry_gain_pct"] = max(0.5, body.max_entry_gain_pct)
+        _trading_params["limit_up_buffer"] = max(0.5, body.limit_up_buffer)
+        _trading_params["futures_rocket_threshold"] = max(0.0, body.futures_rocket_threshold)
+        _trading_params["futures_crash_threshold"] = max(0.0, body.futures_crash_threshold)
+        _trading_params["futures_spread_no_buy_pct"] = max(0.0, body.futures_spread_no_buy_pct)
+        _trading_params["futures_spread_reduce_pct"] = max(0.0, body.futures_spread_reduce_pct)
+        _trading_params["futures_spread_sell_pct"] = max(0.0, body.futures_spread_sell_pct)
+        _trading_params["futures_spread_fast_reversal_pct"] = max(0.0, body.futures_spread_fast_reversal_pct)
+        _trading_params["take_profit_pct"] = max(0.5, body.take_profit_pct)
+        _trading_params["trailing_trigger_pct"] = max(0.5, body.trailing_trigger_pct)
+        _trading_params["trailing_pullback_pct"] = max(0.5, body.trailing_pullback_pct)
+        _trading_params["buy_order_timeout_secs"] = max(10, body.buy_order_timeout_secs)
+        _trading_params["buy_retry_ticks"] = max(0, body.buy_retry_ticks)
+        _trading_params["futures_poll_interval_secs"] = max(5, body.futures_poll_interval_secs)
         try:
             with sqlite3.connect(_ticks_db, check_same_thread=False) as c:
                 for k, v in [
@@ -1135,11 +1244,31 @@ def create_app(
                     ('cb_pause_minutes', str(body.cb_pause_minutes)),
                     ('daytrade_price_min', str(body.daytrade_price_min)),
                     ('daytrade_price_max', str(body.daytrade_price_max)),
+                    ('risk_per_trade_pct', str(body.risk_per_trade_pct)),
+                    ('atr_multiplier', str(body.atr_multiplier)),
+                    ('force_exit_time', body.force_exit_time),
+                    ('latest_dynamic_add_time', body.latest_dynamic_add_time),
+                    ('time_stop_hour', str(body.time_stop_hour)),
+                    ('market_drop_threshold', str(body.market_drop_threshold)),
+                    ('max_entry_gain_pct', str(body.max_entry_gain_pct)),
+                    ('limit_up_buffer', str(body.limit_up_buffer)),
+                    ('futures_rocket_threshold', str(body.futures_rocket_threshold)),
+                    ('futures_crash_threshold', str(body.futures_crash_threshold)),
+                    ('futures_spread_no_buy_pct', str(body.futures_spread_no_buy_pct)),
+                    ('futures_spread_reduce_pct', str(body.futures_spread_reduce_pct)),
+                    ('futures_spread_sell_pct', str(body.futures_spread_sell_pct)),
+                    ('futures_spread_fast_reversal_pct', str(body.futures_spread_fast_reversal_pct)),
+                    ('take_profit_pct', str(body.take_profit_pct)),
+                    ('trailing_trigger_pct', str(body.trailing_trigger_pct)),
+                    ('trailing_pullback_pct', str(body.trailing_pullback_pct)),
+                    ('buy_order_timeout_secs', str(body.buy_order_timeout_secs)),
+                    ('buy_retry_ticks', str(body.buy_retry_ticks)),
+                    ('futures_poll_interval_secs', str(body.futures_poll_interval_secs)),
                 ]:
                     c.execute("INSERT OR REPLACE INTO settings(key,value) VALUES(?,?)", (k, v))
         except Exception:
             pass
-        return {"ok": True, "note": "已更新並持久化，重啟後生效", **_trading_params}
+        return {"ok": True, "note": "✓ 已儲存，即時生效", **_trading_params}
 
     # ── Debug: 模擬買賣（送真實 LINE 通知，不影響引擎狀態）──────────────────────
     _sim_positions: dict = {}  # symbol → {entry_price, lots, stop_loss}
