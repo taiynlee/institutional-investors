@@ -21,14 +21,13 @@ def tw_tick_size(price: float) -> float:
 
 
 def round_up_tick(price: float) -> float:
-    """向上捨入到最近有效 tick（觸價單用：確保在停損前觸發）"""
+    """向上捨入到最近有效 tick（停損觸價單：更早觸發）"""
     tick = tw_tick_size(price)
-    # math.ceil 以 tick 為單位，避免浮點誤差
     return round(math.ceil(round(price / tick, 8)) * tick, 8)
 
 
 def round_down_tick(price: float) -> float:
-    """向下捨入到最近有效 tick（限價買單用）"""
+    """向下捨入到最近有效 tick（停利觸價單：不多加 tick）"""
     tick = tw_tick_size(price)
     return round(math.floor(round(price / tick, 8)) * tick, 8)
 
@@ -94,18 +93,10 @@ class FubonBroker:
         stop_price: float,
         trade_date: str,
     ) -> Optional[str]:
-        """掛觸價賣單（停損）。當成交價 <= stop_price 時市價賣出。
-
-        dry_run=True 時只 log，回傳 None。
-        實際下單成功回傳 condition guid，失敗回傳 None。
-        """
-        # 捨入到有效 tick（向上 = 更早觸發，保護性更強）
-        raw = stop_price
-        stop_price = round_up_tick(stop_price)
-        if stop_price != raw:
-            logger.info("觸價單 stop_price %.2f → %.2f (tick adjust)", raw, stop_price)
+        """停損觸價賣單：成交價 <= stop_price 時市價賣出。"""
+        stop_price = round_up_tick(stop_price)  # 向上捨入 = 更早觸發，保護性更強
         if self.dry_run:
-            logger.info("[DRY RUN] COND STOP %s x%d張 stop_price=%.2f", symbol, lots, stop_price)
+            logger.info("[DRY RUN] COND STOP %s x%d張 stop=%.2f", symbol, lots, stop_price)
             return None
         if self._sdk is None or self._account is None:
             logger.error("觸價單：SDK 或 account 未初始化")
@@ -144,17 +135,75 @@ class FubonBroker:
             if result and getattr(result, "is_success", False):
                 data = getattr(result, "data", {}) or {}
                 guid = data.get("id") or data.get("guid") or str(result)
-                logger.info("觸價賣單成功 %s stop=%.2f guid=%s", symbol, stop_price, guid)
+                logger.info("停損觸價單成功 %s stop=%.2f guid=%s", symbol, stop_price, guid)
                 return str(guid)
             else:
-                logger.error("觸價賣單失敗 %s: %s", symbol, result)
+                logger.error("停損觸價單失敗 %s: %s", symbol, result)
                 return None
         except Exception as e:
-            logger.error("觸價賣單例外 %s: %s", symbol, e)
+            logger.error("停損觸價單例外 %s: %s", symbol, e)
             return None
 
-    def cancel_conditional_stop(self, guid: str):
-        """取消觸價賣單。"""
+    def place_conditional_take_profit(
+        self,
+        symbol: str,
+        lots: int,
+        trigger_price: float,
+        trade_date: str,
+    ) -> Optional[str]:
+        """停利觸價賣單：成交價 >= trigger_price 時市價賣出。不多加 tick。"""
+        trigger_price = round_down_tick(trigger_price)
+        if self.dry_run:
+            logger.info("[DRY RUN] COND TP %s x%d張 trigger=%.2f", symbol, lots, trigger_price)
+            return None
+        if self._sdk is None or self._account is None:
+            logger.error("停利觸價單：SDK 或 account 未初始化")
+            return None
+        try:
+            from fubon_neo.sdk import Condition, ConditionOrder
+            from fubon_neo.constant import (
+                TriggerContent, Operator, ConditionPriceType,
+                ConditionMarketType, BSAction, ConditionOrderType,
+                StopSign, TimeInForce,
+            )
+            condition = Condition(
+                market_type=ConditionMarketType.Common,
+                symbol=symbol,
+                trigger=TriggerContent.MatchedPrice,
+                trigger_value=trigger_price,
+                comparison=Operator.GreaterThanOrEqual,
+            )
+            order = ConditionOrder(
+                buy_sell=BSAction.Sell,
+                symbol=symbol,
+                market_type=ConditionMarketType.Common,
+                price_type=ConditionPriceType.Market,
+                time_in_force=TimeInForce.ROD,
+                order_type=ConditionOrderType.DayTrade,
+                quantity=lots * 1000,
+            )
+            result = self._sdk.stock.single_condition(
+                account=self._account,
+                start_date=trade_date,
+                end_date=trade_date,
+                stop_sign=StopSign.Full,
+                condition=condition,
+                order=order,
+            )
+            if result and getattr(result, "is_success", False):
+                data = getattr(result, "data", {}) or {}
+                guid = data.get("id") or data.get("guid") or str(result)
+                logger.info("停利觸價單成功 %s tp=%.2f guid=%s", symbol, trigger_price, guid)
+                return str(guid)
+            else:
+                logger.error("停利觸價單失敗 %s: %s", symbol, result)
+                return None
+        except Exception as e:
+            logger.error("停利觸價單例外 %s: %s", symbol, e)
+            return None
+
+    def cancel_conditional_order(self, guid: str):
+        """取消觸價單（停損或停利）。"""
         if self.dry_run or not guid:
             return
         if self._sdk is None or self._account is None:
@@ -164,3 +213,7 @@ class FubonBroker:
             logger.info("觸價單取消 guid=%s", guid)
         except Exception as e:
             logger.error("取消觸價單失敗 guid=%s: %s", guid, e)
+
+    # 向後相容別名
+    def cancel_conditional_stop(self, guid: str):
+        self.cancel_conditional_order(guid)

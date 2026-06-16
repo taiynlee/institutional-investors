@@ -17,16 +17,15 @@ from typing import Optional
 from engine.utils.tz import TZ_TW, now_tw, today_tw, from_ts_ns
 from engine.utils.market import is_market_hours, is_pre_session_time
 from engine.data.fetcher.fubon_feed import FubonFeed
-from engine.data.paper_tracker import PaperTracker
 from engine.data.session_state import SymbolSession
 from engine.data.state_store import (
     init_tables as ss_init,
     cleanup_old_intraday,
-    persist_daily_tracker, persist_paper_tracker,
-    restore_daily_tracker, restore_paper_tracker,
+    persist_daily_tracker,
+    restore_daily_tracker,
     get_setting,
 )
-from engine.execution.broker import FubonBroker
+from engine.execution.broker import FubonBroker, tw_tick_size, round_down_tick, round_up_tick
 from engine.execution.budget_manager import BudgetManager
 from engine.execution.order_manager import OrderManager
 from engine.risk.daily_tracker import DailyTracker
@@ -35,8 +34,6 @@ from engine.risk.position import Position
 from engine.monitor.notifier import LineNotifier
 from engine.strategy.futures_signal import FuturesSignal
 from engine.strategy.signal_combiner import SignalCombiner
-from engine.strategy.volume_price import VolumePriceStrategy
-from engine.strategy.technical import TechnicalStrategy
 
 logger = logging.getLogger(__name__)
 
@@ -61,12 +58,11 @@ class TradingEngine:
         # 共享物件（引擎執行時填入，停止後清空）
         self.om: Optional[OrderManager] = None
         self.dt: Optional[DailyTracker] = None
-        self.paper: Optional[PaperTracker] = None
+        self.paper = None  # 保留欄位相容性
         self.sessions: dict[str, SymbolSession] = {}
         self._lock = threading.Lock()
         self.session_date: Optional[str] = None  # 當前 session 的交易日期
 
-        # 預設路徑從 env var 讀取（run.py 已 set，scheduler 直接呼 start() 時使用）
         _data = os.environ.get("FUBON_DATA_DIR", "/home/tommy0322/fubon-data")
         self._default_config = os.environ.get("FUBON_CONFIG", "/home/tommy0322/fubon-config/config.yaml")
         self._default_ticks_db = os.path.join(_data, "ticks.db")
@@ -89,7 +85,7 @@ class TradingEngine:
                 "lots": pos.lots,
                 "entry_price": pos.entry_price,
                 "stop_loss": pos.stop_loss,
-                "atr": pos.atr,
+                "take_profit": pos.take_profit,
                 "curr_price": self.sessions.get(sym, None) and self.sessions[sym].curr_price,
             }
             for sym, pos in self.om.positions.items()
@@ -98,21 +94,19 @@ class TradingEngine:
     def get_pnl_summary(self) -> dict:
         if self.dt is None:
             return {"actual_pnl": 0.0, "actual_trades": 0, "paper_pnl": 0.0, "paper_trades": 0}
-        curr_prices = {s: sess.curr_price for s, sess in self.sessions.items()}
         unrealized = sum(
             (self.sessions[sym].curr_price - pos.entry_price) * pos.lots * 1000
             for sym, pos in self.om.positions.items() if sym in self.sessions
         ) if self.om else 0.0
-        paper_unrealized = self.paper.unrealized_pnl(curr_prices) if self.paper else 0.0
         return {
             "actual_pnl": self.dt.total_pnl,
             "actual_trades": self.dt.trade_count,
             "actual_unrealized": round(unrealized),
             "daily_entries": self.dt.daily_entries,
-            "max_daily": self._state.get("max_daily_positions", 3),
-            "paper_pnl": self.paper.total_pnl if self.paper else 0.0,
-            "paper_trades": self.paper.trade_count if self.paper else 0,
-            "paper_unrealized": round(paper_unrealized),
+            "max_daily": self._state.get("max_daily_positions", 5),
+            "paper_pnl": 0.0,
+            "paper_trades": 0,
+            "paper_unrealized": 0,
         }
 
     def start(
@@ -120,7 +114,7 @@ class TradingEngine:
         config_path: Optional[str] = None,
         ticks_db: Optional[str] = None,
         log_dir: Optional[str] = None,
-        **_kwargs,  # 忽略廢棄的 daily_db 參數
+        **_kwargs,  # 忽略廢棄參數
     ) -> bool:
         config_path = config_path or self._default_config
         ticks_db    = ticks_db    or self._default_ticks_db
@@ -191,28 +185,17 @@ class TradingEngine:
         # ── 設定載入 ─────────────────────────────────────────────────────────
         with open(config_path, encoding="utf-8") as f:
             cfg = yaml.safe_load(f)
-        trading = cfg.get("trading", {})
+        trading   = cfg.get("trading", {})
         fubon_cfg = cfg.get("fubon", {})
-        risk_cfg = cfg.get("risk", {})
-        signal_cfg = cfg.get("signal", {})
 
         dry_run = True  # 永遠 dry_run（安全護欄）
+
         # 從 yaml 讀初始值（fallback）；運行時改由 ticks.db settings 熱重載
-        force_exit_str    = trading.get("force_exit_time", "13:20")
-        dynamic_add_str   = trading.get("latest_dynamic_add_time", "13:10")
-        max_position_capital = trading.get("max_position_capital", 0)
-        max_daily_positions  = trading.get("max_daily_positions", 3)
+        force_exit_str       = trading.get("force_exit_time", "13:20")
+        dynamic_add_str      = trading.get("latest_dynamic_add_time", "13:10")
+        max_position_capital = trading.get("max_position_capital", 1_000_000)
+        max_daily_positions  = trading.get("max_daily_positions", 5)
         total_capital        = trading.get("max_daily_buy_amount", 10_000_000)
-        atr_multiplier_cfg   = float(risk_cfg.get("atr_multiplier", 1.8))
-        risk_per_trade_pct   = float(risk_cfg.get("risk_per_trade_pct", 1.0))
-        trailing_trigger_pct = float(risk_cfg.get("trailing_trigger_pct", 2.0))
-        trailing_pullback_pct= float(risk_cfg.get("trailing_pullback_pct", 1.5))
-        take_profit_pct      = float(risk_cfg.get("take_profit_pct", 5.0))
-        time_stop_hour       = float(trading.get("time_stop_hour", 12.5))
-        cb_pause_min_cfg     = int(trading.get("cb_pause_minutes", 30))
-        max_entry_gain_pct   = float(signal_cfg.get("max_entry_gain_pct", 4.0))
-        limit_up_buffer_pct  = float(signal_cfg.get("limit_up_buffer", 4.0))
-        MKT_DAY_GATE_PCT     = float(signal_cfg.get("market_drop_threshold", -1.5))
 
         # ── 熱重載 helpers：每次被呼叫時從 ticks.db 讀取最新值 ─────────────────
         def _gs(key: str, default: str) -> str:
@@ -225,30 +208,6 @@ class TradingEngine:
         def _max_daily_positions() -> int:
             try: return max(1, int(_gs("max_daily_positions", str(max_daily_positions))))
             except Exception: return max_daily_positions
-
-        def _atr_multiplier() -> float:
-            try: return max(0.5, float(_gs("atr_multiplier", str(atr_multiplier_cfg))))
-            except Exception: return atr_multiplier_cfg
-
-        def _risk_per_trade() -> float:
-            try: return max(0.1, float(_gs("risk_per_trade_pct", str(risk_per_trade_pct))))
-            except Exception: return risk_per_trade_pct
-
-        def _trailing_trigger() -> float:
-            try: return max(0.5, float(_gs("trailing_trigger_pct", str(trailing_trigger_pct))))
-            except Exception: return trailing_trigger_pct
-
-        def _trailing_pullback() -> float:
-            try: return max(0.5, float(_gs("trailing_pullback_pct", str(trailing_pullback_pct))))
-            except Exception: return trailing_pullback_pct
-
-        def _take_profit() -> float:
-            try: return max(0.5, float(_gs("take_profit_pct", str(take_profit_pct))))
-            except Exception: return take_profit_pct
-
-        def _time_stop_h() -> float:
-            try: return float(_gs("time_stop_hour", str(time_stop_hour)))
-            except Exception: return time_stop_hour
 
         def _force_exit_time() -> time:
             try:
@@ -268,17 +227,25 @@ class TradingEngine:
                 h, m = map(int, dynamic_add_str.split(":"))
                 return h * 60 + m
 
-        def _market_drop_threshold() -> float:
-            try: return float(_gs("market_drop_threshold", str(MKT_DAY_GATE_PCT)))
-            except Exception: return MKT_DAY_GATE_PCT
+        def _tick_rise_threshold() -> int:
+            try: return max(1, int(_gs("tick_rise_threshold", "4")))
+            except Exception: return 4
 
-        def _max_entry_gain() -> float:
-            try: return float(_gs("max_entry_gain_pct", str(max_entry_gain_pct)))
-            except Exception: return max_entry_gain_pct
+        def _stop_loss_ticks() -> int:
+            try: return max(1, int(_gs("stop_loss_ticks", "4")))
+            except Exception: return 4
 
-        def _limit_up_buf() -> float:
-            try: return max(0.5, float(_gs("limit_up_buffer", str(limit_up_buffer_pct))))
-            except Exception: return limit_up_buffer_pct
+        def _take_profit_add_pct() -> float:
+            try: return max(0.1, float(_gs("take_profit_add_pct", "4.0")))
+            except Exception: return 4.0
+
+        def _max_change_pct() -> float:
+            try: return max(0.1, float(_gs("max_change_pct", "5.0")))
+            except Exception: return 5.0
+
+        def _market_rise_min() -> float:
+            try: return float(_gs("market_rise_min", "1.0"))
+            except Exception: return 1.0
 
         with self._lock:
             self._state["dry_run"] = dry_run
@@ -392,46 +359,27 @@ class TradingEngine:
         ss_init(ticks_db)
         cleanup_old_intraday(ticks_db, keep_days=60)
 
-        # ── 盤前資料：昨收 / 漲停 / ATR ──────────────────────────────────────
+        # ── 盤前資料：昨收 / 漲停 ──────────────────────────────────────────────
         sessions: dict[str, SymbolSession] = {}
         for sym in symbols:
             try:
                 ticker = rc.intraday.ticker(symbol=sym)
                 if isinstance(ticker, dict):
-                    ref = ticker.get("referencePrice", 0) or ticker.get("previousClose", 0)
+                    ref     = ticker.get("referencePrice", 0) or ticker.get("previousClose", 0)
                     limitup = ticker.get("limitUpPrice", ref * 1.1)
                 else:
-                    ref = getattr(ticker, "referencePrice", 0) or getattr(ticker, "previousClose", 0)
+                    ref     = getattr(ticker, "referencePrice", 0) or getattr(ticker, "previousClose", 0)
                     limitup = getattr(ticker, "limitUpPrice", ref * 1.1)
             except Exception:
                 ref, limitup = 100.0, 110.0
-
-            atr = self._fetch_atr(rc, sym, today_str)
-            if atr is None:
-                atr = round(float(ref) * 0.015, 2)
-                logger.warning("%s ATR 使用估算值 %.2f", sym, atr)
-            else:
-                logger.info("%s 昨收=%.0f 漲停=%.0f ATR=%.2f", sym, ref, limitup, atr)
-
-            sessions[sym] = SymbolSession(sym, float(ref), float(limitup), float(atr))
+            logger.info("%s 昨收=%.0f 漲停=%.0f", sym, ref, limitup)
+            sessions[sym] = SymbolSession(sym, float(ref), float(limitup))
 
         self.sessions = sessions
 
-
         # ── 個股期貨訊號 ──────────────────────────────────────────────────────
-        futures_signals: dict[str, FuturesSignal] = {
-            sym: FuturesSignal(
-                no_buy_spread_pct    = signal_cfg.get("futures_spread_no_buy_pct", 0.3),
-                reduce_spread_pct    = signal_cfg.get("futures_spread_reduce_pct", 0.8),
-                sell_spread_pct      = signal_cfg.get("futures_spread_sell_pct", 1.5),
-                fast_reversal_pct    = signal_cfg.get("futures_spread_fast_reversal_pct", 0.5),
-                rocket_threshold_pct = signal_cfg.get("futures_rocket_threshold", 9.5),
-                crash_threshold_pct  = signal_cfg.get("futures_crash_threshold", 9.5),
-            )
-            for sym in symbols
-        }
+        futures_signals: dict[str, FuturesSignal] = {sym: FuturesSignal() for sym in symbols}
 
-        # 期貨 symbol 對照
         import datetime as _dt
         futures_sym_map: dict[str, str] = {}
         futures_ref: dict[str, float] = {}
@@ -484,58 +432,27 @@ class TradingEngine:
         # broker 永遠 dry_run=True 作安全護欄，真實下單需明確修改此行並充分測試
         broker = FubonBroker(dry_run=True)
         broker.initialize(sdk, _account)
-        bm = BudgetManager(total_capital, risk_per_trade_pct, max_position_capital)
+        bm = BudgetManager(max_per_entry=_max_position_capital())
         dt = DailyTracker()
-        om = OrderManager(broker, atr_multiplier=atr_multiplier_cfg)
-        rm = RiskManager(
-            om,
-            take_profit_pct=take_profit_pct,
-            time_stop_hour=time_stop_hour,
-            force_exit_time=_force_exit_time(),
-        )
+        om = OrderManager(broker)
+        rm = RiskManager(om, force_exit_time=_force_exit_time())
         combiner = SignalCombiner(
-            max_entry_gain_pct=max_entry_gain_pct,
-            limit_up_buffer_pct=limit_up_buffer_pct,
+            max_change_pct=_max_change_pct(),
+            market_rise_min=_market_rise_min(),
         )
-        vp = VolumePriceStrategy()
-        tech = TechnicalStrategy()
-        # dry_run 模式仍發 LINE 通知（讓使用者監控訊號是否正確觸發）
         notifier = LineNotifier(dry_run=False)
-        paper = PaperTracker(
-            take_profit_pct=take_profit_pct,
-            time_stop_hour=time_stop_hour,
-            force_exit_time=_force_exit_time(),
-            atr_multiplier=atr_multiplier_cfg,
-        )
 
         self.om = om
         self.dt = dt
-        self.paper = paper
 
         # 重啟恢復
         if is_market_hours():
             restore_daily_tracker(ticks_db, dt)
-            # 從已出場紀錄重建 entered_symbols（避免重啟後計數歸零）
-            dt.entered_symbols = {t["symbol"] for t in dt.trades}
-            restore_paper_tracker(ticks_db, paper)
 
-        # ── 大盤熔斷狀態 ──────────────────────────────────────────────────────
-        # MKT_DAY_GATE_PCT 從 config 讀取（已在上方設定）
-        condition_ids: dict[str, str] = {}  # symbol → 觸價單 guid
+        # ── 大盤資料 ─────────────────────────────────────────────────────────
+        condition_ids: dict[str, dict] = {}  # symbol → {"sl": guid, "tp": guid}
 
-        def _cb_crash_pct() -> float:
-            try:
-                return max(0.1, float(get_setting(ticks_db, "cb_crash_pct", "1.5")))
-            except Exception:
-                return 1.5
-
-        def _cb_pause_min() -> int:
-            try:
-                return max(5, int(get_setting(ticks_db, "cb_pause_minutes", str(cb_pause_min_cfg))))
-            except Exception:
-                return cb_pause_min_cfg
-
-        # TAIEX 昨收（用於計算日跌幅 gate）
+        # TAIEX 昨收（用於計算日漲幅 gate）
         _idx_ref: float = 0.0
         try:
             import urllib.request as _ur, json as _js
@@ -550,19 +467,12 @@ class TradingEngine:
                 _idx_ref = float(_y)
                 logger.info("TAIEX 昨收 = %.2f", _idx_ref)
         except Exception as _e:
-            logger.warning("TAIEX 昨收取得失敗，日跌幅 gate 停用: %s", _e)
+            logger.warning("TAIEX 昨收取得失敗，大盤 gate 停用: %s", _e)
 
         _idx = {
             "prices": deque(),
             "curr": 0.0, "chg5": 0.0, "chg_day_pct": 0.0,
-            "circuit": "normal", "resume": None,
         }
-
-        def _cb_window() -> int:
-            try:
-                return max(1, int(get_setting(ticks_db, "cb_window_min", "5")))
-            except Exception:
-                return 5
 
         # ── tick 回呼 ─────────────────────────────────────────────────────────
         tick_count = [0]
@@ -592,20 +502,19 @@ class TradingEngine:
             now = now_tw()
 
             pos_before = om.positions.get(symbol)
-            exit_reason = rm.on_tick(
-                symbol=symbol, price=price, now=now,
-                futures_signal=futures_signals.get(symbol),
-                current_volume=sess.bar_builder.current_1min.volume if sess.bar_builder.current_1min else 0,
-                avg_volume=float(sess.prev_1min_volume or 1),
-            )
+            exit_reason = rm.on_tick(symbol=symbol, price=price, now=now)
             if exit_reason and pos_before:
                 pnl = (price - pos_before.entry_price) * pos_before.lots * 1000
                 dt.record_trade(pnl=pnl, symbol=symbol, lots=pos_before.lots,
                                 entry_price=pos_before.entry_price, exit_price=price)
                 _entry_times.pop(symbol, None)
-                # 取消未成交的觸價賣單
+                # 取消未成交的停損/停利觸價單
                 if symbol in condition_ids:
-                    broker.cancel_conditional_stop(condition_ids.pop(symbol))
+                    cids = condition_ids.pop(symbol)
+                    if cids.get("sl"):
+                        broker.cancel_conditional_order(cids["sl"])
+                    if cids.get("tp"):
+                        broker.cancel_conditional_order(cids["tp"])
                 logger.info("🔴 出場 %s  原因=%s  損益=%+.0f", symbol, exit_reason, pnl)
                 log_event("order_sell", symbol=symbol, reason=exit_reason,
                           entry_price=pos_before.entry_price, exit_price=price,
@@ -615,14 +524,6 @@ class TradingEngine:
                     f"原因={exit_reason}  {pos_before.entry_price:.0f}→{price:.0f}\n"
                     f"損益={pnl:+,.0f}  {pos_before.lots}張"
                 )
-
-            paper_exit = paper.on_tick(
-                symbol=symbol, price=price, now=now,
-                current_volume=sess.bar_builder.current_1min.volume if sess.bar_builder.current_1min else 0,
-                avg_volume=float(sess.prev_1min_volume or 1),
-            )
-            if paper_exit:
-                logger.debug("📄 [理論] 出場 %s 原因=%s", symbol, paper_exit)
 
             last = last_signal_eval.get(symbol)
             if last is None or (now - last).total_seconds() >= 10:
@@ -662,48 +563,26 @@ class TradingEngine:
             now = now_tw()
             _idx["curr"] = price
             _idx["prices"].append((now, price))
-            cutoff = now - timedelta(minutes=_cb_window())
+            cutoff = now - timedelta(minutes=5)
             while _idx["prices"] and _idx["prices"][0][0] < cutoff:
                 _idx["prices"].popleft()
 
-            # N分鐘絕對變動（顯示用）及%變動（熔斷判斷）
             if len(_idx["prices"]) >= 2:
                 old_price = _idx["prices"][0][1]
                 _idx["chg5"] = price - old_price
-                chg5_pct = (price - old_price) / old_price * 100 if old_price > 0 else 0.0
             else:
-                chg5_pct = 0.0
+                _idx["chg5"] = 0.0
 
-            # 當日漲跌幅（進場 gate 用）
+            # 日漲跌幅（進場 gate 用）
             if _idx_ref > 0:
                 _idx["chg_day_pct"] = (price - _idx_ref) / _idx_ref * 100
-
-            if _idx["circuit"] == "crash" and _idx["resume"] and now >= _idx["resume"]:
-                _idx["circuit"] = "normal"
-                _idx["resume"] = None
-                logger.info("大盤熔斷解除")
-
-            # 熔斷判斷：N分鐘跌幅 >= cb_crash_pct（可由 UI 調整）
-            _threshold_pct = _cb_crash_pct()
-            if chg5_pct <= -_threshold_pct and _idx["circuit"] != "crash":
-                _idx["circuit"] = "crash"
-                _idx["resume"] = now + timedelta(minutes=_cb_pause_min())
-                logger.warning("⚡ 大盤急跌熔斷！%d分跌 %.2f%%，暫停 %d 分鐘",
-                               _cb_window(), abs(chg5_pct), _cb_pause_min())
-                _emergency_liquidate_all("circuit_crash")
-            elif chg5_pct >= _threshold_pct:
-                if _idx["circuit"] != "surge":
-                    _idx["circuit"] = "surge"
-            else:
-                if _idx["circuit"] == "surge":
-                    _idx["circuit"] = "normal"
 
             try:
                 with sqlite3.connect(ticks_db) as _tdb:
                     _tdb.execute(
                         "INSERT INTO index_ticks(ts,price,change_5min,circuit) VALUES(?,?,?,?)",
                         (now.strftime("%Y-%m-%d %H:%M:%S"), price,
-                         round(_idx["chg5"], 2), _idx["circuit"]),
+                         round(_idx["chg5"], 2), "normal"),
                     )
             except Exception:
                 pass
@@ -717,129 +596,110 @@ class TradingEngine:
             spot = sessions[stock_id].curr_price
             fs.update(futures_price=futures_price, spot_price=spot, futures_change_pct=change_pct)
 
-        def _emergency_liquidate_all(reason: str):
-            now = now_tw()
-            for sym in list(om.positions.keys()):
-                pos = om.positions.pop(sym)
-                price = sessions[sym].curr_price if sym in sessions else pos.entry_price
-                pnl = (price - pos.entry_price) * pos.lots * 1000
-                dt.record_trade(pnl=pnl, symbol=sym, lots=pos.lots,
-                                entry_price=pos.entry_price, exit_price=price)
-                _entry_times.pop(sym, None)
-                # 取消未成交的觸價賣單
-                if sym in condition_ids:
-                    broker.cancel_conditional_stop(condition_ids.pop(sym))
-            for sym in list(paper.positions.keys()):
-                price = sessions[sym].curr_price if sym in sessions else 0.0
-                paper.close(sym, price, now, reason=reason)
-
         def _evaluate_signal(symbol: str, sess: SymbolSession, now_time: time):
-            # 今日已進場過（含已出場）→ 不再重入，避免出場後立即重買同一支
-            not_in_pos = symbol not in om.positions and symbol not in dt.entered_symbols
-            # 今日已進場檔數（進場後即使出場也不歸還額度）
+            not_in_pos = symbol not in om.positions  # 同標的可重複進場（只要當下未持倉）
             trades_today = dt.daily_entries
             now = now_tw()
 
-            # 熱重載可調參數（每次 evaluate 前從 ticks.db 拉最新）
-            combiner.max_entry_gain_pct = _max_entry_gain()
-            combiner.limit_up_buffer_pct = _limit_up_buf()
-            rm.take_profit_pct = _take_profit()
-            rm.time_stop_hour = _time_stop_h()
+            # 熱重載可調參數
+            combiner.max_change_pct = _max_change_pct()
+            combiner.market_rise_min = _market_rise_min()
             rm.force_exit_time = _force_exit_time()
-            paper.take_profit_pct = _take_profit()
-            paper.time_stop_hour = _time_stop_h()
-            paper.force_exit_time = _force_exit_time()
 
-            # 大盤日跌幅 gate：昨收取得失敗（_idx_ref=0）時放行
-            market_ok = (_idx_ref <= 0 or _idx.get("chg_day_pct", 0.0) > _market_drop_threshold())
+            # 大盤日漲幅 gate：昨收取得失敗（_idx_ref=0）時放行
+            market_chg = _idx.get("chg_day_pct", 0.0) if _idx_ref > 0 else 999.0
 
             result = sess.evaluate(
-                combiner=combiner, vp=vp, tech=tech,
+                combiner=combiner,
                 current_time=now_time,
                 positions_count=trades_today,
                 max_positions=_max_daily_positions(),
                 not_in_position=not_in_pos,
+                market_chg_pct=market_chg,
+                tick_rise_threshold=_tick_rise_threshold(),
                 futures_signal=futures_signals.get(symbol),
                 entry_cutoff_mins=_entry_cutoff(),
-                market_ok=market_ok,
             )
             theory = sess.evaluate_theoretical(
-                combiner=combiner, vp=vp, tech=tech,
+                combiner=combiner,
                 current_time=now_time,
+                market_chg_pct=market_chg,
+                tick_rise_threshold=_tick_rise_threshold(),
                 futures_signal=futures_signals.get(symbol),
                 entry_cutoff_mins=_entry_cutoff(),
-                market_ok=market_ok,
             )
 
             logger.info(
-                "EVAL %s  實際=%s(%s)  理論=%s(%s)  漲幅=%.2f%%",
+                "EVAL %s  實際=%s(%s)  理論=%s(%s)  漲幅=%.2f%%  60s漲=%+.1ftick",
                 symbol,
                 "✓" if result.should_enter else "✗", result.reason or "ok",
                 "✓" if theory.should_enter else "✗", theory.reason or "ok",
-                sess.change_pct,
+                sess.change_pct, sess.tick_rise_60s,
             )
             log_event("signal_eval",
                       symbol=symbol,
                       actual_enter=result.should_enter, actual_reason=result.reason,
                       theory_enter=theory.should_enter, theory_reason=theory.reason,
-                      change_pct=round(sess.change_pct, 2))
+                      change_pct=round(sess.change_pct, 2),
+                      tick_rise_60s=round(sess.tick_rise_60s, 1))
 
             if result.should_enter:
-                if _idx["circuit"] == "crash":
-                    logger.info("大盤熔斷中，暫停進場 %s", symbol)
-                else:
-                    _place_order(symbol, sess, result.position_size_ratio)
+                _place_order(symbol, sess)
 
-            if theory.should_enter and symbol not in paper.positions:
-                price = sess.curr_price
-                lots = bm.calculate_lots(atr=sess.atr, atr_multiplier=_atr_multiplier(),
-                                         price=price, remaining_budget=total_capital)
-                lots = max(1, int(lots * theory.position_size_ratio))
-                if paper.enter(symbol=symbol, price=price, lots=lots,
-                               atr=sess.atr, now=now, orb_low=None):
-                    logger.info("📄 [理論] 買進 %s  價=%.2f  張=%d", symbol, price, lots)
-                    log_event("paper_buy", symbol=symbol, price=price, lots=lots)
-
-        def _place_order(symbol: str, sess: SymbolSession, size_ratio: float):
+        def _place_order(symbol: str, sess: SymbolSession):
             price = sess.curr_price
             remaining = total_capital - sum(
                 p.entry_price * p.lots * 1000 for p in om.positions.values()
             )
-            # 熱重載倉控參數
-            bm.max_position_capital = _max_position_capital()
-            bm.risk_per_trade_pct = _risk_per_trade()
-            _atr_mult = _atr_multiplier()
-            lots = bm.calculate_lots(atr=sess.atr, atr_multiplier=_atr_mult,
-                                     price=price, remaining_budget=remaining)
-            lots = max(0, int(lots * size_ratio))
+            bm.max_per_entry = _max_position_capital()
+            lots = bm.calculate_lots(price=price, remaining_budget=remaining)
             if lots <= 0:
                 logger.info("DRY RUN %s 計算張數=0，跳過", symbol)
                 return
 
+            # 停損：進場價向下 N 個 tick，向上捨入（確保觸價門檻不超過）
+            sl_ticks = _stop_loss_ticks()
+            ts = tw_tick_size(price)
+            stop_loss = round_up_tick(price - sl_ticks * ts)
+
+            # 停利：ref_price × (1 + (進場漲幅 + add_pct) / 100)，向下捨入 tick
+            ref = sess.reference_price
+            change_at_entry = (price - ref) / ref * 100 if ref > 0 else 0.0
+            tp_raw = ref * (1 + (change_at_entry + _take_profit_add_pct()) / 100)
+            take_profit = round_down_tick(tp_raw)
+
             pos = Position(
-                symbol=symbol, entry_price=price, lots=lots,
-                atr=sess.atr, atr_multiplier=_atr_mult, orb_low=None,
-                trailing_trigger_pct=_trailing_trigger(),
-                trailing_pullback_pct=_trailing_pullback(),
+                symbol=symbol,
+                entry_price=price,
+                lots=lots,
+                stop_loss=stop_loss,
+                take_profit=take_profit,
             )
             om.positions[symbol] = pos
             _entry_times[symbol] = now_tw()
-            dt.record_entry(symbol)  # 計入今日已交易檔數（出場後不歸還額度）
+            dt.record_entry(symbol)
 
-            logger.info("🟢 DRY RUN 買進 %s  價=%.2f  張=%d  停損=%.2f", symbol, price, lots, pos.stop_loss)
+            logger.info(
+                "🟢 DRY RUN 買進 %s  價=%.2f  張=%d  停損=%.2f  停利=%.2f",
+                symbol, price, lots, stop_loss, take_profit,
+            )
             log_event("order_buy", symbol=symbol, price=price, lots=lots,
-                      stop_loss=pos.stop_loss,
-                      capital_used=price * lots * 1000, atr=sess.atr)
+                      stop_loss=stop_loss, take_profit=take_profit,
+                      capital_used=price * lots * 1000)
             notifier.send(
                 f"🟢 進場 {symbol} {sname(symbol)}\n"
-                f"價={price:.0f}  張數={lots}  停損={pos.stop_loss:.2f}"
+                f"價={price:.0f}  張數={lots}\n"
+                f"停損={stop_loss:.2f}  停利={take_profit:.2f}"
             )
-            # 掛觸價停損賣單（dry_run 時只 log）
-            cid = broker.place_conditional_stop(
-                symbol=symbol, lots=lots, stop_price=pos.stop_loss, trade_date=today_str
+
+            # 掛觸價停損/停利賣單（dry_run 時只 log）
+            sl_guid = broker.place_conditional_stop(
+                symbol=symbol, lots=lots, stop_price=stop_loss, trade_date=today_str
             )
-            if cid:
-                condition_ids[symbol] = cid
+            tp_guid = broker.place_conditional_take_profit(
+                symbol=symbol, lots=lots, trigger_price=take_profit, trade_date=today_str
+            )
+            condition_ids[symbol] = {"sl": sl_guid, "tp": tp_guid}
 
         # ── WebSocket 啟動 ─────────────────────────────────────────────────────
         feed = FubonFeed(
@@ -869,42 +729,13 @@ class TradingEngine:
                 if curr_min != last_persist_min:
                     last_persist_min = curr_min
                     persist_daily_tracker(ticks_db, dt, dry_run=dry_run)
-                    persist_paper_tracker(ticks_db, paper, dry_run=dry_run)
         finally:
             feed.disconnect()
             persist_daily_tracker(ticks_db, dt, dry_run=dry_run)
-            persist_paper_tracker(ticks_db, paper, dry_run=dry_run)
-            logger.info("=== 引擎關閉 | 實際損益=%.0f | 理論損益=%.0f | tick=%d筆 ===",
-                        dt.total_pnl, paper.total_pnl, tick_count[0])
-            log_event("engine_stop", actual_pnl=dt.total_pnl, paper_pnl=paper.total_pnl,
-                      tick_count=tick_count[0])
+            logger.info("=== 引擎關閉 | 實際損益=%.0f | tick=%d筆 ===",
+                        dt.total_pnl, tick_count[0])
+            log_event("engine_stop", actual_pnl=dt.total_pnl, tick_count=tick_count[0])
             engine_logger.removeHandler(file_handler)
-
-    @staticmethod
-    def _fetch_atr(rc, symbol: str, today_str: str, period: int = 14) -> Optional[float]:
-        try:
-            r = rc.historical.candles(symbol=symbol, from_="2026-05-01", to=today_str, timeframe="D")
-            candles = r.get("data", []) if isinstance(r, dict) else r
-            if not candles or len(candles) < period + 1:
-                return None
-            trs = []
-            for i in range(1, len(candles)):
-                c = candles[i]
-                if isinstance(c, dict):
-                    h, l, pc = c["high"], c["low"], candles[i - 1]["close"]
-                else:
-                    h, l, pc = c.high, c.low, candles[i - 1].close
-                tr = max(h - l, abs(h - pc), abs(l - pc))
-                trs.append(tr)
-            if len(trs) < period:
-                return None
-            atr = sum(trs[:period]) / period
-            for tr in trs[period:]:
-                atr = (atr * (period - 1) + tr) / period
-            return round(atr, 2)
-        except Exception as e:
-            logger.warning("ATR fetch 失敗 %s: %s", symbol, e)
-            return None
 
 
 # 全域單例，由 main.py 初始化，app.py 引用

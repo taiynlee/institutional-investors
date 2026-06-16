@@ -711,10 +711,39 @@ LINE Bot 連結透過 ngrok tunnel 對外，開機自動重建 webhook URL。
 
 ## 台股當沖（Fubon 整合）
 
+### 台股 Tick 跳動規則
+
+| 股價區間 | 最小跳動（tick） |
+|---------|--------------|
+| < 10 元 | 0.01 |
+| 10 ~ 50 元 | 0.05 |
+| 50 ~ 100 元 | 0.1 |
+| 100 ~ 500 元 | 0.5 |
+| 500 ~ 1000 元 | 1.0 |
+| ≥ 1000 元 | 5.0 |
+
+停損向上捨入（round_up_tick），停利向下捨入（round_down_tick），確保觸價條件不超出預設範圍。
+
+### 進場/出場策略
+
+**進場條件（全部滿足）：**
+1. 時間：09:15 ~ 13:09
+2. 60 秒內上漲 ≥ 4 tick（滾動窗口）
+3. 個股漲跌幅在 ±5% 以內
+4. 大盤日漲幅 > 1%（vs 昨收）
+5. 今日進場次數 < 5（可同標的重複進場）
+6. 個股期貨（有資料時）：期貨價 > 現價（正價差）
+
+**進場同時掛出觸價單：**
+- 停損：進場價 - 4 tick（向上捨入）→ LessThanOrEqual 條件單
+- 停利：昨收 × (1 + (進場時漲幅 + 4%) / 100)（向下捨入）→ GreaterThanOrEqual 條件單
+
+**強制出場：** 13:20 市價賣出所有持倉
+
 ### 架構說明
 
 `services/fubon-dashboard/` 是完整交易引擎，**直接在 WSL 執行**（非 Docker）。一個指令啟動所有元件：
-富邦 SDK → tick streaming → ORB 策略評估 → 觸價單 → WebSocket 推送 → 前端即時顯示。
+富邦 SDK → tick streaming → 60s tick 動量評估 → 觸價單 → WebSocket 推送 → 前端即時顯示。
 
 ```
 WSL 直接執行（非 Docker）
@@ -723,7 +752,7 @@ WSL 直接執行（非 Docker）
     ├─ 交易引擎啟動時：
     │    ├─ GET localhost:8000/api/daytrade/list  → 取 PG daytrade_candidate 當日標的
     │    └─ GET localhost:8000/api/pool          → 取 PG stock_pool 股票名稱
-    ├─ 交易引擎（ORB strategy）：每 10 秒評估突破信號，自動下觸價單
+    ├─ 交易引擎（60s tick 動量）：每 10 秒評估進場信號，自動下停損/停利觸價單
     ├─ FastAPI :8090（REST + /ws/stream）
     │    └─ /ws/stream 每秒推送引擎狀態給前端
     └─ 13:36 自動停止（收盤後強制平倉確認）

@@ -26,32 +26,16 @@ class TradingParamsBody(BaseModel):
     max_daily_positions: int
     dry_run: bool
     commission_discount: float = 0.28
-    cb_crash_pct: float = 1.5
-    cb_window_min: int = 5
-    cb_pause_minutes: int = 30
     daytrade_price_min: float = 200.0
     daytrade_price_max: float = 990.0
-    # formerly yaml-only params — now in ticks.db, hot-reload by engine
-    risk_per_trade_pct: float = 1.0
-    atr_multiplier: float = 1.8
+    # 進場條件 — ticks.db 熱重載
     force_exit_time: str = "13:20"
     latest_dynamic_add_time: str = "13:10"
-    time_stop_hour: float = 12.5
-    market_drop_threshold: float = -2.0
-    max_entry_gain_pct: float = 4.0
-    limit_up_buffer: float = 4.0
-    futures_rocket_threshold: float = 9.5
-    futures_crash_threshold: float = 9.5
-    futures_spread_no_buy_pct: float = 0.3
-    futures_spread_reduce_pct: float = 0.8
-    futures_spread_sell_pct: float = 1.5
-    futures_spread_fast_reversal_pct: float = 0.5
-    take_profit_pct: float = 5.0
-    trailing_trigger_pct: float = 2.0
-    trailing_pullback_pct: float = 1.5
-    buy_order_timeout_secs: int = 60
-    buy_retry_ticks: int = 2
-    futures_poll_interval_secs: int = 30
+    tick_rise_threshold: int = 4
+    stop_loss_ticks: int = 4
+    take_profit_add_pct: float = 4.0
+    max_change_pct: float = 5.0
+    market_rise_min: float = 1.0
 
 
 def _today() -> str:
@@ -123,32 +107,16 @@ def create_app(
         "max_daily_positions": max_daily_positions,
         "dry_run": dry_run,
         "commission_discount": 0.28,
-        "cb_crash_pct": 1.5,
-        "cb_window_min": 5,
-        "cb_pause_minutes": 30,
         "daytrade_price_min": 200.0,
         "daytrade_price_max": 990.0,
-        # engine hot-reload params (formerly yaml-only)
-        "risk_per_trade_pct": 1.0,
-        "atr_multiplier": 1.8,
+        # 進場條件 — engine 熱重載
         "force_exit_time": "13:20",
         "latest_dynamic_add_time": "13:10",
-        "time_stop_hour": 12.5,
-        "market_drop_threshold": -2.0,
-        "max_entry_gain_pct": 4.0,
-        "limit_up_buffer": 4.0,
-        "futures_rocket_threshold": 9.5,
-        "futures_crash_threshold": 9.5,
-        "futures_spread_no_buy_pct": 0.3,
-        "futures_spread_reduce_pct": 0.8,
-        "futures_spread_sell_pct": 1.5,
-        "futures_spread_fast_reversal_pct": 0.5,
-        "take_profit_pct": 5.0,
-        "trailing_trigger_pct": 2.0,
-        "trailing_pullback_pct": 1.5,
-        "buy_order_timeout_secs": 60,
-        "buy_retry_ticks": 2,
-        "futures_poll_interval_secs": 30,
+        "tick_rise_threshold": 4,
+        "stop_loss_ticks": 4,
+        "take_profit_add_pct": 4.0,
+        "max_change_pct": 5.0,
+        "market_rise_min": 1.0,
     }
 
     def _load_trading_params_from_db():
@@ -158,25 +126,14 @@ def create_app(
                                  check_same_thread=False) as c:
                 rows = c.execute(
                     "SELECT key, value FROM settings WHERE key IN "
-                    "('cb_crash_pct','cb_window_min','cb_pause_minutes',"
-                    "'max_position_capital','max_daily_positions','dry_run','commission_discount',"
+                    "('max_position_capital','max_daily_positions','dry_run','commission_discount',"
                     "'daytrade_price_min','daytrade_price_max',"
-                    "'risk_per_trade_pct','atr_multiplier','force_exit_time',"
-                    "'latest_dynamic_add_time','time_stop_hour','market_drop_threshold',"
-                    "'max_entry_gain_pct','limit_up_buffer','futures_rocket_threshold',"
-                    "'futures_crash_threshold','futures_spread_no_buy_pct','futures_spread_reduce_pct',"
-                    "'futures_spread_sell_pct','futures_spread_fast_reversal_pct',"
-                    "'take_profit_pct','trailing_trigger_pct','trailing_pullback_pct',"
-                    "'buy_order_timeout_secs','buy_retry_ticks','futures_poll_interval_secs')"
+                    "'force_exit_time','latest_dynamic_add_time',"
+                    "'tick_rise_threshold','stop_loss_ticks','take_profit_add_pct',"
+                    "'max_change_pct','market_rise_min')"
                 ).fetchall()
             for k, v in rows:
-                if k == 'cb_crash_pct':
-                    _trading_params['cb_crash_pct'] = float(v)
-                elif k == 'cb_window_min':
-                    _trading_params['cb_window_min'] = int(v)
-                elif k == 'cb_pause_minutes':
-                    _trading_params['cb_pause_minutes'] = int(v)
-                elif k == 'max_position_capital':
+                if k == 'max_position_capital':
                     _trading_params['max_position_capital'] = int(v)
                 elif k == 'max_daily_positions':
                     _trading_params['max_daily_positions'] = int(v)
@@ -188,46 +145,20 @@ def create_app(
                     _trading_params['daytrade_price_min'] = float(v)
                 elif k == 'daytrade_price_max':
                     _trading_params['daytrade_price_max'] = float(v)
-                elif k == 'risk_per_trade_pct':
-                    _trading_params['risk_per_trade_pct'] = float(v)
-                elif k == 'atr_multiplier':
-                    _trading_params['atr_multiplier'] = float(v)
                 elif k == 'force_exit_time':
                     _trading_params['force_exit_time'] = v
                 elif k == 'latest_dynamic_add_time':
                     _trading_params['latest_dynamic_add_time'] = v
-                elif k == 'time_stop_hour':
-                    _trading_params['time_stop_hour'] = float(v)
-                elif k == 'market_drop_threshold':
-                    _trading_params['market_drop_threshold'] = float(v)
-                elif k == 'max_entry_gain_pct':
-                    _trading_params['max_entry_gain_pct'] = float(v)
-                elif k == 'limit_up_buffer':
-                    _trading_params['limit_up_buffer'] = float(v)
-                elif k == 'futures_rocket_threshold':
-                    _trading_params['futures_rocket_threshold'] = float(v)
-                elif k == 'futures_crash_threshold':
-                    _trading_params['futures_crash_threshold'] = float(v)
-                elif k == 'futures_spread_no_buy_pct':
-                    _trading_params['futures_spread_no_buy_pct'] = float(v)
-                elif k == 'futures_spread_reduce_pct':
-                    _trading_params['futures_spread_reduce_pct'] = float(v)
-                elif k == 'futures_spread_sell_pct':
-                    _trading_params['futures_spread_sell_pct'] = float(v)
-                elif k == 'futures_spread_fast_reversal_pct':
-                    _trading_params['futures_spread_fast_reversal_pct'] = float(v)
-                elif k == 'take_profit_pct':
-                    _trading_params['take_profit_pct'] = float(v)
-                elif k == 'trailing_trigger_pct':
-                    _trading_params['trailing_trigger_pct'] = float(v)
-                elif k == 'trailing_pullback_pct':
-                    _trading_params['trailing_pullback_pct'] = float(v)
-                elif k == 'buy_order_timeout_secs':
-                    _trading_params['buy_order_timeout_secs'] = int(v)
-                elif k == 'buy_retry_ticks':
-                    _trading_params['buy_retry_ticks'] = int(v)
-                elif k == 'futures_poll_interval_secs':
-                    _trading_params['futures_poll_interval_secs'] = int(v)
+                elif k == 'tick_rise_threshold':
+                    _trading_params['tick_rise_threshold'] = int(v)
+                elif k == 'stop_loss_ticks':
+                    _trading_params['stop_loss_ticks'] = int(v)
+                elif k == 'take_profit_add_pct':
+                    _trading_params['take_profit_add_pct'] = float(v)
+                elif k == 'max_change_pct':
+                    _trading_params['max_change_pct'] = float(v)
+                elif k == 'market_rise_min':
+                    _trading_params['market_rise_min'] = float(v)
         except Exception:
             pass
 
@@ -1207,31 +1138,15 @@ def create_app(
         _trading_params["max_daily_positions"] = body.max_daily_positions
         _trading_params["dry_run"] = body.dry_run
         _trading_params["commission_discount"] = max(0.0, min(1.0, body.commission_discount))
-        _trading_params["cb_crash_pct"] = max(0.1, body.cb_crash_pct)
-        _trading_params["cb_window_min"] = max(1, body.cb_window_min)
-        _trading_params["cb_pause_minutes"] = max(5, body.cb_pause_minutes)
         _trading_params["daytrade_price_min"] = max(0.0, body.daytrade_price_min)
         _trading_params["daytrade_price_max"] = max(0.0, body.daytrade_price_max)
-        _trading_params["risk_per_trade_pct"] = max(0.1, body.risk_per_trade_pct)
-        _trading_params["atr_multiplier"] = max(0.5, body.atr_multiplier)
         _trading_params["force_exit_time"] = body.force_exit_time
         _trading_params["latest_dynamic_add_time"] = body.latest_dynamic_add_time
-        _trading_params["time_stop_hour"] = body.time_stop_hour
-        _trading_params["market_drop_threshold"] = body.market_drop_threshold
-        _trading_params["max_entry_gain_pct"] = max(0.5, body.max_entry_gain_pct)
-        _trading_params["limit_up_buffer"] = max(0.5, body.limit_up_buffer)
-        _trading_params["futures_rocket_threshold"] = max(0.0, body.futures_rocket_threshold)
-        _trading_params["futures_crash_threshold"] = max(0.0, body.futures_crash_threshold)
-        _trading_params["futures_spread_no_buy_pct"] = max(0.0, body.futures_spread_no_buy_pct)
-        _trading_params["futures_spread_reduce_pct"] = max(0.0, body.futures_spread_reduce_pct)
-        _trading_params["futures_spread_sell_pct"] = max(0.0, body.futures_spread_sell_pct)
-        _trading_params["futures_spread_fast_reversal_pct"] = max(0.0, body.futures_spread_fast_reversal_pct)
-        _trading_params["take_profit_pct"] = max(0.5, body.take_profit_pct)
-        _trading_params["trailing_trigger_pct"] = max(0.5, body.trailing_trigger_pct)
-        _trading_params["trailing_pullback_pct"] = max(0.5, body.trailing_pullback_pct)
-        _trading_params["buy_order_timeout_secs"] = max(10, body.buy_order_timeout_secs)
-        _trading_params["buy_retry_ticks"] = max(0, body.buy_retry_ticks)
-        _trading_params["futures_poll_interval_secs"] = max(5, body.futures_poll_interval_secs)
+        _trading_params["tick_rise_threshold"] = max(1, body.tick_rise_threshold)
+        _trading_params["stop_loss_ticks"] = max(1, body.stop_loss_ticks)
+        _trading_params["take_profit_add_pct"] = max(0.1, body.take_profit_add_pct)
+        _trading_params["max_change_pct"] = max(0.1, body.max_change_pct)
+        _trading_params["market_rise_min"] = body.market_rise_min
         try:
             with sqlite3.connect(_ticks_db, check_same_thread=False) as c:
                 for k, v in [
@@ -1239,31 +1154,15 @@ def create_app(
                     ('max_daily_positions', str(body.max_daily_positions)),
                     ('dry_run', str(body.dry_run)),
                     ('commission_discount', str(body.commission_discount)),
-                    ('cb_crash_pct', str(body.cb_crash_pct)),
-                    ('cb_window_min', str(body.cb_window_min)),
-                    ('cb_pause_minutes', str(body.cb_pause_minutes)),
                     ('daytrade_price_min', str(body.daytrade_price_min)),
                     ('daytrade_price_max', str(body.daytrade_price_max)),
-                    ('risk_per_trade_pct', str(body.risk_per_trade_pct)),
-                    ('atr_multiplier', str(body.atr_multiplier)),
                     ('force_exit_time', body.force_exit_time),
                     ('latest_dynamic_add_time', body.latest_dynamic_add_time),
-                    ('time_stop_hour', str(body.time_stop_hour)),
-                    ('market_drop_threshold', str(body.market_drop_threshold)),
-                    ('max_entry_gain_pct', str(body.max_entry_gain_pct)),
-                    ('limit_up_buffer', str(body.limit_up_buffer)),
-                    ('futures_rocket_threshold', str(body.futures_rocket_threshold)),
-                    ('futures_crash_threshold', str(body.futures_crash_threshold)),
-                    ('futures_spread_no_buy_pct', str(body.futures_spread_no_buy_pct)),
-                    ('futures_spread_reduce_pct', str(body.futures_spread_reduce_pct)),
-                    ('futures_spread_sell_pct', str(body.futures_spread_sell_pct)),
-                    ('futures_spread_fast_reversal_pct', str(body.futures_spread_fast_reversal_pct)),
-                    ('take_profit_pct', str(body.take_profit_pct)),
-                    ('trailing_trigger_pct', str(body.trailing_trigger_pct)),
-                    ('trailing_pullback_pct', str(body.trailing_pullback_pct)),
-                    ('buy_order_timeout_secs', str(body.buy_order_timeout_secs)),
-                    ('buy_retry_ticks', str(body.buy_retry_ticks)),
-                    ('futures_poll_interval_secs', str(body.futures_poll_interval_secs)),
+                    ('tick_rise_threshold', str(body.tick_rise_threshold)),
+                    ('stop_loss_ticks', str(body.stop_loss_ticks)),
+                    ('take_profit_add_pct', str(body.take_profit_add_pct)),
+                    ('max_change_pct', str(body.max_change_pct)),
+                    ('market_rise_min', str(body.market_rise_min)),
                 ]:
                     c.execute("INSERT OR REPLACE INTO settings(key,value) VALUES(?,?)", (k, v))
         except Exception:
@@ -1274,36 +1173,35 @@ def create_app(
     _sim_positions: dict = {}  # symbol → {entry_price, lots, stop_loss}
 
     @app.post("/debug/simulate-buy")
-    def simulate_buy(symbol: str = "2382", price: float = 0.0, lots: int = 1, atr: float = 0.0):
+    def simulate_buy(symbol: str = "2382", price: float = 0.0, lots: int = 1,
+                     ref_price: float = 0.0, stop_loss_ticks: int = 4, take_profit_add_pct: float = 4.0):
         """模擬買入：建立暫存持倉，送 LINE 通知（dry_run=False 真實發送）。"""
         from engine.risk.position import Position
+        from engine.execution.broker import tw_tick_size, round_up_tick, round_down_tick
         from engine.monitor.notifier import LineNotifier
         notifier = LineNotifier(dry_run=False)
         if price <= 0:
             price = 250.0
-        if atr <= 0:
-            atr = round(price * 0.015, 1)
-        import yaml as _yaml
-        _cfg_path = os.environ.get("FUBON_CONFIG", "/fubon-config/config.yaml")
-        try:
-            with open(_cfg_path, encoding="utf-8") as _f:
-                _cfg = _yaml.safe_load(_f)
-            _atr_mult = float(_cfg.get("risk", {}).get("atr_multiplier", 1.8))
-        except Exception:
-            _atr_mult = 1.8
-        pos = Position(symbol=symbol, entry_price=price, lots=lots, atr=atr, atr_multiplier=_atr_mult)
+        if ref_price <= 0:
+            ref_price = price
+        ts = tw_tick_size(price)
+        stop_loss = round_up_tick(price - stop_loss_ticks * ts)
+        change_at_entry = (price - ref_price) / ref_price * 100 if ref_price > 0 else 0.0
+        take_profit = round_down_tick(ref_price * (1 + (change_at_entry + take_profit_add_pct) / 100))
+        pos = Position(symbol=symbol, entry_price=price, lots=lots,
+                       stop_loss=stop_loss, take_profit=take_profit)
         _sim_positions[symbol] = {
             "entry_price": price, "lots": lots,
-            "stop_loss": pos.stop_loss, "atr": atr,
+            "stop_loss": pos.stop_loss, "take_profit": pos.take_profit,
         }
         msg = (
             f"🟢【模擬進場】{symbol}\n"
-            f"價={price:.1f}  張數={lots}  ATR={atr:.2f}\n"
-            f"停損={pos.stop_loss:.2f}  (ATR×{_atr_mult})"
+            f"價={price:.1f}  張數={lots}\n"
+            f"停損={pos.stop_loss:.2f}  停利={pos.take_profit:.2f}"
         )
         sent = notifier.send(msg)
         return {"ok": True, "sent": sent, "symbol": symbol, "entry_price": price,
-                "lots": lots, "stop_loss": pos.stop_loss, "message": msg}
+                "lots": lots, "stop_loss": pos.stop_loss, "take_profit": pos.take_profit, "message": msg}
 
     @app.post("/debug/simulate-sell")
     def simulate_sell(symbol: str = "2382", price: float = 0.0, reason: str = "atr_stop"):
@@ -1320,7 +1218,7 @@ def create_app(
             f"🔴【模擬出場】{symbol}\n"
             f"原因={reason}  {pos['entry_price']:.1f}→{price:.1f}\n"
             f"損益={pnl:+,.0f}  {pos['lots']}張\n"
-            f"停損設定={pos['stop_loss']:.2f}"
+            f"停損={pos['stop_loss']:.2f}  停利={pos.get('take_profit', 0):.2f}"
         )
         sent = notifier.send(msg)
         return {"ok": True, "sent": sent, "symbol": symbol, "exit_price": price,
@@ -1332,13 +1230,15 @@ def create_app(
 
     @app.post("/debug/simulate-full-day")
     def simulate_full_day(symbol: str = "2382", ref_price: float = 250.0):
-        """完整交易日模擬：選股→ORB觀察→進場→移動停利→出場，送真實 LINE 通知。"""
+        """完整交易日模擬（已停用：策略改為 60s tick 動量，請用 /debug/simulate-buy）。"""
+        raise HTTPException(status_code=410, detail="simulate-full-day 已停用（舊 ORB 策略）。請改用 /debug/simulate-buy 測試新策略。")
+
+    def _simulate_full_day_deprecated(symbol: str = "2382", ref_price: float = 250.0):
+        """（已停用，保留供參考）完整交易日模擬：選股→ORB觀察→進場→移動停利→出場，送真實 LINE 通知。"""
         import yaml
         from datetime import datetime
         from engine.data.session_state import SymbolSession
         from engine.strategy.signal_combiner import SignalCombiner
-        from engine.strategy.volume_price import VolumePriceStrategy
-        from engine.strategy.technical import TechnicalStrategy
         from engine.execution.budget_manager import BudgetManager
         from engine.execution.broker import round_up_tick
         from engine.risk.position import Position

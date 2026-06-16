@@ -165,9 +165,7 @@ function LiveTab() {
             {idxChg5 !== 0 && <span className={`text-[10px] ${mono} ${idxChg5 >= 0 ? 'text-red-400' : 'text-green-400'}`}>
               {idxChg5 >= 0 ? '▲' : '▼'}{Math.abs(idxChg5).toFixed(1)}
             </span>}
-            <span className={`text-[10px] px-1 py-0.5 rounded ${circuit === 'normal' ? 'bg-green-400/20 text-green-400' : circuit === 'crash' ? 'bg-red-400/20 text-red-400' : 'bg-yellow-400/20 text-yellow-400'}`}>
-              {circuit === 'normal' ? '正常' : circuit === 'crash' ? '熔斷' : '急漲'}
-            </span>
+            <span className="text-[10px] px-1 py-0.5 rounded bg-green-400/20 text-green-400">正常</span>
           </div>
         </div>
         {/* 串流 */}
@@ -198,9 +196,8 @@ function LiveTab() {
                   <th className="px-4 py-2 text-right">張</th>
                   <th className="px-4 py-2 text-right">成本</th>
                   <th className="px-4 py-2 text-right">現價</th>
-                  <th className="px-4 py-2 text-right">停損線</th>
-                  <th className="px-4 py-2 text-right">ATR</th>
-
+                  <th className="px-4 py-2 text-right">停損</th>
+                  <th className="px-4 py-2 text-right">停利</th>
                   <th className="px-4 py-2 text-right">未實現</th>
                 </tr>
               </thead>
@@ -211,6 +208,7 @@ function LiveTab() {
                   const unreal = cur != null ? (cur - p.entry_price) * p.lots * 1000 : null
                   const uc = unreal != null ? (unreal >= 0 ? 'text-red-400' : 'text-green-400') : muted
                   const nearStop = cur != null && p.stop_loss != null && cur <= p.stop_loss * 1.02
+                  const nearTp = cur != null && p.take_profit != null && cur >= p.take_profit * 0.99
                   return (
                     <tr key={p.symbol} className="border-b border-[#253d5c] hover:bg-[#1a2d4a]">
                       <td className="px-4 py-2 text-[#60a5fa] font-bold">{p.symbol}</td>
@@ -218,8 +216,7 @@ function LiveTab() {
                       <td className={`px-4 py-2 text-right ${mono} text-[#dde6f0]`}>{p.entry_price?.toFixed(1)}</td>
                       <td className={`px-4 py-2 text-right ${mono} ${cur != null ? (cur >= p.entry_price ? 'text-red-400' : 'text-green-400') : muted}`}>{cur != null ? cur.toFixed(1) : '—'}</td>
                       <td className={`px-4 py-2 text-right ${mono} ${nearStop ? 'text-red-400 font-bold' : 'text-orange-400'}`}>{p.stop_loss?.toFixed(1) ?? '—'}</td>
-                      <td className={`px-4 py-2 text-right ${mono} ${muted}`}>{p.atr != null ? p.atr.toFixed(2) : '—'}</td>
-
+                      <td className={`px-4 py-2 text-right ${mono} ${nearTp ? 'text-red-400 font-bold' : 'text-green-400'}`}>{p.take_profit?.toFixed(1) ?? '—'}</td>
                       <td className={`px-4 py-2 text-right ${mono} ${uc}`}>{unreal != null ? `${unreal >= 0 ? '+' : ''}${Math.round(unreal).toLocaleString()}` : '—'}</td>
                     </tr>
                   )
@@ -753,42 +750,23 @@ function PreSessionTab() {
 interface PD { id: string; group: string; label: string; desc: string; unit: string; rtKey: string; type: 'number'|'time'; step?: number; min?: number; max?: number; canDisable: boolean }
 const PARAM_DEFS: PD[] = [
   // 倉位控制
-  { id:'max_position_capital', group:'倉位控制', label:'每檔資金上限',   desc:'單一標的最多動用的資金；ATR 張數算完後再 cap 到此值', unit:'TWD', rtKey:'max_position_capital', type:'number', step:100000, min:100000, canDisable:false },
-  { id:'max_daily_positions',  group:'倉位控制', label:'每日最多交易檔數', desc:'一天最多買賣幾檔股票；進場後即使出場也計入，達上限後當日不再開新倉', unit:'檔', rtKey:'max_daily_positions', type:'number', step:1, min:1, canDisable:false },
-  { id:'risk_per_trade_pct',   group:'倉位控制', label:'每筆風險比例',   desc:'每筆交易最多承擔總資金×此%的風險，決定張數公式基數', unit:'%', rtKey:'risk_per_trade_pct', type:'number', step:0.5, min:0.1, canDisable:false },
+  { id:'max_position_capital', group:'倉位控制', label:'每次進場資金上限', desc:'每次進場最多動用的資金（超過就截斷）；張數 = floor(min(上限, 剩餘總資金) / (價格 × 1000))', unit:'TWD', rtKey:'max_position_capital', type:'number', step:100000, min:100000, canDisable:false },
+  { id:'max_daily_positions',  group:'倉位控制', label:'每日進場次數上限', desc:'一天最多進場幾次（同標的可重複計入）；達上限後當日不再開新倉', unit:'次', rtKey:'max_daily_positions', type:'number', step:1, min:1, canDisable:false },
+  // 進場條件
+  { id:'tick_rise_threshold',  group:'進場條件', label:'60秒 tick 上漲門檻', desc:'過去 60 秒內股價上漲需 ≥ 此 tick 數才觸發進場；tick 依各價位不同計算', unit:'tick', rtKey:'tick_rise_threshold', type:'number', step:1, min:1, canDisable:false },
+  { id:'max_change_pct',       group:'進場條件', label:'最大漲跌幅',          desc:'個股當日漲跌幅（絕對值）超過此%不進場，避免追高或跌太多', unit:'%', rtKey:'max_change_pct', type:'number', step:0.5, min:0.5, canDisable:false },
+  { id:'market_rise_min',      group:'進場條件', label:'大盤日漲幅門檻',      desc:'加權今日較昨收漲幅須 > 此%才允許開倉；0 = 不限制', unit:'%', rtKey:'market_rise_min', type:'number', step:0.5, canDisable:false },
+  // 停損停利
+  { id:'stop_loss_ticks',      group:'停損停利', label:'停損 tick 數',    desc:'進場後向下跌超過此 tick 數觸發停損（觸價單）；停損價 = 進場價 - N × tick_size，向上捨入', unit:'tick', rtKey:'stop_loss_ticks', type:'number', step:1, min:1, canDisable:false },
+  { id:'take_profit_add_pct',  group:'停損停利', label:'停利附加漲幅',    desc:'停利觸價單 = 昨收 × (1 + (進場時漲幅 + 此%) / 100)，向下捨入 tick；例：進場漲4%、附加4% → 停利在昨收漲8%', unit:'%', rtKey:'take_profit_add_pct', type:'number', step:0.5, min:0.5, canDisable:false },
   // 交易時間
-  { id:'force_exit_time',          group:'交易時間', label:'強制出場時間',  desc:'到達此時間所有持倉強制市價出清，不管盈虧', unit:'HH:MM', rtKey:'force_exit_time', type:'time', canDisable:false },
-  { id:'latest_dynamic_add_time',  group:'交易時間', label:'動態加入截止',  desc:'此時間後不接受新進場信號，距收盤太近避免來不及出清', unit:'HH:MM', rtKey:'latest_dynamic_add_time', type:'time', canDisable:false },
-  { id:'time_stop_hour',           group:'交易時間', label:'時間止損',  desc:'持倉超過此時間仍虧損（price < entry）→ 自動出場（12.5 = 12:30）', unit:'時', rtKey:'time_stop_hour', type:'number', step:0.5, min:9, max:13.5, canDisable:false },
-  // 大盤熔斷
-  { id:'cb_crash_pct',      group:'大盤熔斷', label:'急跌熔斷門檻',  desc:'觀察視窗內大盤跌幅超過此% → 出清全倉並暫停進場；同比例急漲視為 surge 狀態', unit:'%', rtKey:'cb_crash_pct', type:'number', step:0.5, min:0.5, canDisable:true },
-  { id:'cb_window_min',     group:'大盤熔斷', label:'熔斷觀察視窗',  desc:'計算急跌的時間視窗（分鐘）', unit:'分鐘', rtKey:'cb_window_min', type:'number', step:1, min:1, canDisable:false },
-  { id:'cb_pause_minutes',  group:'大盤熔斷', label:'熔斷暫停時間',  desc:'觸發熔斷後暫停新開倉的分鐘數', unit:'分鐘', rtKey:'cb_pause_minutes', type:'number', step:5, min:5, canDisable:false },
-  // 進場信號
-  { id:'market_drop_threshold', group:'進場信號', label:'大盤日跌門檻',      desc:'加權今日較昨收跌超過此%時停止新開倉（例：-1.5 = 跌1.5%停買）', unit:'%', rtKey:'market_drop_threshold', type:'number', step:0.5, canDisable:true },
-  { id:'max_entry_gain_pct',    group:'進場信號', label:'最大進場漲幅',      desc:'個股當日漲幅超過此%不開倉，避免追高；ORB 突破時本條件仍生效', unit:'%', rtKey:'max_entry_gain_pct', type:'number', step:0.5, min:0, canDisable:true },
-  { id:'limit_up_buffer',       group:'進場信號', label:'漲停緩衝',          desc:'股價距漲停不足此%時不進場，避免追板買在最高點', unit:'%', rtKey:'limit_up_buffer', type:'number', step:0.5, min:0, canDisable:true },
-  // 期貨過濾
-  { id:'futures_rocket_threshold',         group:'期貨過濾', label:'期貨急漲門檻',   desc:'個股期貨漲幅超過此% → 視為強勢標的，取消正常停利等漲停賣', unit:'%', rtKey:'futures_rocket_threshold', type:'number', step:0.5, min:0, canDisable:true },
-  { id:'futures_crash_threshold',          group:'期貨過濾', label:'期貨急跌門檻',   desc:'個股期貨跌幅超過此% → 視為崩跌，立即市價出清', unit:'%', rtKey:'futures_crash_threshold', type:'number', step:0.5, min:0, canDisable:true },
-  { id:'futures_spread_no_buy_pct',        group:'期貨過濾', label:'逆價差—禁止買',  desc:'期現差呈逆差超過此%時不開新倉（期貨端空方壓力警示）', unit:'%', rtKey:'futures_spread_no_buy_pct', type:'number', step:0.1, min:0, canDisable:true },
-  { id:'futures_spread_reduce_pct',        group:'期貨過濾', label:'逆價差—減半倉',  desc:'逆差超過此%時，計算張數後減半，控制暴露風險', unit:'%', rtKey:'futures_spread_reduce_pct', type:'number', step:0.1, min:0, canDisable:true },
-  { id:'futures_spread_sell_pct',          group:'期貨過濾', label:'逆價差—立即賣',  desc:'逆差超過此%時，持倉全數立即出清', unit:'%', rtKey:'futures_spread_sell_pct', type:'number', step:0.5, min:0, canDisable:true },
-  { id:'futures_spread_fast_reversal_pct', group:'期貨過濾', label:'逆價差急惡化',   desc:'短窗口內逆差擴大速度超過此值時加速出場（趨勢惡化預警）', unit:'%', rtKey:'futures_spread_fast_reversal_pct', type:'number', step:0.1, min:0, canDisable:true },
-  // 風控
-  { id:'atr_multiplier',         group:'風控', label:'ATR 倍數',       desc:'停損距離 = ATR × 此倍數；同時決定張數公式分母（資金×1% ÷ (ATR×倍數×1000)）', unit:'x', rtKey:'atr_multiplier', type:'number', step:0.5, min:0.5, canDisable:false },
-  // 停利/停損策略
-  { id:'take_profit_pct',       group:'停利策略', label:'最終停利',          desc:'漲幅達此%時全部出清', unit:'%', rtKey:'take_profit_pct', type:'number', step:0.5, min:0, canDisable:true },
-  { id:'trailing_trigger_pct',  group:'停利策略', label:'移動停損啟動',      desc:'獲利達此%後啟動移動停損追蹤；之後從最高點回落 trailing_pullback_pct% 即出場', unit:'%', rtKey:'trailing_trigger_pct', type:'number', step:0.5, min:0.5, canDisable:false },
-  { id:'trailing_pullback_pct', group:'停利策略', label:'移動停損回落幅度',  desc:'啟動移動停損後，從歷史最高點回落此%即觸發出場', unit:'%', rtKey:'trailing_pullback_pct', type:'number', step:0.5, min:0.5, canDisable:false },
+  { id:'force_exit_time',         group:'交易時間', label:'強制出場時間',  desc:'到達此時間所有持倉強制市價出清（不掛限價，直接市價）', unit:'HH:MM', rtKey:'force_exit_time', type:'time', canDisable:false },
+  { id:'latest_dynamic_add_time', group:'交易時間', label:'進場截止時間',  desc:'此時間後不接受新進場信號，太接近收盤避免來不及出清', unit:'HH:MM', rtKey:'latest_dynamic_add_time', type:'time', canDisable:false },
   // 委託設定
-  { id:'buy_order_timeout_secs',     group:'委託設定', label:'買單逾時',      desc:'買單掛出後超過此秒數未成交，自動取消並追價重試（dry run 無效）', unit:'秒', rtKey:'buy_order_timeout_secs', type:'number', step:10, min:10, canDisable:false },
-  { id:'buy_retry_ticks',            group:'委託設定', label:'追價 tick 數',  desc:'追價委託時在最新成交價上加幾個 tick，避免又追不到（dry run 無效）', unit:'tick', rtKey:'buy_retry_ticks', type:'number', step:1, min:0, canDisable:false },
-  { id:'commission_discount',        group:'委託設定', label:'手續費折扣',    desc:'券商手續費折讓倍率：0.28 = 付28%，72% 月底退還', unit:'折', rtKey:'commission_discount', type:'number', step:0.01, min:0.01, max:1, canDisable:false },
-  { id:'futures_poll_interval_secs', group:'委託設定', label:'期貨輪詢間隔',  desc:'主動查詢個股期貨價格的間隔秒數（REST API，非 WebSocket）', unit:'秒', rtKey:'futures_poll_interval_secs', type:'number', step:5, min:5, canDisable:false },
+  { id:'commission_discount', group:'委託設定', label:'手續費折扣', desc:'券商手續費折讓倍率：0.28 = 付28%，72% 月底退還', unit:'折', rtKey:'commission_discount', type:'number', step:0.01, min:0.01, max:1, canDisable:false },
   // 當沖篩選條件
-  { id:'daytrade_price_min', group:'當沖篩選', label:'股價下限', desc:'當沖候選昨收低於此值排除（太便宜流動性差、跳動幅度小）', unit:'元', rtKey:'daytrade_price_min', type:'number', step:50, min:0, canDisable:false },
-  { id:'daytrade_price_max', group:'當沖篩選', label:'股價上限', desc:'當沖候選昨收高於此值排除（太貴每張成本高，不利當沖資金配置）', unit:'元', rtKey:'daytrade_price_max', type:'number', step:50, min:0, canDisable:false },
+  { id:'daytrade_price_min', group:'當沖篩選', label:'股價下限', desc:'當沖候選昨收低於此值排除（太便宜流動性差）', unit:'元', rtKey:'daytrade_price_min', type:'number', step:50, min:0, canDisable:false },
+  { id:'daytrade_price_max', group:'當沖篩選', label:'股價上限', desc:'當沖候選昨收高於此值排除（太貴不利資金配置）', unit:'元', rtKey:'daytrade_price_max', type:'number', step:50, min:0, canDisable:false },
 ]
 
 const _PARAM_GROUPS = Array.from(new Set(PARAM_DEFS.map(p => p.group)))
