@@ -958,9 +958,7 @@ function ConfigTab() {
   }
 
   const st = sysStatus
-  const trading = cfg?.trading ?? {}
   const fubon = cfg?.fubon ?? {}
-  const watchlist: string[] = trading.dry_run_watchlist ?? cfg?.watchlist ?? []
   const engStatus: string = engineState?.status ?? 'unknown'
   const engRunning = engStatus === 'running'
 
@@ -1077,19 +1075,6 @@ function ConfigTab() {
         </div>
       )}
 
-      {/* 監控清單 */}
-      {watchlist.length > 0 && (
-        <div>
-          <SectionLabel>監控清單（{watchlist.length} 檔）</SectionLabel>
-          <div className={`${card} p-3`}>
-            <div className="flex flex-wrap gap-1.5">
-              {watchlist.map((s: string) => (
-                <span key={s} className={`bg-[#0c1929] border border-[#253d5c] rounded px-2 py-0.5 text-xs ${mono} text-[#dde6f0]`}>{s}</span>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   )
 }
