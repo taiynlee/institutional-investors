@@ -1615,13 +1615,14 @@ def create_app(
 
             # Index
             idx_row = c.execute(
-                "SELECT price, change_5min, circuit FROM index_ticks ORDER BY id DESC LIMIT 1"
+                "SELECT price, change_5min, circuit, chg_day_pct FROM index_ticks ORDER BY id DESC LIMIT 1"
             ).fetchone()
             if idx_row:
                 out["__index__"] = {
                     "price": idx_row[0],
                     "chg5": idx_row[1],
                     "circuit": idx_row[2],
+                    "chg_day_pct": idx_row[3] if len(idx_row) > 3 else 0.0,
                 }
         except Exception:
             _live_conn[0] = None  # reset so next call reconnects

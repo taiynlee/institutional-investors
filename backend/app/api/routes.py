@@ -584,21 +584,25 @@ async def get_market_overview():
             "^N225":  "日經225",
             "^KS11":  "韓國綜合",
         }
+        import math
         result = []
         for sym, name in symbols.items():
             try:
-                import math
                 t = yf.Ticker(sym)
-                hist = t.history(period="5d")
-                hist = hist.dropna(subset=["Close"])
-                if len(hist) < 2:
-                    continue
-                prev_close = float(hist["Close"].iloc[-2])
-                last_close = float(hist["Close"].iloc[-1])
+                fi = t.fast_info
+                last_close = float(fi.last_price or 0)
+                prev_close = float(fi.previous_close or 0)
+                if not last_close or not prev_close or prev_close == 0:
+                    # fallback to history
+                    hist = t.history(period="5d").dropna(subset=["Close"])
+                    if len(hist) < 2:
+                        continue
+                    prev_close = float(hist["Close"].iloc[-2])
+                    last_close = float(hist["Close"].iloc[-1])
                 if math.isnan(prev_close) or math.isnan(last_close) or prev_close == 0:
                     continue
-                chg_pct = (last_close - prev_close) / prev_close * 100
                 chg_pts = last_close - prev_close
+                chg_pct = chg_pts / prev_close * 100
                 result.append({
                     "symbol": sym,
                     "name": name,

@@ -124,8 +124,7 @@ function LiveTab() {
   const stocks: any[] = list?.stocks ?? []
   const idxData = ticks['__index__'] ?? {}
   const idxPrice: number | null = idxData.price ?? null
-  const idxChg5: number = idxData.chg5 ?? 0
-  const circuit: string = idxData.circuit ?? 'normal'
+  const idxChgDayPct: number = idxData.chg_day_pct ?? 0
   const isDry = status !== null
 
 
@@ -162,10 +161,9 @@ function LiveTab() {
             {idxPrice != null ? idxPrice.toLocaleString(undefined, {maximumFractionDigits: 0}) : '—'}
           </span>
           <div className="flex items-center gap-1 mt-0.5">
-            {idxChg5 !== 0 && <span className={`text-[10px] ${mono} ${idxChg5 >= 0 ? 'text-red-400' : 'text-green-400'}`}>
-              {idxChg5 >= 0 ? '▲' : '▼'}{Math.abs(idxChg5).toFixed(1)}
+            {idxChgDayPct !== 0 && <span className={`text-[10px] ${mono} ${idxChgDayPct >= 0 ? 'text-red-400' : 'text-green-400'}`}>
+              {idxChgDayPct >= 0 ? '▲' : '▼'}{Math.abs(idxChgDayPct).toFixed(2)}%
             </span>}
-            <span className="text-[10px] px-1 py-0.5 rounded bg-green-400/20 text-green-400">正常</span>
           </div>
         </div>
         {/* 串流 */}

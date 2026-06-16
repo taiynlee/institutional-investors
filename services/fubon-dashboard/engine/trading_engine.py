@@ -305,10 +305,11 @@ class TradingEngine:
             import httpx as _httpx
             _r = _httpx.get("http://localhost:8000/api/daytrade/list", timeout=8)
             if _r.status_code == 200:
-                _codes = [row["code"] for row in _r.json() if "code" in row]
+                _data = _r.json()
+                _codes = [s["stock_id"] for s in _data.get("stocks", []) if "stock_id" in s]
                 if _codes:
                     symbols = _codes
-                    logger.info("從 PG daytrade_candidate 取得 %d 檔標的", len(symbols))
+                    logger.info("從 PG daytrade_candidate 取得 %d 檔標的（%s）", len(symbols), _data.get("date", "?"))
         except Exception as e:
             logger.warning("daytrade_list 讀取失敗，使用 config: %s", e)
 
@@ -351,8 +352,13 @@ class TradingEngine:
                 ts          TEXT NOT NULL,
                 price       REAL NOT NULL,
                 change_5min REAL NOT NULL DEFAULT 0,
-                circuit     TEXT NOT NULL DEFAULT 'normal'
+                circuit     TEXT NOT NULL DEFAULT 'normal',
+                chg_day_pct REAL NOT NULL DEFAULT 0
             )""")
+            try:
+                _tdb.execute("ALTER TABLE index_ticks ADD COLUMN chg_day_pct REAL NOT NULL DEFAULT 0")
+            except Exception:
+                pass
             _tdb.execute("CREATE INDEX IF NOT EXISTS idx_idx_ts ON index_ticks(id)")
             _tdb.commit()
 
@@ -580,9 +586,10 @@ class TradingEngine:
             try:
                 with sqlite3.connect(ticks_db) as _tdb:
                     _tdb.execute(
-                        "INSERT INTO index_ticks(ts,price,change_5min,circuit) VALUES(?,?,?,?)",
+                        "INSERT INTO index_ticks(ts,price,change_5min,circuit,chg_day_pct) VALUES(?,?,?,?,?)",
                         (now.strftime("%Y-%m-%d %H:%M:%S"), price,
-                         round(_idx["chg5"], 2), "normal"),
+                         round(_idx["chg5"], 2), "normal",
+                         round(_idx["chg_day_pct"], 4)),
                     )
             except Exception:
                 pass
