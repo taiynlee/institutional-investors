@@ -182,20 +182,19 @@ class TradingEngine:
             except Exception:
                 pass
 
-        # ── 設定載入 ─────────────────────────────────────────────────────────
+        # ── 設定載入（只讀富邦帳密，其餘參數全從 PG trading_settings 熱重載）─────
         with open(config_path, encoding="utf-8") as f:
             cfg = yaml.safe_load(f)
-        trading   = cfg.get("trading", {})
         fubon_cfg = cfg.get("fubon", {})
 
         dry_run = True  # 永遠 dry_run（安全護欄）
 
-        # 從 yaml 讀初始值（fallback）；運行時改由 ticks.db settings 熱重載
-        force_exit_str       = trading.get("force_exit_time", "13:20")
-        dynamic_add_str      = trading.get("latest_dynamic_add_time", "13:10")
-        max_position_capital = trading.get("max_position_capital", 1_000_000)
-        max_daily_positions  = trading.get("max_daily_positions", 5)
-        total_capital        = trading.get("max_daily_buy_amount", 10_000_000)
+        # 初始值 hardcoded；運行時由 ticks.db settings（同步自 PG）熱重載
+        force_exit_str       = "13:20"
+        dynamic_add_str      = "13:10"
+        max_position_capital = 1_000_000
+        max_daily_positions  = 5
+        total_capital        = 10_000_000
 
         # ── 熱重載 helpers：每次被呼叫時從 ticks.db 讀取最新值 ─────────────────
         def _gs(key: str, default: str) -> str:
@@ -310,8 +309,8 @@ class TradingEngine:
         rc        = sdk.marketdata.rest_client.stock
         rc_futopt = sdk.marketdata.rest_client.futopt
 
-        # ── 標的清單（優先從 PG backend 取，fallback config） ────────────────
-        symbols: list[str] = trading.get("dry_run_watchlist", ["2330"])
+        # ── 標的清單（從 PG backend 取，fallback hardcoded） ────────────────
+        symbols: list[str] = ["2330"]
         try:
             import httpx as _httpx
             _r = _httpx.get("http://localhost:8000/api/daytrade/list", timeout=8)

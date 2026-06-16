@@ -281,7 +281,7 @@ def create_app(
                     "lots": pos.lots,
                     "entry_price": pos.entry_price,
                     "stop_loss": pos.stop_loss,
-                    "atr": getattr(pos, "atr", None),
+                    "take_profit": getattr(pos, "take_profit", None),
                 }
                 for sym, pos in _positions.items()
             ]
@@ -290,7 +290,7 @@ def create_app(
                                  check_same_thread=False) as c:
                 c.row_factory = sqlite3.Row
                 rows = c.execute(
-                    "SELECT symbol, entry_price, lots, stop_loss, atr, orb_low FROM intraday_positions "
+                    "SELECT symbol, entry_price, lots, stop_loss, take_profit FROM intraday_positions "
                     "WHERE trade_date=? AND is_paper=0",
                     (_today(),),
                 ).fetchall()
@@ -557,26 +557,10 @@ def create_app(
     def get_daytrade_list_live():
         """PG-backed: 取最新 daytrade candidates，套用 above_ma20 & vol_ok & chip_count>=2"""
         import httpx as _httpx
-        config_watchlist: list = []
-        try:
-            import yaml
-            config_path = os.environ.get("FUBON_CONFIG", "/fubon-config/config.yaml")
-            with open(config_path, encoding="utf-8") as f:
-                cfg = yaml.safe_load(f)
-            config_watchlist = [
-                str(s) for s in (cfg.get("trading", {}).get("dry_run_watchlist") or [])
-                if s is not None
-            ]
-        except Exception:
-            pass
         try:
             r = _httpx.get(f"{_BACKEND}/api/daytrade/list", params={"live": "true"}, timeout=10)
             data = r.json()
             stocks = data.get("stocks", [])
-            if config_watchlist:
-                stocks = [s for s in stocks if s["stock_id"] in config_watchlist]
-                order_map = {sym: i for i, sym in enumerate(config_watchlist)}
-                stocks.sort(key=lambda x: order_map.get(x["stock_id"], len(config_watchlist)))
             return {"date": data.get("date"), "count": len(stocks), "stocks": stocks}
         except Exception as e:
             raise HTTPException(status_code=502, detail=str(e))
@@ -1088,58 +1072,6 @@ def create_app(
     @app.get("/pre-session/db-size")
     def get_db_size():
         return {"size_mb": 0}
-
-    # ── Config update (preserve comments via regex) ───────────────────────────
-    _CONFIG_ALLOWED = {
-        # 交易時間
-        'trading.force_exit_time', 'trading.latest_dynamic_add_time',
-        'trading.time_stop_hour',
-        # 進場信號
-        'signal.market_drop_threshold', 'signal.limit_up_buffer',
-        'signal.max_entry_gain_pct',
-        'signal.futures_rocket_threshold', 'signal.futures_crash_threshold',
-        'signal.futures_spread_no_buy_pct', 'signal.futures_spread_reduce_pct',
-        'signal.futures_spread_sell_pct', 'signal.futures_spread_fast_reversal_pct',
-        # 風控
-        'risk.atr_multiplier', 'risk.risk_per_trade_pct',
-        'risk.take_profit_pct',
-        'risk.trailing_trigger_pct', 'risk.trailing_pullback_pct',
-        # 委託（dry run 時無效，未來用）
-        'order.buy_order_timeout_secs', 'order.buy_retry_ticks',
-        'order.futures_poll_interval_secs',
-    }
-
-    @app.post("/config/update")
-    def update_config_yaml(updates: dict):
-        import re as _re
-        config_path = os.environ.get("FUBON_CONFIG", "/fubon-config/config.yaml")
-        try:
-            with open(config_path, encoding="utf-8") as f:
-                content = f.read()
-            updated: list = []
-            for dotted, value in updates.items():
-                if dotted not in _CONFIG_ALLOWED:
-                    continue
-                leaf = dotted.split('.')[-1]
-                if isinstance(value, str):
-                    yaml_val = f'"{value}"'
-                elif isinstance(value, bool):
-                    yaml_val = 'true' if value else 'false'
-                elif isinstance(value, (int, float)):
-                    yaml_val = str(value)
-                else:
-                    continue
-                pattern = rf'^(\s*{_re.escape(leaf)}:\s*)\S+?((?:\s+#.*)?)$'
-                content, n = _re.subn(pattern, rf'\g<1>{yaml_val}\g<2>', content, flags=_re.MULTILINE)
-                if n:
-                    updated.append(dotted)
-            with open(config_path, 'w', encoding="utf-8") as f:
-                f.write(content)
-            return {"ok": True, "updated": updated}
-        except PermissionError:
-            raise HTTPException(status_code=403, detail="config.yaml 唯讀，無法寫入")
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=str(e))
 
     # ── Trading params ────────────────────────────────────────────────────────
     @app.get("/trading-params")

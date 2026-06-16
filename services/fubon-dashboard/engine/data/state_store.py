@@ -57,8 +57,7 @@ _DDL = [
         lots        INTEGER NOT NULL,
         entry_time  TEXT    NOT NULL,
         stop_loss   REAL    NOT NULL,
-        atr         REAL    NOT NULL,
-        orb_low     REAL,
+        take_profit REAL    NOT NULL DEFAULT 0,
         is_paper    INTEGER NOT NULL DEFAULT 0
     )""",
 ]
@@ -76,6 +75,13 @@ def init_tables(db: str) -> None:
         ]:
             try:
                 conn.execute(f"ALTER TABLE intraday_trades ADD COLUMN {_col} {_def}")
+            except sqlite3.OperationalError:
+                pass
+        for _col, _def in [
+            ("take_profit", "REAL NOT NULL DEFAULT 0"),
+        ]:
+            try:
+                conn.execute(f"ALTER TABLE intraday_positions ADD COLUMN {_col} {_def}")
             except sqlite3.OperationalError:
                 pass
         conn.commit()
