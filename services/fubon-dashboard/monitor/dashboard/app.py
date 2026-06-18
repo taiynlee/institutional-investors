@@ -89,7 +89,7 @@ def create_app(
     daily_tracker=None,
     daily_store=None,
     max_position_capital: int = 1_000_000,
-    max_daily_positions: int = 3,
+    max_daily_positions: int = 5,
     dry_run: bool = True,
     ticks_db: str = "/fubon-data/ticks.db",
     trading_engine=None,
@@ -158,18 +158,21 @@ def create_app(
             pass
 
     def _load_trading_params_from_pg():
-        """從 PG backend 載入設定；失敗時 fallback SQLite"""
-        try:
-            import httpx as _httpx
-            r = _httpx.get(f"{_BACKEND}/api/trading-settings", timeout=5)
-            if r.status_code == 200:
-                for k, v in r.json().items():
-                    if k in _PARAM_KEYS:
-                        _trading_params[k] = _cast_param(k, v)
-                _sync_to_ticks_db({k: _trading_params[k] for k in _PARAM_KEYS})
-                return
-        except Exception:
-            pass
+        """從 PG backend 載入設定；失敗時 retry 3次，最終 fallback SQLite"""
+        import httpx as _httpx, time as _time
+        for attempt in range(3):
+            try:
+                r = _httpx.get(f"{_BACKEND}/api/trading-settings", timeout=5)
+                if r.status_code == 200:
+                    for k, v in r.json().items():
+                        if k in _PARAM_KEYS:
+                            _trading_params[k] = _cast_param(k, v)
+                    _sync_to_ticks_db({k: _trading_params[k] for k in _PARAM_KEYS})
+                    return
+            except Exception:
+                pass
+            if attempt < 2:
+                _time.sleep(3)
         # fallback: SQLite
         try:
             with sqlite3.connect(f"file:{_ticks_db}?mode=ro", uri=True,
