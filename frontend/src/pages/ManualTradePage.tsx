@@ -104,22 +104,17 @@ export function ManualTradeContent() {
     setBusy(true)
     setMsg(null)
     try {
-      const r = await axios.post(`${API}/manual-trade/buy`, null, {
+      await axios.post(`${API}/manual-trade/buy`, null, {
         params: {
-          symbol,
-          lots,
-          price: entryPrice,
+          symbol, lots, price: entryPrice,
           prev_close: refClose,
           stop_loss_ticks: stopTicks,
           take_profit_add_pct: tpAddPct,
           force_market: forceMarket,
         },
       })
-      setMsg({ ok: true, text: `✓ ${symbol} 買進 ${lots}張 @ ${entryPrice}` })
-      setSymbol('')
-      setName('')
-      setPrice('')
-      setPrevClose('')
+      setMsg({ ok: true, text: `✓ ${symbol} 買進 ${lots}張 @ ${entryPrice}，停損/停利觸價單已掛出` })
+      setSymbol(''); setName(''); setPrice(''); setPrevClose('')
       loadPositions()
     } catch (e: any) {
       setMsg({ ok: false, text: `✕ ${e?.response?.data?.detail ?? e.message}` })
@@ -128,13 +123,14 @@ export function ManualTradeContent() {
     }
   }
 
-  const doSell = async (sym: string) => {
-    if (!confirm(`確定市價賣出 ${sym}？同時取消兩張觸價單。`)) return
+  const doSell = async (pos: ManualPos) => {
+    if (!confirm(`確定市價賣出 ${pos.symbol}（${pos.lots}張）？同時取消兩張觸價單。`)) return
     setBusy(true)
+    setMsg(null)
     try {
-      const r = await axios.post(`${API}/manual-trade/sell/${sym}`)
+      const r = await axios.post(`${API}/manual-trade/sell/${pos.symbol}`)
       const pnl = r.data.pnl
-      setMsg({ ok: pnl >= 0, text: `✓ ${sym} 已出場，損益 ${pnl >= 0 ? '+' : ''}${Number(pnl).toLocaleString()}` })
+      setMsg({ ok: pnl >= 0, text: `✓ ${pos.symbol} 已出場，損益 ${pnl >= 0 ? '+' : ''}${Number(pnl).toLocaleString()}` })
       loadPositions()
     } catch (e: any) {
       setMsg({ ok: false, text: `✕ ${e?.response?.data?.detail ?? e.message}` })
@@ -158,270 +154,230 @@ export function ManualTradeContent() {
     loadPositions()
   }
 
-  const card = 'bg-gray-900 border border-gray-800 rounded-xl p-5'
-  const lbl = 'text-xs text-gray-500 mb-1 block'
   const inp = 'bg-gray-800 border border-gray-700 text-white rounded px-3 py-2 text-sm focus:outline-none focus:border-blue-500 w-full'
+  const lbl = 'text-xs text-gray-500 mb-1 block'
 
   return (
-    <div className="space-y-6">
-      <div>
-        <p className="text-gray-400 text-sm">真實下單 · 自動掛停損/停利觸價單</p>
-      </div>
+    <div className="space-y-4">
+      {/* 狀態訊息 */}
+      {msg && (
+        <div className={`text-sm px-4 py-3 rounded-lg ${msg.ok ? 'bg-green-900 text-green-300 border border-green-700' : 'bg-red-900 text-red-300 border border-red-700'}`}>
+          {msg.text}
+        </div>
+      )}
 
-        {msg && (
-          <div className={`text-sm px-4 py-3 rounded-lg ${msg.ok ? 'bg-green-900 text-green-300 border border-green-700' : 'bg-red-900 text-red-300 border border-red-700'}`}>
-            {msg.text}
+      {/* 主體：左買 右賣 */}
+      <div className="grid grid-cols-2 gap-4">
+
+        {/* ── 左：買進 ── */}
+        <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 space-y-3">
+          <div className="text-sm font-bold text-white border-b border-gray-800 pb-2">
+            買進
+            <span className="text-xs text-gray-500 font-normal ml-2">真實下單 · 自動掛停損/停利觸價單</span>
           </div>
-        )}
 
-        {/* 下單面板 */}
-        <div className={card}>
-          <div className="text-sm font-semibold text-gray-300 mb-4">新增買進</div>
-          <div className="grid grid-cols-2 gap-4">
-            {/* 股票選擇 */}
-            <div className="col-span-2" ref={dropRef}>
-              <label className={lbl}>股票（pool 內）</label>
-              <div className="relative">
-                <input
-                  className={inp}
-                  value={symbol}
-                  onChange={e => { setSymbol(e.target.value); setShowDropdown(true) }}
-                  placeholder="輸入代碼或名稱"
-                />
-                {showDropdown && filtered.length > 0 && (
-                  <div className="absolute z-20 w-full mt-1 bg-gray-800 border border-gray-700 rounded-lg overflow-hidden shadow-xl">
-                    {filtered.map(s => (
-                      <button
-                        key={s.code}
-                        onClick={() => {
-                          setSymbol(s.code)
-                          setName(s.name)
-                          setShowDropdown(false)
-                        }}
-                        className="w-full text-left px-4 py-2 hover:bg-gray-700 flex gap-3 items-center"
-                      >
-                        <span className="font-mono text-blue-300 w-14">{s.code}</span>
-                        <span className="text-gray-300">{s.name}</span>
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-              {name && <div className="text-xs text-gray-500 mt-1">{name}</div>}
-            </div>
-
-            {/* 買進價 */}
-            <div>
-              <label className={lbl}>買進價格（限價）</label>
-              <div className="flex gap-2">
-                <input
-                  className={inp}
-                  type="number"
-                  value={price}
-                  onChange={e => setPrice(e.target.value)}
-                  placeholder="例：250.5"
-                  step="0.01"
-                />
-                <button
-                  onClick={fetchPrice}
-                  className="shrink-0 px-3 py-2 text-xs bg-gray-700 hover:bg-gray-600 text-gray-300 rounded border border-gray-600"
-                  title="從引擎取最新報價"
-                >
-                  最新報價
-                </button>
-              </div>
-            </div>
-
-            {/* 昨收 */}
-            <div>
-              <label className={lbl}>昨收（計算停利用）</label>
+          {/* 股票 */}
+          <div ref={dropRef}>
+            <label className={lbl}>股票（pool 內）</label>
+            <div className="relative">
               <input
                 className={inp}
-                type="number"
-                value={prevClose}
-                onChange={e => setPrevClose(e.target.value)}
-                placeholder="若空白則以買進價代替"
-                step="0.01"
+                value={symbol}
+                onChange={e => { setSymbol(e.target.value); setShowDropdown(true) }}
+                placeholder="代碼或名稱"
               />
+              {showDropdown && filtered.length > 0 && (
+                <div className="absolute z-20 w-full mt-1 bg-gray-800 border border-gray-700 rounded-lg overflow-hidden shadow-xl">
+                  {filtered.map(s => (
+                    <button
+                      key={s.code}
+                      onClick={() => { setSymbol(s.code); setName(s.name); setShowDropdown(false) }}
+                      className="w-full text-left px-4 py-2 hover:bg-gray-700 flex gap-3 items-center"
+                    >
+                      <span className="font-mono text-blue-300 w-14">{s.code}</span>
+                      <span className="text-gray-300">{s.name}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
+            {name && <div className="text-xs text-gray-500 mt-1">{name}</div>}
+          </div>
 
-            {/* 張數 */}
+          {/* 價格 */}
+          <div>
+            <label className={lbl}>買進價格（限價）</label>
+            <div className="flex gap-2">
+              <input className={inp} type="number" value={price}
+                onChange={e => setPrice(e.target.value)} placeholder="例：250.5" step="0.01" />
+              <button onClick={fetchPrice}
+                className="shrink-0 px-3 py-2 text-xs bg-gray-700 hover:bg-gray-600 text-gray-300 rounded border border-gray-600">
+                最新報價
+              </button>
+            </div>
+          </div>
+
+          {/* 昨收 + 張數 */}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className={lbl}>昨收（停利基準）</label>
+              <input className={inp} type="number" value={prevClose}
+                onChange={e => setPrevClose(e.target.value)} placeholder="空白=用買進價" step="0.01" />
+            </div>
             <div>
               <label className={lbl}>張數</label>
-              <input
-                className={inp}
-                type="number"
-                value={lots}
-                onChange={e => setLots(Math.max(1, parseInt(e.target.value) || 1))}
-                min={1}
-              />
-            </div>
-
-            {/* 停損 ticks */}
-            <div>
-              <label className={lbl}>停損 tick 數</label>
-              <input
-                className={inp}
-                type="number"
-                value={stopTicks}
-                onChange={e => setStopTicks(Math.max(1, parseInt(e.target.value) || 4))}
-                min={1}
-              />
-            </div>
-
-            {/* 停利加碼% */}
-            <div>
-              <label className={lbl}>停利附加漲幅 %</label>
-              <input
-                className={inp}
-                type="number"
-                value={tpAddPct}
-                onChange={e => setTpAddPct(parseFloat(e.target.value) || 4)}
-                step={0.5}
-                min={0.5}
-              />
+              <input className={inp} type="number" value={lots}
+                onChange={e => setLots(Math.max(1, parseInt(e.target.value) || 1))} min={1} />
             </div>
           </div>
 
-          {/* 預覽觸價單 */}
+          {/* 停損 + 停利 */}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className={lbl}>停損 tick 數</label>
+              <input className={inp} type="number" value={stopTicks}
+                onChange={e => setStopTicks(Math.max(1, parseInt(e.target.value) || 4))} min={1} />
+            </div>
+            <div>
+              <label className={lbl}>停利附加漲幅 %</label>
+              <input className={inp} type="number" value={tpAddPct}
+                onChange={e => setTpAddPct(parseFloat(e.target.value) || 4)} step={0.5} min={0.5} />
+            </div>
+          </div>
+
+          {/* 觸價單預覽 */}
           {entryPrice > 0 && (
-            <div className="mt-4 bg-gray-800 rounded-lg p-4 space-y-3 text-sm">
-              <div className="text-gray-400 font-semibold text-xs uppercase tracking-wide mb-2">觸價單預覽</div>
-
-              <div className="flex items-start gap-3">
-                <span className="shrink-0 px-2 py-0.5 rounded text-[10px] font-bold bg-red-900 text-red-300 border border-red-700 mt-0.5">停損</span>
-                <div>
-                  <div className="text-white">
-                    成交價 ≤ <span className="font-mono text-red-300">{stopLoss.toFixed(2)}</span>
-                  </div>
-                  <div className="text-gray-500 text-xs mt-0.5">
-                    = 買進價 {entryPrice} − {stopTicks} tick（{(ts).toFixed(2)}）= {(entryPrice - stopTicks * ts).toFixed(2)} → 向上捨入 tick<br />
-                    觸發條件達成 → 全數<span className="text-orange-300">市價賣出</span>（ROD，當日有效）
-                  </div>
-                </div>
+            <div className="bg-gray-800 rounded-lg p-3 space-y-2 text-xs">
+              <div className="text-gray-500 font-semibold uppercase tracking-wide text-[10px]">觸價單預覽</div>
+              <div className="flex items-center gap-2">
+                <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-red-900 text-red-300 border border-red-700">停損</span>
+                <span className="text-red-300 font-mono font-bold">≤ {stopLoss.toFixed(2)}</span>
+                <span className="text-gray-600">（進場 − {stopTicks} tick）</span>
               </div>
-
-              <div className="flex items-start gap-3">
-                <span className="shrink-0 px-2 py-0.5 rounded text-[10px] font-bold bg-green-900 text-green-300 border border-green-700 mt-0.5">停利</span>
-                <div>
-                  <div className="text-white">
-                    成交價 ≥ <span className="font-mono text-green-300">{takeProfit.toFixed(2)}</span>
-                  </div>
-                  <div className="text-gray-500 text-xs mt-0.5">
-                    = 昨收 {refClose.toFixed(2)} × (1 + ({entryChg.toFixed(1)}% 進場漲幅 + {tpAddPct}% 加碼)) → 向下捨入 tick<br />
-                    觸發條件達成 → 全數<span className="text-orange-300">市價賣出</span>（ROD，當日有效）
-                  </div>
-                </div>
+              <div className="flex items-center gap-2">
+                <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-green-900 text-green-300 border border-green-700">停利</span>
+                <span className="text-green-300 font-mono font-bold">≥ {takeProfit.toFixed(2)}</span>
+                <span className="text-gray-600">（昨收+{entryChg.toFixed(1)}%+{tpAddPct}%）</span>
               </div>
-
-              <div className="text-xs text-yellow-600 border-t border-gray-700 pt-2 mt-1">
-                ⚠ 兩張觸價單同時掛出，任一觸發後另一張需手動取消（富邦平台不支援 OCO）
+              <div className="text-yellow-700 text-[10px] pt-1 border-t border-gray-700">
+                ⚠ 兩單同時掛出，任一觸發後另一張需手動取消
               </div>
             </div>
           )}
 
           {/* 下單按鈕 */}
-          <div className="flex gap-3 mt-5">
+          <div className="flex gap-2 pt-1">
             <button
               onClick={() => doBuy(false)}
               disabled={busy || !symbol || entryPrice <= 0}
-              className="flex-1 py-2.5 bg-red-700 hover:bg-red-600 text-white font-bold rounded-lg disabled:opacity-40"
+              className="flex-1 py-2.5 bg-red-700 hover:bg-red-600 text-white font-bold rounded-lg text-sm disabled:opacity-40"
             >
               {busy ? '下單中...' : `限價買進 ${lots}張`}
             </button>
             <button
               onClick={() => doBuy(true)}
               disabled={busy || !symbol}
-              className="px-5 py-2.5 bg-orange-800 hover:bg-orange-700 text-white text-sm font-bold rounded-lg disabled:opacity-40"
-              title="市價 IOC，強制成交"
+              className="px-4 py-2.5 bg-orange-800 hover:bg-orange-700 text-white text-sm font-bold rounded-lg disabled:opacity-40"
+              title="市價 IOC"
             >
-              市價強制買
+              市價
             </button>
           </div>
         </div>
 
-        {/* 持倉列表 */}
-        {positions.length > 0 && (
-          <div className={card}>
-            <div className="text-sm font-semibold text-gray-300 mb-4">手動持倉（{positions.length}）</div>
-            <div className="space-y-4">
+        {/* ── 右：賣出（持倉） ── */}
+        <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
+          <div className="text-sm font-bold text-white border-b border-gray-800 pb-2 mb-3">
+            賣出
+            <span className="text-xs text-gray-500 font-normal ml-2">手動持倉（{positions.length}）</span>
+          </div>
+
+          {positions.length === 0 ? (
+            <div className="flex items-center justify-center h-40 text-gray-600 text-sm">
+              目前無持倉
+            </div>
+          ) : (
+            <div className="space-y-3">
               {positions.map(pos => {
                 const pnlClass = pos.unrealized == null ? 'text-gray-500'
                   : pos.unrealized >= 0 ? 'text-red-400' : 'text-green-400'
+                const pnlStr = pos.unrealized != null
+                  ? `${pos.unrealized >= 0 ? '+' : ''}${pos.unrealized.toLocaleString('zh-TW', { maximumFractionDigits: 0 })}`
+                  : '—'
                 return (
-                  <div key={pos.symbol} className="bg-gray-800 rounded-lg p-4 space-y-2">
-                    <div className="flex justify-between items-start">
+                  <div key={pos.symbol} className="bg-gray-800 rounded-lg p-3 space-y-2">
+                    {/* 標題行 */}
+                    <div className="flex justify-between items-center">
                       <div>
                         <span className="font-mono text-blue-300 font-bold text-base">{pos.symbol}</span>
-                        <span className="text-gray-400 text-sm ml-2">{pos.lots}張 @ {pos.entry_price}</span>
-                        <span className="text-gray-600 text-xs ml-2">{pos.entry_time}</span>
+                        <span className="text-gray-400 text-xs ml-2">{pos.lots}張 @ {pos.entry_price}</span>
                       </div>
-                      <div className={`font-bold text-base ${pnlClass}`}>
-                        {pos.unrealized != null
-                          ? `${pos.unrealized >= 0 ? '+' : ''}${pos.unrealized.toLocaleString('zh-TW', { maximumFractionDigits: 0 })}`
-                          : '—'}
+                      <div className={`font-bold text-lg ${pnlClass}`}>{pnlStr}</div>
+                    </div>
+
+                    {/* 現價 & 觸價單 */}
+                    <div className="grid grid-cols-3 gap-2 text-xs">
+                      <div className="bg-gray-900 rounded p-2 text-center">
+                        <div className="text-gray-500 text-[10px]">現價</div>
+                        <div className="text-white font-mono font-bold">
+                          {pos.curr_price > 0 ? pos.curr_price.toFixed(2) : '—'}
+                        </div>
+                      </div>
+                      <div className="bg-gray-900 rounded p-2 text-center">
+                        <div className="text-gray-500 text-[10px]">停損</div>
+                        <div className="text-red-300 font-mono font-bold">≤{pos.stop_loss.toFixed(2)}</div>
+                        <div className="text-gray-600 text-[9px]">{pos.stop_guid ? '已掛' : '未掛'}</div>
+                      </div>
+                      <div className="bg-gray-900 rounded p-2 text-center">
+                        <div className="text-gray-500 text-[10px]">停利</div>
+                        <div className="text-green-300 font-mono font-bold">≥{pos.take_profit.toFixed(2)}</div>
+                        <div className="text-gray-600 text-[9px]">{pos.tp_guid ? '已掛' : '未掛'}</div>
                       </div>
                     </div>
 
-                    <div className="grid grid-cols-2 gap-3 text-xs">
-                      <div className="bg-gray-900 rounded p-2">
-                        <div className="text-gray-500 mb-0.5">停損觸價單</div>
-                        <div className="text-red-300 font-mono font-bold">≤ {pos.stop_loss.toFixed(2)}</div>
-                        <div className="text-gray-600 mt-0.5">{pos.stop_guid ? `已掛 ${pos.stop_guid.slice(0, 8)}…` : '未掛出'}</div>
-                      </div>
-                      <div className="bg-gray-900 rounded p-2">
-                        <div className="text-gray-500 mb-0.5">停利觸價單</div>
-                        <div className="text-green-300 font-mono font-bold">≥ {pos.take_profit.toFixed(2)}</div>
-                        <div className="text-gray-600 mt-0.5">{pos.tp_guid ? `已掛 ${pos.tp_guid.slice(0, 8)}…` : '未掛出'}</div>
-                      </div>
-                    </div>
-
-                    {pos.curr_price > 0 && (
-                      <div className="text-xs text-gray-500">
-                        現價 <span className="text-white font-mono">{pos.curr_price.toFixed(2)}</span>
-                        <span className="ml-3">進場價 {pos.entry_price} → 昨收 {pos.prev_close.toFixed(2)}</span>
-                      </div>
-                    )}
-
-                    <div className="flex gap-2 pt-1">
+                    {/* 操作按鈕 */}
+                    <div className="flex gap-2 pt-0.5">
                       <button
-                        onClick={() => doSell(pos.symbol)}
+                        onClick={() => doSell(pos)}
                         disabled={busy}
-                        className="px-4 py-1.5 bg-red-800 hover:bg-red-700 text-white text-xs font-bold rounded disabled:opacity-40"
+                        className="flex-1 py-2 bg-red-700 hover:bg-red-600 text-white text-sm font-bold rounded disabled:opacity-40"
                       >
-                        市價強制出場
+                        市價賣出
                       </button>
                       <button
                         onClick={() => doCancelConditions(pos.symbol)}
                         disabled={busy}
-                        className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-gray-300 text-xs rounded disabled:opacity-40"
+                        className="px-3 py-2 bg-gray-700 hover:bg-gray-600 text-gray-300 text-xs rounded disabled:opacity-40"
+                        title="取消兩張觸價單"
                       >
-                        取消觸價單
+                        取消觸價
                       </button>
                       <button
                         onClick={() => doDeleteRecord(pos.symbol)}
-                        className="px-3 py-1.5 bg-gray-800 hover:bg-gray-700 text-gray-500 text-xs rounded"
+                        className="px-3 py-2 bg-gray-800 hover:bg-gray-700 text-gray-500 text-xs rounded"
                         title="觸價單已自行觸發，只刪記錄"
                       >
-                        清除記錄
+                        清記錄
                       </button>
                     </div>
                   </div>
                 )
               })}
             </div>
-          </div>
-        )}
-
-        {/* 說明 */}
-        <div className="bg-gray-900 rounded-xl border border-gray-800 p-5 text-xs text-gray-500 space-y-1.5">
-          <div className="text-gray-400 font-semibold mb-2">觸價單說明</div>
-          <div>• <span className="text-red-300">停損</span>：成交價跌到停損價時，系統自動送出<span className="text-orange-300">市價賣單（ROD）</span>。停損價 = 進場價 − N tick，向上捨入（更早觸發保護）</div>
-          <div>• <span className="text-green-300">停利</span>：成交價漲到停利價時，系統自動送出<span className="text-orange-300">市價賣單（ROD）</span>。停利價 = 昨收 × (1 + 進場漲幅 + 附加%)，向下捨入</div>
-          <div>• <span className="text-yellow-500">注意</span>：兩張觸價單同時存在，任一觸發後另一張<strong className="text-white">不會自動取消</strong>，需手動按「取消觸價單」</div>
-          <div>• <span className="text-blue-300">市價強制買</span>：使用 IOC 市價單，無法成交的部分自動取消，適合急單</div>
-          <div>• <span className="text-blue-300">市價強制出場</span>：送出 IOC 市價賣單並同時取消兩張觸價單</div>
+          )}
         </div>
+      </div>
+
+      {/* 說明（折疊式，預設收起） */}
+      <details className="bg-gray-900 rounded-xl border border-gray-800 p-4">
+        <summary className="text-xs text-gray-500 cursor-pointer select-none">觸價單說明 ▸</summary>
+        <div className="mt-3 space-y-1.5 text-xs text-gray-500">
+          <div>• <span className="text-red-300">停損</span>：成交價 ≤ 停損價時送出市價賣單（ROD）。停損價 = 進場價 − N tick，向上捨入</div>
+          <div>• <span className="text-green-300">停利</span>：成交價 ≥ 停利價時送出市價賣單（ROD）。停利價 = 昨收 × (1 + 進場漲幅 + 附加%)，向下捨入</div>
+          <div>• <span className="text-yellow-500">注意</span>：兩張觸價單同時存在，任一觸發後另一張<strong className="text-white">不會自動取消</strong>，需手動按「取消觸價」</div>
+          <div>• <span className="text-orange-300">市價</span>：使用 IOC 市價單（買進）或 IOC 市價賣單（賣出）並同時取消觸價單</div>
+        </div>
+      </details>
     </div>
   )
 }
@@ -429,9 +385,10 @@ export function ManualTradeContent() {
 export function ManualTradePage() {
   return (
     <div className="min-h-screen bg-gray-950 text-white p-6">
-      <div className="max-w-4xl mx-auto">
-        <div className="mb-6">
+      <div className="max-w-5xl mx-auto">
+        <div className="mb-4">
           <h1 className="text-2xl font-black text-white">手動買賣</h1>
+          <p className="text-gray-500 text-sm mt-1">真實下單 · 與 dry_run 無關</p>
         </div>
         <ManualTradeContent />
       </div>

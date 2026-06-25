@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'react'
+import { useEffect, useLayoutEffect, useState, useRef } from 'react'
 import axios from 'axios'
 
 interface MarketIndex {
@@ -42,14 +42,16 @@ export function MarketHeader() {
     return () => { clearInterval(t1); clearInterval(t2) }
   }, [])
 
-  // 自動縮字：確保內容永遠在單行呈現
-  useEffect(() => {
+  // 自動縮字：確保內容永遠在單行呈現（paint 前執行避免閃爍）
+  useLayoutEffect(() => {
     const fit = () => {
       const el = rowRef.current
       if (!el) return
+      const availWidth = el.parentElement?.clientWidth ?? window.innerWidth
       let size = 12
       el.style.fontSize = `${size}px`
-      while (el.scrollWidth > el.clientWidth && size > 6.5) {
+      // scrollWidth vs 父容器寬：flex 容器本身會隨內容撐開，不能比自己
+      while (el.scrollWidth > availWidth && size > 6.5) {
         size -= 0.25
         el.style.fontSize = `${size}px`
       }
@@ -63,7 +65,7 @@ export function MarketHeader() {
 
   return (
     <div className="bg-gray-900 border-b border-gray-800 px-4 py-1 overflow-hidden">
-      <div ref={rowRef} className="flex gap-x-4 items-center whitespace-nowrap overflow-hidden">
+      <div ref={rowRef} className="flex gap-x-4 items-center whitespace-nowrap">
         {indices.map(idx => (
           <div key={idx.symbol} className="flex items-center gap-1 shrink-0">
             <span className="text-gray-400">{idx.name}</span>
