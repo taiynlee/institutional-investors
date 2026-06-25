@@ -62,6 +62,9 @@ class TradingEngine:
         self.sessions: dict[str, SymbolSession] = {}
         self._lock = threading.Lock()
         self.session_date: Optional[str] = None  # 當前 session 的交易日期
+        # SDK/account 供外部手動下單使用
+        self.sdk = None
+        self.account = None
 
         _data = os.environ.get("FUBON_DATA_DIR", "/home/tommy0322/fubon-data")
         self._default_config = os.environ.get("FUBON_CONFIG", "/home/tommy0322/fubon-config/config.yaml")
@@ -159,6 +162,8 @@ class TradingEngine:
             self.om = None
             self.paper = None
             self.sessions = {}
+            self.sdk = None
+            self.account = None
             if self._state["status"] not in ("error",):
                 with self._lock:
                     self._state["status"] = "stopped"
@@ -465,6 +470,8 @@ class TradingEngine:
 
         self.om = om
         self.dt = dt
+        self.sdk = sdk
+        self.account = _account
 
         # 重啟恢復
         if is_market_hours():

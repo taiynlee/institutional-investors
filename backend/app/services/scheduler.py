@@ -74,9 +74,8 @@ async def job1_institutional_price():
     try:
         async with AsyncSessionLocal() as db:
             pool_codes = {r.code for r in (await db.execute(select(StockPool))).scalars().all()}
-            stock_codes = set(r[0] for r in (await db.execute(select(StockList.code))).all())
 
-        target_codes = pool_codes if pool_codes else stock_codes
+        target_codes = pool_codes
         pool_size = len(target_codes)
         inst_min = max(1, int(pool_size * 0.5))
 
@@ -159,9 +158,8 @@ async def job3_shareholding():
         from sqlalchemy.dialects.postgresql import insert as pg_insert
         from app.db.models import StockPool
         async with AsyncSessionLocal() as db:
-            pool_codes  = {r.code for r in (await db.execute(select(StockPool))).scalars().all()}
-            stock_codes = {r[0] for r in (await db.execute(select(StockList.code))).all()}
-        target_codes = pool_codes if pool_codes else stock_codes
+            pool_codes = {r.code for r in (await db.execute(select(StockPool))).scalars().all()}
+        target_codes = pool_codes
         pool_size = len(target_codes)
         sh_min = max(1, int(pool_size * 0.5))
 
@@ -194,24 +192,40 @@ async def job3_shareholding():
         logger.error(f"job3 failed: {e}")
 
 
-async def job4_screener(force: bool = False):
-    """21:00（週一～五）/ 22:30（週日）— 執行篩選，更新 screening_result"""
+async def job4_screener(force: bool = False, target_date: date | None = None):
+    """21:00（週一～五）/ 22:30（週日）— 執行篩選，更新 screening_result
+    target_date: 若指定，強制用該日資料補算（不受 weekday/already_fetched 限制）
+    """
     today = date.today()
-    if not force and today.weekday() == 5:
-        return
-    async with AsyncSessionLocal() as db:
-        inst_today = (await db.execute(
-            select(Institutional.trade_date)
-            .where(Institutional.trade_date <= today)
-            .order_by(Institutional.trade_date.desc())
-            .limit(1)
-        )).scalar_one_or_none()
-    if inst_today is None:
-        logger.warning("job4 skipped: no institutional data in DB")
-        return
-    target_date = inst_today
-    if not force and await _already_fetched("job4", target_date):
-        return
+    if target_date is None:
+        if not force and today.weekday() == 5:
+            return
+        async with AsyncSessionLocal() as db:
+            inst_today = (await db.execute(
+                select(Institutional.trade_date)
+                .where(Institutional.trade_date <= today)
+                .order_by(Institutional.trade_date.desc())
+                .limit(1)
+            )).scalar_one_or_none()
+        if inst_today is None:
+            logger.warning("job4 skipped: no institutional data in DB")
+            return
+        target_date = inst_today
+        if not force and await _already_fetched("job4", target_date):
+            return
+    else:
+        # 補算模式：用指定日期的最近法人資料
+        async with AsyncSessionLocal() as db:
+            inst_on_or_before = (await db.execute(
+                select(Institutional.trade_date)
+                .where(Institutional.trade_date <= target_date)
+                .order_by(Institutional.trade_date.desc())
+                .limit(1)
+            )).scalar_one_or_none()
+        if inst_on_or_before is None:
+            logger.warning(f"job4 backfill {target_date}: no institutional data ≤ {target_date}")
+            return
+        target_date = inst_on_or_before
     try:
         market_bb_peak, market_bb_now = fetch_twii_bb_stats()
         market_bb_drop = max(0, market_bb_peak - market_bb_now)
@@ -870,7 +884,8 @@ async def job6_quarterly_eps(force: bool = False):
         return
 
     async with AsyncSessionLocal() as db:
-        codes = [r[0] for r in (await db.execute(select(StockList.code))).all()]
+        from app.db.models import StockPool
+        codes = [r[0] for r in (await db.execute(select(StockPool.code))).all()]
 
     logger.info(f"job6 starting quarterly EPS fetch for {len(codes)} stocks")
     RATE_LIMIT = 550
@@ -995,9 +1010,13 @@ async def job8_daytrade_screener():
 
 
 async def startup_backfill():
-    """啟動時補跑今天應跑但未成功的 daily jobs。"""
+    """啟動時：先補歷史缺口（最近 14 曆日），再補今天應跑未成功的 jobs。"""
     from zoneinfo import ZoneInfo
     from datetime import datetime as _dt
+
+    # 先補歷史缺漏（非今天）
+    await startup_gap_backfill(lookback_days=14)
+
     now = _dt.now(tz=ZoneInfo("Asia/Taipei"))
     today = now.date()
     wd = today.weekday()  # 0=Mon 6=Sun
@@ -1022,7 +1041,7 @@ async def startup_backfill():
         logger.info("startup_backfill: 補跑 %s", names)
         await asyncio.gather(*[t[1] for t in tasks], return_exceptions=True)
     else:
-        logger.info("startup_backfill: 無需補跑")
+        logger.info("startup_backfill: 今天無需補跑")
 
 
 async def job_watchdog():
@@ -1173,6 +1192,81 @@ async def backfill_90_days():
     logger.info("Backfill complete.")
 
 
+async def backfill_single_day(target_date: date):
+    """補抓指定交易日的法人+股價+融資（不跳過已有資料）"""
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+    from app.db.models import StockPool
+    if target_date.weekday() >= 5:
+        logger.warning(f"backfill_single_day: {target_date} is weekend, skip")
+        return {"skipped": True, "reason": "weekend"}
+    async with AsyncSessionLocal() as db:
+        pool_codes = {r.code for r in (await db.execute(select(StockPool))).scalars().all()}
+    logger.info(f"backfill_single_day {target_date}: pool={len(pool_codes)}")
+    try:
+        rows_i = await fetch_institutional(target_date)
+        price_rows = await fetch_daily_price(target_date)
+        margin_rows = await fetch_margin(target_date)
+        rows_i = [r for r in rows_i if r["code"] in pool_codes]
+        price_rows = [r for r in price_rows if r["code"] in pool_codes]
+        margin_rows = [r for r in margin_rows if r["code"] in pool_codes]
+        async with AsyncSessionLocal() as db:
+            if rows_i:
+                await db.execute(pg_insert(Institutional).values(rows_i).on_conflict_do_nothing(index_elements=["code", "trade_date"]))
+            if price_rows:
+                price_stmt = pg_insert(DailyPrice).values(price_rows)
+                await db.execute(price_stmt.on_conflict_do_update(
+                    index_elements=["code", "trade_date"],
+                    set_={"open": price_stmt.excluded.open,
+                          "high": price_stmt.excluded.high,
+                          "low": price_stmt.excluded.low,
+                          "close": price_stmt.excluded.close,
+                          "volume": price_stmt.excluded.volume},
+                ))
+            if margin_rows:
+                await db.execute(pg_insert(MarginTrading).values(margin_rows).on_conflict_do_nothing(index_elements=["code", "trade_date"]))
+            await db.commit()
+        total = len(rows_i) + len(price_rows) + len(margin_rows)
+        await _log_fetch("job1", target_date, "success", len(rows_i) + len(price_rows))
+        await _log_fetch("job2", target_date, "success", len(margin_rows))
+        logger.info(f"backfill_single_day {target_date}: inst={len(rows_i)} price={len(price_rows)} margin={len(margin_rows)}")
+        return {"ok": True, "inst": len(rows_i), "price": len(price_rows), "margin": len(margin_rows)}
+    except Exception as e:
+        logger.error(f"backfill_single_day {target_date} failed: {e}")
+        return {"ok": False, "error": str(e)}
+
+
+async def startup_gap_backfill(lookback_days: int = 14):
+    """啟動時往回查缺漏的交易日（最多 lookback_days 個曆日），自動補抓 job1/job2/job4。
+    只補 job1 缺失的日期；job4 每補一天就跑一次。
+    """
+    today = date.today()
+    # 收集最近 lookback_days 曆日內所有工作日（不含今天，今天由 startup_backfill 處理）
+    candidates: list[date] = []
+    for i in range(1, lookback_days + 1):
+        d = today - timedelta(days=i)
+        if d.weekday() < 5:
+            candidates.append(d)
+
+    missing: list[date] = []
+    for d in candidates:
+        if not await _already_fetched("job1", d):
+            missing.append(d)
+
+    if not missing:
+        logger.info("startup_gap_backfill: 無歷史缺口")
+        return
+
+    logger.info(f"startup_gap_backfill: 發現 {len(missing)} 天缺口 → {[str(d) for d in missing]}")
+    for d in sorted(missing):
+        logger.info(f"startup_gap_backfill: 補抓 {d}")
+        result = await backfill_single_day(d)
+        # 有實際資料才跑 job4；0 rows = 假日，跳過（避免 job4 撈前日資料覆蓋已有結果）
+        if result.get("ok") and result.get("inst", 0) > 0:
+            await job4_screener(target_date=d)
+        await asyncio.sleep(2)
+    logger.info("startup_gap_backfill: 補抓完成")
+
+
 async def backfill_shareholding_all():
     """啟動時補填大戶持股（表為空時）"""
     from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -1182,7 +1276,8 @@ async def backfill_shareholding_all():
         logger.info("Shareholding data exists, skipping backfill.")
         return
     async with AsyncSessionLocal() as db:
-        stock_codes = {r[0] for r in (await db.execute(select(StockList.code))).all()}
+        from app.db.models import StockPool
+        stock_codes = {r[0] for r in (await db.execute(select(StockPool.code))).all()}
     logger.info("Starting shareholding backfill from TDCC...")
     try:
         rows = await fetch_shareholding_bulk()
@@ -1233,7 +1328,8 @@ async def refresh_stock_list():
             if existing:
                 existing.name = r.get("name", existing.name)
                 existing.tags = r.get("tags", existing.tags)
-                existing.capital = capital
+                if capital > 0:
+                    existing.capital = capital
                 existing.updated_at = datetime.utcnow()
             else:
                 db.add(StockList(

@@ -3,8 +3,12 @@ import type { ExitAlert } from '../types'
 
 const EXIT_COLORS: Record<string, string> = {
   tech: 'bg-red-900 text-red-300 border-red-700',
-  momentum: 'bg-orange-900 text-orange-300 border-orange-700',
   chip: 'bg-yellow-900 text-yellow-300 border-yellow-700',
+}
+
+const EXIT_TIPS: Record<string, string> = {
+  chip: '近3日外資+投信淨賣 ≤ -1.5%，且12日仍持續流出',
+  tech: '歷史高點 BB ≥ 75，但現在 BB < 40，已從強勢高點跌破中線',
 }
 
 export function ExitAlertsPage({ onResearchStock }: { onResearchStock?: (code: string) => void }) {
@@ -24,7 +28,16 @@ export function ExitAlertsPage({ onResearchStock }: { onResearchStock?: (code: s
       <div className="max-w-7xl mx-auto">
         <div className="mb-6">
           <h1 className="text-2xl font-black text-white">退場止損訊號</h1>
-          <p className="text-gray-400 text-sm">技術面、動能、籌碼三維度偵測退場訊號</p>
+          <div className="flex gap-3 mt-2 flex-wrap">
+            <span className="flex items-center gap-1.5 text-xs text-gray-400">
+              <span className="px-2 py-0.5 rounded border bg-yellow-900 text-yellow-300 border-yellow-700 text-[10px]">籌碼出場</span>
+              近3日法人淨賣 ≤ -1.5%，12日仍流出
+            </span>
+            <span className="flex items-center gap-1.5 text-xs text-gray-400">
+              <span className="px-2 py-0.5 rounded border bg-red-900 text-red-300 border-red-700 text-[10px]">跌破中線</span>
+              高點 BB ≥ 75 但現在 BB &lt; 40
+            </span>
+          </div>
         </div>
 
         {loading ? (
@@ -54,15 +67,16 @@ export function ExitAlertsPage({ onResearchStock }: { onResearchStock?: (code: s
                     <td className="px-4 py-3 text-white">{a.name}</td>
                     <td className="px-4 py-3 text-right text-gray-300">{a.bb.toFixed(1)}</td>
                     <td className="px-4 py-3 text-right text-gray-300">{a.peak_bb.toFixed(1)}</td>
-                    <td className={`px-4 py-3 text-right font-mono ${a.chip_3d_pct >= 0 ? 'text-red-400' : 'text-green-400'}`}>
-                      {a.chip_3d_pct >= 0 ? '+' : ''}{a.chip_3d_pct.toFixed(2)}%
+                    <td className={`px-4 py-3 text-right font-mono ${a.chip_3d_pct == null ? 'text-gray-600' : a.chip_3d_pct >= 0 ? 'text-red-400' : 'text-green-400'}`}>
+                      {a.chip_3d_pct == null ? '—' : `${a.chip_3d_pct >= 0 ? '+' : ''}${a.chip_3d_pct.toFixed(2)}%`}
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex gap-1 flex-wrap">
                         {a.triggered.map(t => (
                           <span
                             key={t.type}
-                            className={`px-2 py-0.5 rounded text-[10px] font-medium border ${EXIT_COLORS[t.type] ?? 'bg-gray-700 text-gray-300 border-gray-600'}`}
+                            title={EXIT_TIPS[t.type] ?? ''}
+                            className={`px-2 py-0.5 rounded text-[10px] font-medium border cursor-help ${EXIT_COLORS[t.type] ?? 'bg-gray-700 text-gray-300 border-gray-600'}`}
                           >
                             {t.label}
                           </span>

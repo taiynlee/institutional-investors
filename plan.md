@@ -10,8 +10,8 @@
 
 **入場條件 = A 或 B（任一成立即列入）**
 
-- **A（突破當日）：** BB帶寬壓縮 + 今日創30日新高（收盤在當日高低區間上70%以上，排除長上影線假突破）+ 今日出量≥MA20×1.5 + chip_1d≥1% AND chip_12d>0 + 趨勢保護
-- **B（創高後拉回）：** 近50交易日內曾創30日新高 + 今日BB位階 0~5（≥0 且 ≤5，跌破月線不入場）+ chip_6d≥1% AND chip_12d≥1% + 趨勢保護
+- **A（突破當日）：** BB帶寬壓縮（MA20斜率 0.3%~2.0%）+ 今日創30日新高（收盤在當日高低區間上70%以上，排除長上影線假突破）+ 今日出量≥MA20×1.5 + 突破位階>5 + chip_1d≥1% AND chip_12d>0 + 趨勢保護
+- **B（創高後拉回）：** 近50交易日內曾創30日新高（突破位階>5）+ 今日BB位階 0~15（≥0 且 ≤15，跌破月線不入場）+ chip_6d≥1% AND chip_12d≥1% + 趨勢保護
 
 **趨勢保護（硬門檻，不計分）：** MA20 > MA60 AND MA60斜率>0 AND 收盤>MA60
 
@@ -49,7 +49,13 @@
 | job1 | **18:00** | 三大法人買賣超 + 日K線量價 | TWSE T86 + MI_INDEX（T86 約 17:00 後穩定可用） |
 | job2 | 20:45 | 融資 + 借券賣出（同一張表） | TWSE TWT93U（欄位2-7=融資，8-12=借券；TWSE 約 20:30 才更新） |
 | job3 | 18:30（週日）| 千張大戶持股比（週報） | TDCC 集保戶股權分散表 opendata CSV（level 15） |
-| job4 | 21:00 | 執行篩選計算，寫入 screening_result | 內部計算 |
+| job4 | 21:00 | 執行篩選計算，寫入 screening_result | 內部計算（支援 `target_date` 補算歷史日） |
+| job5 | 每月 10-25 日 12:00 | 月營收 | MOPS（上市 + 上櫃） |
+| job6 | 每季（3/1, 5/16, 8/15, 11/15）| 季報 EPS | FinMind TaiwanStockFinancialStatements |
+| job7 | 每半年（1/1, 7/1）| 產業鏈分類 | ic.tpex.org.tw |
+| job8 | 21:05 | 當沖候選篩選，寫入 daytrade_candidate | PG stock_pool × screener A/B 分數 |
+| startup | 啟動時 | 歷史缺口補抓（最近 14 曆日） | `backfill_single_day` + job4 |
+| watchdog | 每 30 分鐘 | 當日 job1/2/4/8 若未成功自動補跑 | — |
 
 > TWT93U / TWT38U 僅 09:00~20:00 可抓，非交易時間回傳 307。
 > job3 改為每週日執行（TDCC 週六處理資料，週日晚間才完成更新），非週日直接 return。
@@ -57,11 +63,13 @@
 
 ---
 
-## 資料庫（PostgreSQL 16）
+## 資料庫（PostgreSQL 16 — 唯一資料庫，SQLite 已完全移除）
+
+> `ticks.db`（fubon-dashboard 盤中 tick 快取）例外，仍為 SQLite，gitignored，僅供交易引擎盤中使用，不儲存任何持久化主資料。
 
 | 資料表 | 唯一鍵 | 說明 |
 |--------|--------|------|
-| `stock_list` | `code` | 電子股清單，含股本（張）|
+| `stock_list` | `code` | 電子股清單，含股本（張）；股本來源 FinMind TaiwanStockBalanceSheet（OrdinaryShare，NTD/10/1000 轉換為張）|
 | `daily_price` | `(code, trade_date)` | 日K線 OHLCV |
 | `institutional` | `(code, trade_date)` | 三大法人買賣超（張） |
 | `margin_trading` | `(code, trade_date)` | 融資融券餘額 |
@@ -73,7 +81,8 @@
 | `daytrade_candidate` | `(trade_date, code)` | 每日當沖候選（job8 篩出） |
 | `daytrade_pre_session_log` | `id` | 盤前跑批紀錄 |
 | `us_watchlist` | `symbol` | 美股追蹤清單 |
-| `fetch_log` | `(job_name, fetch_date)` | 執行紀錄，防重複 |
+| `fetch_log` | `(job_name, fetch_date)` | 執行紀錄，防重複；startup_gap_backfill 依此判斷哪天缺漏 |
+| `trading_settings` | `key` | 當沖引擎可調參數（key-value，15 項，即時熱重載） |
 
 **screening_result 關鍵欄位：**
 `score`（基礎分）、`dip_bonus`（資加 0~5）、`holders_bonus`（戶加，可負）、`lending_5d_chg`、`margin_5d_chg`、`bb_position`、`bb_peak`、`is_squeeze`、`vol_ratio`、`chip_ratio_6d`、`chip_ratio_12d`
@@ -91,7 +100,9 @@
 | 大戶持股戶加計算 | `holders_bonus` 依兩週 `holders_1000_lot`（人數）差值計算（整數）；若缺少本週或上週資料則回傳 0 |
 | TDCC 歷史資料限制 | TDCC open data 只提供最新一週資料，歷史週報需透過每週 job3 累積 |
 | Docker 快取 | 前端程式碼更新後需重 build，`docker compose build frontend && docker compose up -d frontend` |
-| chip_ratio_6d 資料完整性 | job1 若在 TWSE T86 發布前執行（系統重啟或時序異常），會存到 0 筆法人資料；job4 現已直接查 DB 確認，若當日無法人資料則跳過篩選。2026-05-21 的 8 筆舊資料已直接修正。 |
+| chip_ratio_6d 資料完整性 | job1 若在 TWSE T86 發布前執行（系統重啟或時序異常），會存到 0 筆法人資料；job4 現已直接查 DB 確認，若當日無法人資料則跳過篩選 |
+| 股本資料來源 | 使用 FinMind `TaiwanStockBalanceSheet`（`OrdinaryShare` 欄位，NTD → /10/1000 轉換為張）；`TaiwanStockInfo` 無股本欄位已廢棄。`refresh_stock_list` 只在新值 > 0 時才覆蓋，避免 API 回傳 0 誤清股本 |
+| 歷史缺口補抓 | `startup_gap_backfill` 每次啟動掃最近 14 曆日，找 FetchLog 中 job1 缺失的交易日補抓；假日（0 rows）自動標記 success 跳過，不重複觸發 job4 |
 
 ---
 
@@ -176,6 +187,10 @@ PG stock_pool + daytrade_candidate（由 job8 每日 21:05 更新）
 - [ ] 借券賣出歷史補填（目前只有當日資料，需選擇時間執行 90 日回填）
 - [ ] CORS allow_origins 加入 `http://localhost:6174`（目前允許 3000 / 5173，前端實際跑 6174）
 - [x] 策略A追蹤清單退出機制：tracking 超過10個交易日未觸發 BB≤5 → 自動刪除，等下次重新突破再加入
+- [x] 篩選器歷史缺口補抓：`startup_gap_backfill` 啟動時自動補最近 14 天
+- [x] 篩選條件放寬：策略B bb_now ≤5→≤15，突破位階門檻 >8→>5，策略A MA20斜率 0.5~1.5%→0.3~2.0%
+- [x] 退場止損頁：移除「落榜N天」動能信號，籌碼/技術 badge 新增 tooltip 說明
+- [ ] ManualTradePage：手動下單頁面（前端已存在，後端 API 待接線）
 - [ ] 當沖篩選邏輯優化（chip_count 條件/標的數不足時顯示最高分備援）
 - [ ] v2：八大官股行庫買賣超（WantGoo，API 需 session+CSRF，待研究）
 - [ ] v2：券商分點前5大買超（CMoney，URL 需修正）

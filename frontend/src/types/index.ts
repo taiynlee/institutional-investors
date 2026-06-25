@@ -71,7 +71,7 @@ export interface ExitAlert {
   name: string
   bb: number
   peak_bb: number
-  chip_3d_pct: number
+  chip_3d_pct: number | null
   triggered: ExitSignal[]
 }
 

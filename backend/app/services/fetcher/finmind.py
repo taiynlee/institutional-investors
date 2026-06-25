@@ -108,20 +108,32 @@ async def fetch_quarterly_eps(code: str, start_date: str = "2020-01-01") -> list
 
 
 async def fetch_stock_capital(code: str) -> float:
-    """FinMind TaiwanStockInfo — 取得股本（張）"""
+    """FinMind TaiwanStockBalanceSheet — 取得股本（張）
+    OrdinaryShare 欄位單位：NTD 元，面額 10 元/股 → 張 = OrdinaryShare / 10 / 1000
+    """
+    import datetime as _dt
+    start = (_dt.date.today() - _dt.timedelta(days=365)).isoformat()
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.get(
             FINMIND_BASE,
             params={
-                "dataset": "TaiwanStockInfo",
+                "dataset": "TaiwanStockBalanceSheet",
                 "data_id": code,
+                "start_date": start,
                 **({"token": settings.finmind_token} if settings.finmind_token else {}),
             }
         )
     if resp.status_code != 200:
         return 0.0
-    data = resp.json().get("data", [])
-    if not data:
+    rows = resp.json().get("data", [])
+    # 取最新一筆 OrdinaryShare 或 CapitalStock
+    capital_ntd = 0.0
+    for row in reversed(rows):
+        if row.get("type") in ("OrdinaryShare", "CapitalStock"):
+            v = float(row.get("value", 0) or 0)
+            if v > 0:
+                capital_ntd = v
+                break
+    if capital_ntd <= 0:
         return 0.0
-    capital_k_ntd = float(data[0].get("capital", 0))
-    return capital_k_ntd / 10 / 1000
+    return capital_ntd / 10 / 1000

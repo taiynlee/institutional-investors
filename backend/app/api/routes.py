@@ -572,49 +572,65 @@ async def get_sector_stocks(
     return result
 
 
+_market_overview_cache: list[dict] = []
+
+
 @router.get("/api/market-overview")
 async def get_market_overview():
-    """大盤行情（yfinance）"""
+    """大盤行情（yfinance history，官方收盤價）"""
+    import asyncio, math
+    from concurrent.futures import ThreadPoolExecutor
+    global _market_overview_cache
     try:
         import yfinance as yf
-        symbols = {
-            "^TWII":  "台灣加權",
-            "^GSPC":  "S&P 500",
-            "^IXIC":  "Nasdaq",
-            "^N225":  "日經225",
-            "^KS11":  "韓國綜合",
-        }
-        import math
-        result = []
-        for sym, name in symbols.items():
-            try:
-                t = yf.Ticker(sym)
-                fi = t.fast_info
-                last_close = float(fi.last_price or 0)
-                prev_close = float(fi.previous_close or 0)
-                if not last_close or not prev_close or prev_close == 0:
-                    # fallback to history
-                    hist = t.history(period="5d").dropna(subset=["Close"])
-                    if len(hist) < 2:
-                        continue
-                    prev_close = float(hist["Close"].iloc[-2])
-                    last_close = float(hist["Close"].iloc[-1])
-                if math.isnan(prev_close) or math.isnan(last_close) or prev_close == 0:
-                    continue
-                chg_pts = last_close - prev_close
-                chg_pct = chg_pts / prev_close * 100
-                result.append({
-                    "symbol": sym,
-                    "name": name,
-                    "close": round(last_close, 2),
-                    "chg_pts": round(chg_pts, 2),
-                    "chg_pct": round(chg_pct, 2),
-                })
-            except Exception:
-                pass
-        return result
     except ImportError:
-        return []
+        return _market_overview_cache or []
+
+    symbols = {
+        "^TWII":  "台灣加權",
+        "^GSPC":  "S&P 500",
+        "^IXIC":  "Nasdaq",
+        "^N225":  "日經225",
+        "^KS11":  "韓國綜合",
+    }
+
+    def fetch_index(sym: str, name: str):
+        try:
+            hist = yf.Ticker(sym).history(period="5d").dropna(subset=["Close"])
+            if len(hist) < 2:
+                return None
+            last_close = float(hist["Close"].iloc[-1])
+            prev_close = float(hist["Close"].iloc[-2])
+            if math.isnan(last_close) or math.isnan(prev_close) or prev_close == 0:
+                return None
+            chg_pts = last_close - prev_close
+            chg_pct = chg_pts / prev_close * 100
+            return {
+                "symbol": sym,
+                "name": name,
+                "close": round(last_close, 2),
+                "chg_pts": round(chg_pts, 2),
+                "chg_pct": round(chg_pct, 2),
+            }
+        except Exception:
+            return None
+
+    loop = asyncio.get_event_loop()
+    with ThreadPoolExecutor(max_workers=5) as ex:
+        tasks = [loop.run_in_executor(ex, fetch_index, sym, name) for sym, name in symbols.items()]
+        try:
+            results = await asyncio.wait_for(asyncio.gather(*tasks), timeout=30.0)
+        except asyncio.TimeoutError:
+            results = []
+
+    fresh = [r for r in results if r is not None]
+    if fresh:
+        order = list(symbols.keys())
+        fresh.sort(key=lambda r: order.index(r["symbol"]) if r["symbol"] in order else 99)
+        _market_overview_cache = fresh
+        return fresh
+
+    return _market_overview_cache or []
 
 
 @router.get("/api/trading-settings")
@@ -775,30 +791,37 @@ async def delete_us_watchlist(symbol: str, db: AsyncSession = Depends(get_db)):
     return {"ok": True, "symbol": sym}
 
 
+_us_stocks_cache: list[dict] = []
+
+
 @router.get("/api/us-stocks")
 async def get_us_stocks(db: AsyncSession = Depends(get_db)):
     """美股追蹤清單（收盤價＋盤後價）"""
     import yfinance as yf
     import asyncio
     from concurrent.futures import ThreadPoolExecutor
+    global _us_stocks_cache
 
     rows = (await db.execute(
         select(UsWatchlist).order_by(UsWatchlist.added_at)
     )).scalars().all()
     watchlist = [(r.symbol, r.name) for r in rows]
+    if not watchlist:
+        _us_stocks_cache = []
+        return []
 
     def fetch_one(sym: str, name: str):
         try:
             t = yf.Ticker(sym)
-            hist = t.history(period="2d")
+            hist = t.history(period="5d")  # 5d 確保週末也有資料
             if len(hist) < 1:
                 return None
             close = float(hist["Close"].iloc[-1])
             prev  = float(hist["Close"].iloc[-2]) if len(hist) >= 2 else close
             chg_pct = (close - prev) / prev * 100 if prev else 0
 
-            info = t.info
-            post_price = info.get("postMarketPrice")
+            info = t.fast_info  # fast_info 比 info 快很多
+            post_price = getattr(info, "post_market_price", None)
             post_chg_pct = None
             if post_price and close:
                 post_chg_pct = (float(post_price) - close) / close * 100
@@ -815,14 +838,25 @@ async def get_us_stocks(db: AsyncSession = Depends(get_db)):
             return None
 
     loop = asyncio.get_event_loop()
-    with ThreadPoolExecutor(max_workers=6) as ex:
+    with ThreadPoolExecutor(max_workers=8) as ex:
         tasks = [loop.run_in_executor(ex, fetch_one, sym, name) for sym, name in watchlist]
         try:
-            results = await asyncio.wait_for(asyncio.gather(*tasks), timeout=30.0)
+            results = await asyncio.wait_for(asyncio.gather(*tasks), timeout=45.0)
         except asyncio.TimeoutError:
             results = []
 
-    return [r for r in results if r is not None]
+    fresh = [r for r in results if r is not None]
+    if fresh:
+        # 按 watchlist 順序排，並保留 cache 以防下次失敗
+        sym_order = {sym: i for i, (sym, _) in enumerate(watchlist)}
+        fresh.sort(key=lambda r: sym_order.get(r["symbol"], 999))
+        _us_stocks_cache = fresh
+        return fresh
+
+    # fetch 全失敗 → 回傳上次快取
+    if _us_stocks_cache:
+        return _us_stocks_cache
+    return []
 
 
 @router.get("/api/stock-snapshot/{code}")
@@ -1339,14 +1373,22 @@ async def get_exit_alerts(db: AsyncSession = Depends(get_db)):
         closes = closes_by_code.get(code, [])
         bb = calc_bb_position(closes) if len(closes) >= 20 else (latest.bb_position or 0)
         peak_bb = stock_peak_bb.get(code, 0)
-        capital = capitals.get(code) or 1
+        capital = capitals.get(code) or 0
         chip_sum = chip_3d.get(code, 0)
-        chip_pct = chip_sum / capital * 100
 
-        chip_12d_pct = chip_12d.get(code, 0) / capital * 100
         triggered = []
-        if chip_pct <= -1.5 and chip_12d_pct <= 0:
-            triggered.append({"type": "chip", "label": "籌碼出場", "chip_pct": round(chip_pct, 2)})
+
+        # 籌碼訊號：stock capital 已知才計算
+        chip_pct = None
+        if capital and capital > 0:
+            chip_pct = chip_sum / capital * 100
+            chip_12d_pct = chip_12d.get(code, 0) / capital * 100
+            if chip_pct <= -1.5 and chip_12d_pct <= 0:
+                triggered.append({"type": "chip", "label": "籌碼出場"})
+
+        # 技術訊號：高點 BB 高但現在跌破中線
+        if peak_bb >= 75 and bb < 40:
+            triggered.append({"type": "tech", "label": "跌破中線"})
 
         if triggered:
             alerts.append({
@@ -1354,7 +1396,7 @@ async def get_exit_alerts(db: AsyncSession = Depends(get_db)):
                 "name": latest.name,
                 "bb": round(bb, 1),
                 "peak_bb": round(peak_bb, 1),
-                "chip_3d_pct": round(chip_pct, 2),
+                "chip_3d_pct": round(chip_pct, 2) if chip_pct is not None else None,
                 "triggered": triggered,
             })
 
@@ -1469,24 +1511,32 @@ async def _trigger_fubon_pool_sync():
 @router.post("/api/pool")
 async def add_to_pool(body: PoolAddBody, db: AsyncSession = Depends(get_db)):
     """加入股票到池"""
-    import asyncio
+    import asyncio, re
+    code = body.code.strip()
+    # 拒絕代碼含中文或代碼==名稱（防止髒資料）
+    if re.search(r'[一-鿿]', code):
+        raise HTTPException(status_code=400, detail=f"代碼不可含中文：{code}，請用正確股票代碼")
+    if code == body.name.strip() and body.name.strip():
+        raise HTTPException(status_code=400, detail=f"代碼與名稱相同（{code}），請先查詢取得正確名稱")
     exists = (await db.execute(
-        select(StockPool).where(StockPool.code == body.code)
+        select(StockPool).where(StockPool.code == code)
     )).scalar_one_or_none()
     if exists:
         return {"ok": True, "already": True}
-    name = body.name
-    if not name:
+    name = body.name.strip()
+    if not name or name == code:
         sl = (await db.execute(
-            select(StockList).where(StockList.code == body.code)
+            select(StockList).where(StockList.code == code)
         )).scalar_one_or_none()
-        name = sl.name if sl else body.code
-    db.add(StockPool(code=body.code, name=name))
+        name = sl.name if sl else ""
+    if not name:
+        raise HTTPException(status_code=400, detail=f"找不到代碼 {code} 的名稱，請先透過搜尋確認")
+    db.add(StockPool(code=code, name=name))
     await db.commit()
     from app.services.scheduler import backfill_financials_for_codes
-    asyncio.create_task(backfill_financials_for_codes([body.code]))
+    asyncio.create_task(backfill_financials_for_codes([code]))
     asyncio.create_task(_trigger_fubon_pool_sync())
-    return {"ok": True, "code": body.code, "name": name}
+    return {"ok": True, "code": code, "name": name}
 
 
 @router.delete("/api/pool/{code}")
@@ -1531,17 +1581,69 @@ async def get_latest_prices(codes: str = Query(...), db: AsyncSession = Depends(
     return {r["code"]: float(r["close"]) for r in rows}
 
 
+# 全台股清單快取（FinMind TaiwanStockInfo，每 12 小時重刷）
+_tw_stock_cache: list[dict] = []
+_tw_stock_cache_ts: float = 0.0
+
+
+async def _get_tw_stock_cache() -> list[dict]:
+    import time, httpx
+    from app.config import settings
+    global _tw_stock_cache, _tw_stock_cache_ts
+    if _tw_stock_cache and (time.time() - _tw_stock_cache_ts) < 43200:
+        return _tw_stock_cache
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+            resp = await client.get(
+                "https://api.finmindtrade.com/api/v4/data",
+                params={
+                    "dataset": "TaiwanStockInfo",
+                    **({"token": settings.finmind_token} if settings.finmind_token else {}),
+                }
+            )
+        data = resp.json().get("data", [])
+        _tw_stock_cache = [
+            {
+                "code": d.get("stock_id", ""),
+                "name": d.get("stock_name", ""),
+                "sector": d.get("industry_category", ""),
+            }
+            for d in data if d.get("stock_id", "").strip()
+        ]
+        _tw_stock_cache_ts = time.time()
+    except Exception:
+        pass
+    return _tw_stock_cache
+
+
 @router.get("/api/stocks/search")
 async def search_stocks(q: str = Query(""), db: AsyncSession = Depends(get_db)):
-    """搜尋股票（代碼或名稱）"""
-    if not q.strip():
+    """搜尋股票（代碼或名稱），回傳 in_pool 旗標"""
+    import re
+    q = q.strip()
+    if not q:
         return []
+    pool_codes = {r[0] for r in (await db.execute(select(StockPool.code))).all()}
     rows = (await db.execute(
         select(StockList).where(
             StockList.code.ilike(f"%{q}%") | StockList.name.ilike(f"%{q}%")
         ).limit(20)
     )).scalars().all()
-    return [{"code": r.code, "name": r.name, "sector": r.sector} for r in rows]
+    results = [{"code": r.code, "name": r.name, "sector": r.sector, "in_pool": r.code in pool_codes} for r in rows]
+
+    if not results:
+        # 從全台股快取搜尋（代碼精確 or 名稱模糊）
+        all_stocks = await _get_tw_stock_cache()
+        q_lower = q.lower()
+        matched = [
+            s for s in all_stocks
+            if q_lower in s["code"].lower() or q_lower in s["name"]
+        ][:20]
+        results = [
+            {**s, "in_pool": s["code"] in pool_codes}
+            for s in matched
+        ]
+    return results
 
 
 @router.post("/api/admin/trim_to_pool")
@@ -1571,12 +1673,92 @@ async def trim_to_pool(db: AsyncSession = Depends(get_db)):
     return {"deleted": deleted}
 
 
+@router.post("/api/admin/refresh_stock_list")
+async def trigger_refresh_stock_list():
+    from app.services.scheduler import refresh_stock_list
+    asyncio.create_task(refresh_stock_list())
+    return {"status": "triggered"}
+
+
 @router.post("/api/admin/refresh_ic_chain")
 async def trigger_ic_chain_refresh():
     import asyncio
     from app.services.scheduler import job7_ic_chain
     asyncio.create_task(job7_ic_chain())
     return {"status": "triggered"}
+
+
+@router.get("/api/admin/screener_debug")
+async def screener_debug(target_date: str | None = None, db: AsyncSession = Depends(get_db)):
+    """逐關卡統計篩選結果，診斷哪個條件砍最多股票"""
+    from app.services.scheduler import _get_price_series, _get_chip_summary
+    from app.services.screener import check_entry_criteria, is_early_breakout
+    from app.db.models import StockList
+    from datetime import date as _date
+    import numpy as np
+
+    td = _date.fromisoformat(target_date) if target_date else _date.today()
+    stocks = (await db.execute(select(StockList))).scalars().all()
+
+    total = len(stocks)
+    no_data = 0
+    fail_trend = 0
+    fail_A_breakout = 0
+    fail_A_chip = 0
+    fail_B_bb = 0
+    fail_B_breakout = 0
+    fail_B_chip = 0
+    pass_A = 0
+    pass_B = 0
+
+    for stock in stocks:
+        opens, highs, lows, closes, volumes, _ = await _get_price_series(stock.code, price_date=td)
+        if len(closes) < 65:
+            no_data += 1
+            continue
+        entry = check_entry_criteria(opens, highs, lows, closes, volumes)
+        if not entry["trend_ok"]:
+            fail_trend += 1
+            continue
+        if entry["passes_A"]:
+            chip = await _get_chip_summary(stock.code, td, stock.capital or 1)
+            a_chip_ok = (
+                (chip.get("chip_ratio_1d", 0) > 1.0 and chip.get("chip_ratio_12d", 0) > 0)
+                or (chip.get("chip_ratio_1d", 0) > 0 and chip.get("chip_ratio_12d", 0) > 1.0)
+            )
+            if a_chip_ok:
+                pass_A += 1
+            else:
+                fail_A_chip += 1
+        else:
+            fail_A_breakout += 1
+
+        if entry["passes_B_price"]:
+            chip = await _get_chip_summary(stock.code, td, stock.capital or 1)
+            b_chip_ok = (
+                chip.get("chip_ratio_6d", 0) >= 1.0
+                and chip.get("chip_ratio_12d", 0) >= 1.0
+            )
+            if b_chip_ok:
+                pass_B += 1
+            else:
+                fail_B_chip += 1
+        else:
+            fail_B_bb += 1
+
+    return {
+        "date": str(td),
+        "total_stocks": total,
+        "no_data_lt65": no_data,
+        "fail_trend_ok": fail_trend,
+        "trend_ok_stocks": total - no_data - fail_trend,
+        "fail_A_no_breakout": fail_A_breakout,
+        "fail_A_chip": fail_A_chip,
+        "pass_A": pass_A,
+        "fail_B_bb_too_high": fail_B_bb,
+        "fail_B_chip": fail_B_chip,
+        "pass_B": pass_B,
+    }
 
 
 @router.post("/api/admin/run_institutional")
@@ -1588,11 +1770,12 @@ async def trigger_institutional():
 
 
 @router.post("/api/admin/run_screener")
-async def trigger_screener(force: bool = False):
-    import asyncio
+async def trigger_screener(force: bool = False, target_date: str | None = None):
     from app.services.scheduler import job4_screener
-    asyncio.create_task(job4_screener(force=force))
-    return {"status": "force triggered" if force else "triggered"}
+    from datetime import date as _date
+    td = _date.fromisoformat(target_date) if target_date else None
+    asyncio.create_task(job4_screener(force=force, target_date=td))
+    return {"status": "triggered", "target_date": target_date or "auto"}
 
 
 @router.post("/api/admin/run_daytrade_screener")
@@ -1749,6 +1932,64 @@ async def trigger_backfill_pool_financials(
         return {"status": "skipped", "reason": "pool is empty"}
     asyncio.create_task(backfill_financials_for_codes(codes, start_date))
     return {"status": "triggered", "codes": len(codes), "start_date": start_date}
+
+
+@router.post("/api/admin/backfill_screener_range")
+async def backfill_screener_range(start: str, end: str | None = None, db: AsyncSession = Depends(get_db)):
+    """逐日補算篩選結果，從 start 到 end（預設今天），各天用各天的資料"""
+    from app.services.scheduler import job4_screener
+    from datetime import date as _date
+    start_d = _date.fromisoformat(start)
+    end_d = _date.fromisoformat(end) if end else _date.today()
+
+    results = []
+    d = start_d
+    while d <= end_d:
+        if d.weekday() < 5:
+            await job4_screener(force=True, target_date=d)
+            results.append(str(d))
+        d += timedelta(days=1)
+    return {"backfilled_dates": results}
+
+
+@router.post("/api/admin/backfill_day")
+async def backfill_day(d: str):
+    """補抓指定日期的法人+股價+融資（格式 YYYY-MM-DD）"""
+    from app.services.scheduler import backfill_single_day
+    from datetime import date as _date
+    try:
+        target = _date.fromisoformat(d)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="日期格式錯誤，請用 YYYY-MM-DD")
+    result = await backfill_single_day(target)
+    return result
+
+
+@router.post("/api/admin/backfill_missing_days")
+async def backfill_missing_days(days: int = 14, db: AsyncSession = Depends(get_db)):
+    """補抓最近 N 個交易日中 job1 缺失或失敗的資料"""
+    from app.services.scheduler import backfill_single_day
+    from datetime import date as _date
+    today = _date.today()
+    success_dates = set((await db.execute(
+        select(FetchLog.fetch_date)
+        .where(FetchLog.job_name == "job1", FetchLog.status == "success",
+               FetchLog.fetch_date >= today - timedelta(days=days))
+    )).scalars().all())
+
+    missing = []
+    for i in range(1, days + 1):
+        d = today - timedelta(days=i)
+        if d.weekday() >= 5:
+            continue
+        if d not in success_dates:
+            missing.append(d)
+
+    results = []
+    for d in sorted(missing):
+        r = await backfill_single_day(d)
+        results.append({"date": str(d), **r})
+    return {"missing_days": len(missing), "results": results}
 
 
 # ── Daytrade (PG-backed, replaces SQLite daytrade_list) ─────────────────────

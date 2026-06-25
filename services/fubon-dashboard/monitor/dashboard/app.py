@@ -1173,6 +1173,175 @@ def create_app(
     def get_sim_positions():
         return _sim_positions
 
+    # ── Manual Trade（真實下單：獨立 broker dry_run=False）────────────────────
+    _manual_positions: dict = {}  # symbol → position dict
+
+    def _get_manual_broker():
+        """建立真實下單 broker（需引擎已登入）"""
+        from engine.execution.broker import FubonBroker
+        if _engine is None or _engine.sdk is None or _engine.account is None:
+            raise HTTPException(status_code=503, detail="引擎未啟動或 SDK 未連線，無法下單")
+        b = FubonBroker(dry_run=False)
+        b.initialize(_engine.sdk, _engine.account)
+        return b
+
+    def _curr_price(symbol: str) -> float:
+        """從引擎 sessions 取最新報價，無則回 0"""
+        if _engine and symbol in _engine.sessions:
+            return _engine.sessions[symbol].curr_price or 0.0
+        return 0.0
+
+    @app.get("/manual-trade/positions")
+    def mt_positions():
+        """手動交易目前持倉"""
+        result = []
+        for sym, pos in _manual_positions.items():
+            curr = _curr_price(sym)
+            unrealized = (curr - pos["entry_price"]) * pos["lots"] * 1000 if curr > 0 else None
+            result.append({**pos, "curr_price": curr, "unrealized": unrealized})
+        return result
+
+    @app.get("/manual-trade/price/{symbol}")
+    def mt_price(symbol: str):
+        """取某股最新報價（需引擎在運行且有訂閱）"""
+        p = _curr_price(symbol)
+        return {"symbol": symbol, "price": p}
+
+    @app.post("/manual-trade/buy")
+    def mt_buy(
+        symbol: str,
+        lots: int = 1,
+        price: float = 0.0,
+        prev_close: float = 0.0,
+        stop_loss_ticks: int = 4,
+        take_profit_add_pct: float = 4.0,
+        force_market: bool = False,
+    ):
+        """
+        手動買進（真實下單）。
+        price=0 → 用引擎最新 tick 報價。
+        force_market=True → 市價 IOC 強制成交。
+        """
+        import datetime
+        from engine.execution.broker import tw_tick_size, round_up_tick, round_down_tick
+
+        if symbol in _manual_positions:
+            raise HTTPException(status_code=400, detail=f"{symbol} 已有手動持倉，請先平倉")
+
+        broker = _get_manual_broker()
+
+        if price <= 0:
+            price = _curr_price(symbol)
+        if price <= 0:
+            raise HTTPException(status_code=400, detail=f"無法取得 {symbol} 報價，請手動輸入買進價格")
+
+        if prev_close <= 0:
+            prev_close = price  # fallback: 以買進價當昨收
+
+        # 計算停損、停利
+        ts = tw_tick_size(price)
+        stop_loss = round_up_tick(price - stop_loss_ticks * ts)
+        entry_chg_pct = (price - prev_close) / prev_close * 100 if prev_close > 0 else 0.0
+        take_profit = round_down_tick(prev_close * (1 + (entry_chg_pct + take_profit_add_pct) / 100))
+
+        trade_date = datetime.date.today().strftime("%Y/%m/%d")
+
+        # 買進
+        if force_market:
+            from fubon_neo.sdk import Order
+            from fubon_neo.constant import BSAction, MarketType, PriceType, TimeInForce, OrderType
+            order = Order(
+                buy_sell=BSAction.Buy,
+                symbol=symbol,
+                quantity=lots * 1000,
+                market_type=MarketType.Common,
+                price_type=PriceType.Market,
+                time_in_force=TimeInForce.IOC,
+                order_type=OrderType.DayTrade,
+            )
+            result = broker._sdk.stock.place_order(broker._account, order)
+        else:
+            broker.buy(symbol, lots, price)
+
+        # 掛停損觸價單
+        stop_guid = broker.place_conditional_stop(symbol, lots, stop_loss, trade_date)
+        # 掛停利觸價單
+        tp_guid = broker.place_conditional_take_profit(symbol, lots, take_profit, trade_date)
+
+        _manual_positions[symbol] = {
+            "symbol": symbol,
+            "entry_price": price,
+            "lots": lots,
+            "stop_loss": stop_loss,
+            "take_profit": take_profit,
+            "stop_guid": stop_guid,
+            "tp_guid": tp_guid,
+            "prev_close": prev_close,
+            "entry_time": datetime.datetime.now().strftime("%H:%M:%S"),
+        }
+
+        return {
+            "ok": True,
+            "symbol": symbol,
+            "entry_price": price,
+            "lots": lots,
+            "stop_loss": stop_loss,
+            "stop_loss_desc": f"成交價 ≤ {stop_loss:.2f}（進場價 - {stop_loss_ticks} tick）→ 市價賣出",
+            "take_profit": take_profit,
+            "take_profit_desc": f"成交價 ≥ {take_profit:.2f}（昨收 {prev_close:.2f} × (1 + ({entry_chg_pct:.1f}% + {take_profit_add_pct}%)）→ 市價賣出",
+            "stop_guid": stop_guid,
+            "tp_guid": tp_guid,
+        }
+
+    @app.post("/manual-trade/sell/{symbol}")
+    def mt_sell(symbol: str, price: float = 0.0):
+        """手動市價賣出（真實），同時取消兩張觸價單。"""
+        pos = _manual_positions.get(symbol)
+        if pos is None:
+            raise HTTPException(status_code=404, detail=f"無 {symbol} 手動持倉")
+
+        broker = _get_manual_broker()
+
+        # 取消觸價單
+        if pos.get("stop_guid"):
+            broker.cancel_conditional_order(pos["stop_guid"])
+        if pos.get("tp_guid"):
+            broker.cancel_conditional_order(pos["tp_guid"])
+
+        # 市價賣出
+        sell_price = price if price > 0 else (_curr_price(symbol) or pos["entry_price"])
+        broker.sell(symbol, pos["lots"], sell_price, reason="manual_exit")
+
+        pnl = (sell_price - pos["entry_price"]) * pos["lots"] * 1000
+        del _manual_positions[symbol]
+
+        return {"ok": True, "symbol": symbol, "exit_price": sell_price,
+                "pnl": round(pnl, 0), "lots": pos["lots"]}
+
+    @app.post("/manual-trade/cancel-conditions/{symbol}")
+    def mt_cancel_conditions(symbol: str):
+        """只取消觸價單，持倉不動（手動管理）。"""
+        pos = _manual_positions.get(symbol)
+        if pos is None:
+            raise HTTPException(status_code=404, detail=f"無 {symbol} 手動持倉")
+        broker = _get_manual_broker()
+        cancelled = []
+        if pos.get("stop_guid"):
+            broker.cancel_conditional_order(pos["stop_guid"])
+            cancelled.append(f"停損 {pos['stop_guid']}")
+            pos["stop_guid"] = None
+        if pos.get("tp_guid"):
+            broker.cancel_conditional_order(pos["tp_guid"])
+            cancelled.append(f"停利 {pos['tp_guid']}")
+            pos["tp_guid"] = None
+        return {"ok": True, "cancelled": cancelled}
+
+    @app.delete("/manual-trade/position/{symbol}")
+    def mt_delete_position(symbol: str):
+        """僅從記錄刪除（觸價單已自行觸發或已手動取消後用）。"""
+        _manual_positions.pop(symbol, None)
+        return {"ok": True}
+
     @app.post("/debug/simulate-full-day")
     def simulate_full_day(symbol: str = "2382", ref_price: float = 250.0):
         """完整交易日模擬（已停用：策略改為 60s tick 動量，請用 /debug/simulate-buy）。"""

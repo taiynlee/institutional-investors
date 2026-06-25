@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'react'
+import { useEffect, useState } from 'react'
 import axios from 'axios'
 
 interface PoolStock {
@@ -18,6 +18,8 @@ interface FinStatus {
 interface SearchResult {
   code: string
   name: string
+  sector?: string
+  in_pool?: boolean
 }
 
 export function StockPoolPage() {
@@ -27,11 +29,10 @@ export function StockPoolPage() {
   const [query, setQuery] = useState('')
   const [searchResults, setSearchResults] = useState<SearchResult[]>([])
   const [searching, setSearching] = useState(false)
-  const [showDropdown, setShowDropdown] = useState(false)
+  const [searched, setSearched] = useState(false)
   const [backfilling, setBackfilling] = useState(false)
   const [backfillNote, setBackfillNote] = useState<string | null>(null)
   const [finStatus, setFinStatus] = useState<Record<string, FinStatus>>({})
-  const searchRef = useRef<HTMLDivElement>(null)
 
   const loadPool = () => {
     setLoading(true)
@@ -54,40 +55,32 @@ export function StockPoolPage() {
   useEffect(() => { loadPool(); loadFinStatus() }, [])
 
   useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      if (searchRef.current && !searchRef.current.contains(e.target as Node)) {
-        setShowDropdown(false)
-      }
-    }
-    document.addEventListener('mousedown', handler)
-    return () => document.removeEventListener('mousedown', handler)
-  }, [])
-
-  useEffect(() => {
     if (query.length < 1) {
       setSearchResults([])
-      setShowDropdown(false)
-      return
+      setSearched(false)
     }
-    setSearching(true)
-    const t = setTimeout(() => {
-      axios.get<SearchResult[]>('/api/stocks/search', { params: { q: query } })
-        .then(r => { setSearchResults(r.data); setShowDropdown(true) })
-        .catch(() => {})
-        .finally(() => setSearching(false))
-    }, 300)
-    return () => clearTimeout(t)
   }, [query])
 
   const addStock = async (code: string, name: string) => {
     try {
       await axios.post('/api/pool', { code, name })
       setQuery('')
-      setShowDropdown(false)
+      setSearchResults([])
+      setSearched(false)
       loadPool()
     } catch (e: any) {
       alert(e?.response?.data?.detail ?? '新增失敗')
     }
+  }
+
+  const doSearch = () => {
+    if (!query.trim()) return
+    setSearching(true)
+    setSearched(false)
+    axios.get<SearchResult[]>('/api/stocks/search', { params: { q: query } })
+      .then(r => { setSearchResults(r.data); setSearched(true) })
+      .catch(() => {})
+      .finally(() => setSearching(false))
   }
 
   const removeSelected = async () => {
@@ -153,8 +146,6 @@ export function StockPoolPage() {
     return !fs || !fs.has_revenue || !fs.has_eps
   }).length
 
-  const poolSet = new Set(pool.map(s => s.code))
-
   return (
     <div className="min-h-screen bg-gray-950 text-white p-6">
       <div className="max-w-7xl mx-auto">
@@ -193,43 +184,55 @@ export function StockPoolPage() {
         </div>
 
         {/* 搜尋新增 */}
-        <div className="mb-4" ref={searchRef}>
-          <div className="relative">
+        <div className="mb-4">
+          <div className="flex gap-2">
             <input
               type="text"
               value={query}
               onChange={e => setQuery(e.target.value)}
-              placeholder="搜尋股票代碼或名稱（輸入後選取新增）"
-              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2.5 text-white placeholder-gray-500 focus:outline-none focus:border-blue-500"
+              onKeyDown={e => e.key === 'Enter' && doSearch()}
+              placeholder="輸入股票代碼或名稱查詢"
+              className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-4 py-2.5 text-white placeholder-gray-500 focus:outline-none focus:border-blue-500"
             />
-            {searching && (
-              <span className="absolute right-3 top-3 text-gray-500 text-xs">搜尋中...</span>
-            )}
-            {showDropdown && (searchResults.length > 0 || (!searching && query.length > 0)) && (
-              <div className="absolute z-20 w-full mt-1 bg-gray-800 border border-gray-700 rounded-lg overflow-hidden shadow-xl">
-                {searchResults.map(r => (
-                  <button
-                    key={r.code}
-                    onClick={() => addStock(r.code, r.name)}
-                    className={`w-full text-left px-4 py-2 hover:bg-gray-700 flex justify-between items-center ${poolSet.has(r.code) ? 'opacity-40' : ''}`}
-                    disabled={poolSet.has(r.code)}
-                  >
-                    <span className="font-mono text-blue-300">{r.code}</span>
-                    <span className="text-gray-300">{r.name}</span>
-                    {poolSet.has(r.code) && <span className="text-xs text-gray-500">已在池中</span>}
-                  </button>
-                ))}
-                {!searching && (
-                  <button
-                    onClick={() => addStock(query.trim(), query.trim())}
-                    className="w-full text-left px-4 py-2 hover:bg-gray-700 border-t border-gray-700 text-blue-400 text-sm"
-                  >
-                    + 直接新增代碼「{query.trim()}」
-                  </button>
-                )}
-              </div>
-            )}
+            <button
+              onClick={doSearch}
+              disabled={searching || !query.trim()}
+              className="px-5 py-2.5 bg-blue-700 hover:bg-blue-600 text-white rounded-lg text-sm font-medium disabled:opacity-50"
+            >
+              {searching ? '查詢中...' : '查詢'}
+            </button>
           </div>
+          {/* 查詢結果 */}
+          {searched && (
+            <div className="mt-2 bg-gray-900 border border-gray-700 rounded-lg overflow-hidden">
+              {searchResults.length === 0 ? (
+                <div className="px-4 py-3 text-gray-500 text-sm">
+                  查無股票「{query}」，請確認代碼或名稱
+                </div>
+              ) : (
+                searchResults.map(r => (
+                  <div
+                    key={r.code}
+                    className="px-4 py-3 flex items-center gap-3 border-b border-gray-800 last:border-0"
+                  >
+                    <span className="font-mono text-blue-300 w-16 shrink-0 text-base font-bold">{r.code}</span>
+                    <span className="text-white flex-1">{r.name}</span>
+                    {r.sector && <span className="text-gray-500 text-xs">{r.sector}</span>}
+                    {r.in_pool
+                      ? <span className="text-xs text-gray-500 bg-gray-800 px-2 py-1 rounded">已在池中</span>
+                      : (
+                        <button
+                          onClick={() => addStock(r.code, r.name)}
+                          className="px-3 py-1.5 bg-green-700 hover:bg-green-600 text-white text-sm rounded font-medium"
+                        >
+                          ＋ 加入池
+                        </button>
+                      )}
+                  </div>
+                ))
+              )}
+            </div>
+          )}
         </div>
 
         {/* 表格 */}

@@ -68,7 +68,7 @@ def is_early_breakout(closes: list[float]) -> bool:
     if ma20_prev <= 0:
         return False
     ma20_slope = (ma20_today / ma20_prev - 1) * 100
-    if not (0.5 < ma20_slope <= 1.5):
+    if not (0.3 < ma20_slope <= 2.0):
         return False
 
     std20_today = arr[-20:].std(ddof=0)
@@ -123,7 +123,7 @@ def _find_30d_high_breakout(
             if volumes[idx] < ma20_vol * vol_multiplier:
                 continue
         bb_at_event = calc_bb_position(closes[:idx + 1])
-        if bb_at_event <= 8:
+        if bb_at_event <= 5:
             continue
         return bb_at_event, days_ago
     return None
@@ -197,7 +197,7 @@ def check_entry_criteria(
     passes_B_price = False
     bb_peak_B = 0.0
     days_ago_B = 0
-    if trend_ok and bb_now <= 5:
+    if trend_ok and bb_now <= 15:
         result = _find_30d_high_breakout(
             closes, highs, lows, volumes, lookback=50, require_volume=False,
             start_days_ago=1,
