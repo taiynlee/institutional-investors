@@ -577,7 +577,7 @@ _market_overview_cache: list[dict] = []
 
 @router.get("/api/market-overview")
 async def get_market_overview():
-    """大盤行情（yfinance history，官方收盤價）"""
+    """大盤行情：fast_info（即時）優先，fallback history"""
     import asyncio, math
     from concurrent.futures import ThreadPoolExecutor
     global _market_overview_cache
@@ -588,7 +588,7 @@ async def get_market_overview():
 
     symbols = {
         "^TWII":  "台灣加權",
-        "^GSPC":  "S&P 500",
+        "^SOX":   "費半",
         "^IXIC":  "Nasdaq",
         "^N225":  "日經225",
         "^KS11":  "韓國綜合",
@@ -596,23 +596,48 @@ async def get_market_overview():
 
     def fetch_index(sym: str, name: str):
         try:
-            hist = yf.Ticker(sym).history(period="10d", auto_adjust=True).dropna(subset=["Close"])
-            if len(hist) < 2:
-                return None
-            last_close = float(hist["Close"].iloc[-1])
-            prev_close = float(hist["Close"].iloc[-2])
-            if math.isnan(last_close) or math.isnan(prev_close) or prev_close == 0:
-                return None
-            chg_pts = last_close - prev_close
-            chg_pct = chg_pts / prev_close * 100
+            ticker = yf.Ticker(sym)
+            last = prev = None
+            date_str = ""
+
+            # 1. fast_info — 即時/延遲報價，漲跌對比昨收
             try:
-                date_str = hist.index[-1].strftime("%m/%d")
+                fi = ticker.fast_info
+                _last = fi.last_price
+                _prev = fi.previous_close
+                if _last and _prev and _prev != 0:
+                    last = float(_last)
+                    prev = float(_prev)
+                    if not (math.isnan(last) or math.isnan(prev)):
+                        from datetime import date as _d
+                        date_str = _d.today().strftime("%m/%d")
+                    else:
+                        last = prev = None
             except Exception:
-                date_str = str(hist.index[-1])[:10][5:].replace("-", "/")
+                pass
+
+            # 2. fallback: history 日線
+            if last is None or prev is None:
+                hist = ticker.history(period="10d", auto_adjust=True).dropna(subset=["Close"])
+                if len(hist) < 2:
+                    return None
+                last = float(hist["Close"].iloc[-1])
+                prev = float(hist["Close"].iloc[-2])
+                if math.isnan(last) or math.isnan(prev) or prev == 0:
+                    return None
+                try:
+                    date_str = hist.index[-1].strftime("%m/%d")
+                except Exception:
+                    date_str = str(hist.index[-1])[:10][5:].replace("-", "/")
+
+            if prev == 0:
+                return None
+            chg_pts = last - prev
+            chg_pct = chg_pts / prev * 100
             return {
                 "symbol": sym,
                 "name": name,
-                "close": round(last_close, 2),
+                "close": round(last, 2),
                 "chg_pts": round(chg_pts, 2),
                 "chg_pct": round(chg_pct, 2),
                 "date": date_str,
@@ -624,7 +649,7 @@ async def get_market_overview():
     with ThreadPoolExecutor(max_workers=5) as ex:
         tasks = [loop.run_in_executor(ex, fetch_index, sym, name) for sym, name in symbols.items()]
         try:
-            results = await asyncio.wait_for(asyncio.gather(*tasks), timeout=30.0)
+            results = await asyncio.wait_for(asyncio.gather(*tasks), timeout=45.0)
         except asyncio.TimeoutError:
             results = []
 
