@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import axios from 'axios'
 
 interface MarketIndex {
@@ -22,6 +22,7 @@ interface TaifexFutures {
 export function MarketHeader() {
   const [indices, setIndices] = useState<MarketIndex[]>([])
   const [futures, setFutures] = useState<TaifexFutures | null>(null)
+  const rowRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     const loadIndices = () => {
@@ -41,33 +42,50 @@ export function MarketHeader() {
     return () => { clearInterval(t1); clearInterval(t2) }
   }, [])
 
+  // 自動縮字：確保內容永遠在單行呈現
+  useEffect(() => {
+    const fit = () => {
+      const el = rowRef.current
+      if (!el) return
+      let size = 12
+      el.style.fontSize = `${size}px`
+      while (el.scrollWidth > el.clientWidth && size > 6.5) {
+        size -= 0.25
+        el.style.fontSize = `${size}px`
+      }
+    }
+    fit()
+    window.addEventListener('resize', fit)
+    return () => window.removeEventListener('resize', fit)
+  }, [indices, futures])
+
   if (indices.length === 0) return null
 
   return (
-    <div className="bg-gray-900 border-b border-gray-800 px-4 py-1">
-      <div className="flex flex-wrap gap-x-4 gap-y-0.5 items-center">
+    <div className="bg-gray-900 border-b border-gray-800 px-4 py-1 overflow-hidden">
+      <div ref={rowRef} className="flex gap-x-4 items-center whitespace-nowrap overflow-hidden">
         {indices.map(idx => (
-          <div key={idx.symbol} className="flex items-center gap-1.5 shrink-0">
-            <span className="text-gray-400 text-xs">{idx.name}</span>
-            {idx.date && <span className="text-gray-600 text-[10px]">{idx.date}</span>}
-            <span className="text-white text-xs font-bold">{idx.close.toLocaleString()}</span>
-            <span className={`text-xs font-medium ${idx.chg_pct >= 0 ? 'text-red-400' : 'text-green-400'}`}>
+          <div key={idx.symbol} className="flex items-center gap-1 shrink-0">
+            <span className="text-gray-400">{idx.name}</span>
+            {idx.date && <span className="text-gray-600 opacity-80">{idx.date}</span>}
+            <span className="text-white font-bold">{idx.close.toLocaleString()}</span>
+            <span className={`font-medium ${idx.chg_pct >= 0 ? 'text-red-400' : 'text-green-400'}`}>
               {idx.chg_pts >= 0 ? '+' : ''}{idx.chg_pts.toLocaleString()}
             </span>
-            <span className={`text-xs font-medium ${idx.chg_pct >= 0 ? 'text-red-400' : 'text-green-400'}`}>
-              {idx.chg_pct >= 0 ? '+' : ''}{idx.chg_pct.toFixed(2)}%
+            <span className={`font-medium ${idx.chg_pct >= 0 ? 'text-red-400' : 'text-green-400'}`}>
+              ({idx.chg_pct >= 0 ? '+' : ''}{idx.chg_pct.toFixed(2)}%)
             </span>
           </div>
         ))}
         {futures && (
-          <div className="flex items-center gap-1.5 shrink-0">
-            <span className="text-gray-400 text-xs">{futures.session === 'night' ? '台指夜' : '台指期'}</span>
-            <span className={`text-xs font-medium ${futures.diff >= 0 ? 'text-red-400' : 'text-green-400'}`}>
+          <div className="flex items-center gap-1 shrink-0">
+            <span className="text-gray-400">{futures.session === 'night' ? '台指夜' : '台指期'}</span>
+            <span className={`font-medium ${futures.diff >= 0 ? 'text-red-400' : 'text-green-400'}`}>
               {futures.diff >= 0 ? '+' : ''}{futures.diff.toFixed(0)}
             </span>
             {futures.diff_pct != null && (
-              <span className={`text-xs font-medium ${futures.diff >= 0 ? 'text-red-400' : 'text-green-400'}`}>
-                {futures.diff >= 0 ? '+' : ''}{futures.diff_pct.toFixed(2)}%
+              <span className={`font-medium ${futures.diff >= 0 ? 'text-red-400' : 'text-green-400'}`}>
+                ({futures.diff >= 0 ? '+' : ''}{futures.diff_pct.toFixed(2)}%)
               </span>
             )}
           </div>

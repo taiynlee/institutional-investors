@@ -585,7 +585,7 @@ def create_app(
         result: dict = {"ok": False, "ts": datetime.now().isoformat(), "data": {}, "error": None}
         try:
             import yaml
-            config_path = os.environ.get("FUBON_CONFIG", "/fubon-config/config.yaml")
+            config_path = os.environ.get("FUBON_CONFIG", "/home/tommy0322/fubon-config/config.yaml")
             with open(config_path, encoding="utf-8") as f:
                 cfg = yaml.safe_load(f)
             fc = cfg["fubon"]
@@ -739,21 +739,20 @@ def create_app(
                    f"今日已跑={getattr(_engine, 'session_date', None) or '未啟動過'}",
             data_source="engine.session_date", logic="session_date 有值=曾啟動過")
 
-        # 07c: config.yaml readable
-        _cfg_path = os.environ.get("FUBON_CONFIG", "/fubon-config/config.yaml")
+        # 07c: 系統配置（DB trading-params）
         try:
-            import yaml as _yaml
-            with open(_cfg_path, encoding="utf-8") as _cf:
-                _cfg_data = _yaml.safe_load(_cf)
-            _fubon_ok = bool(_cfg_data.get("fubon", {}).get("id"))
-            add("7c", "config.yaml", _fubon_ok,
-                warn=not _fubon_ok,
-                detail=f"{_cfg_path}  fubon.id={'有' if _fubon_ok else '未設定'}",
-                data_source=_cfg_path, logic="fubon.id 存在即 ok")
-        except FileNotFoundError:
-            add("7c", "config.yaml", False, detail=f"找不到 {_cfg_path}", data_source=_cfg_path)
+            import urllib.request as _ur, json as _cj
+            with _ur.urlopen("http://localhost:8090/trading-params", timeout=3) as _r:
+                _tp = _cj.loads(_r.read())
+            _cfg_db_ok = _tp.get("dry_run") is not None
+            add("7c", "系統配置(DB)", _cfg_db_ok,
+                warn=not _cfg_db_ok,
+                detail=f"trading-params DB 讀取正常，dry_run={_tp.get('dry_run')}" if _cfg_db_ok else "dry_run 欄位缺失",
+                data_source="GET /trading-params", logic="dry_run 欄位存在即 ok")
         except Exception as _e:
-            add("7c", "config.yaml", False, detail=f"讀取失敗: {_e}", data_source=_cfg_path)
+            add("7c", "系統配置(DB)", False, warn=True,
+                detail=f"DB 配置讀取失敗: {_e}",
+                data_source="GET /trading-params")
 
         # 07d: LINE 通知設定
         _line_token = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
@@ -872,7 +871,7 @@ def create_app(
                 fut_price = None
                 try:
                     import yaml
-                    config_path = os.environ.get("FUBON_CONFIG", "/fubon-config/config.yaml")
+                    config_path = os.environ.get("FUBON_CONFIG", "/home/tommy0322/fubon-config/config.yaml")
                     with open(config_path, encoding="utf-8") as f:
                         cfg_y = yaml.safe_load(f)
                     fc = cfg_y["fubon"]
@@ -1384,7 +1383,7 @@ def create_app(
             return entry
 
         # ── 讀取 config ──────────────────────────────────────────────
-        cfg_path = os.environ.get("FUBON_CONFIG", "/fubon-config/config.yaml")
+        cfg_path = os.environ.get("FUBON_CONFIG", "/home/tommy0322/fubon-config/config.yaml")
         with open(cfg_path, encoding="utf-8") as f:
             cfg = yaml.safe_load(f)
         risk_cfg   = cfg.get("risk", {})
@@ -1568,7 +1567,7 @@ def create_app(
     # ── Config ────────────────────────────────────────────────────────────────
     @app.get("/config")
     def get_config():
-        config_path = os.environ.get("FUBON_CONFIG", "/fubon-config/config.yaml")
+        config_path = os.environ.get("FUBON_CONFIG", "/home/tommy0322/fubon-config/config.yaml")
         try:
             import yaml
             with open(config_path, encoding="utf-8") as f:
@@ -1631,7 +1630,7 @@ def create_app(
     def start_engine():
         if _engine is None:
             raise HTTPException(status_code=503, detail="trading_engine not initialized")
-        config_path = os.environ.get("FUBON_CONFIG", "/fubon-config/config.yaml")
+        config_path = os.environ.get("FUBON_CONFIG", "/home/tommy0322/fubon-config/config.yaml")
         data_dir = os.environ.get("FUBON_DATA_DIR", "/fubon-data")
         log_dir = os.environ.get("FUBON_LOG_DIR", "/fubon-logs")
         ticks_db_path = os.path.join(data_dir, "ticks.db")

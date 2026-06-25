@@ -596,41 +596,42 @@ async def get_market_overview():
 
     def fetch_index(sym: str, name: str):
         try:
+            from datetime import date as _date
             ticker = yf.Ticker(sym)
-            last = prev = None
-            date_str = ""
 
-            # 1. fast_info — 即時/延遲報價，漲跌對比昨收
+            # 取 history — 最近確認收盤價
+            hist = ticker.history(period="10d", auto_adjust=True).dropna(subset=["Close"])
+            if len(hist) < 1:
+                return None
+            hist_last = float(hist["Close"].iloc[-1])
+
+            # 嘗試 fast_info 現價
+            fi_price = None
             try:
-                fi = ticker.fast_info
-                _last = fi.last_price
-                _prev = fi.previous_close
-                if _last and _prev and _prev != 0:
-                    last = float(_last)
-                    prev = float(_prev)
-                    if not (math.isnan(last) or math.isnan(prev)):
-                        from datetime import date as _d
-                        date_str = _d.today().strftime("%m/%d")
-                    else:
-                        last = prev = None
+                fi_price = float(ticker.fast_info.last_price)
+                if math.isnan(fi_price):
+                    fi_price = None
             except Exception:
                 pass
 
-            # 2. fallback: history 日線
-            if last is None or prev is None:
-                hist = ticker.history(period="10d", auto_adjust=True).dropna(subset=["Close"])
+            # 若 fast_info 與 history[-1] 差異 > 0.01%，代表有新一日資料
+            if (fi_price is not None and hist_last != 0
+                    and abs(fi_price - hist_last) / hist_last > 0.0001):
+                last = fi_price
+                prev = hist_last
+                date_str = _date.today().strftime("%m/%d")
+            else:
+                # 同一日或 fast_info 無效 → 純 history
                 if len(hist) < 2:
                     return None
-                last = float(hist["Close"].iloc[-1])
+                last = hist_last
                 prev = float(hist["Close"].iloc[-2])
-                if math.isnan(last) or math.isnan(prev) or prev == 0:
-                    return None
                 try:
                     date_str = hist.index[-1].strftime("%m/%d")
                 except Exception:
                     date_str = str(hist.index[-1])[:10][5:].replace("-", "/")
 
-            if prev == 0:
+            if math.isnan(last) or math.isnan(prev) or prev == 0:
                 return None
             chg_pts = last - prev
             chg_pct = chg_pts / prev * 100
