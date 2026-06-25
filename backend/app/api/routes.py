@@ -791,6 +791,27 @@ async def delete_us_watchlist(symbol: str, db: AsyncSession = Depends(get_db)):
     return {"ok": True, "symbol": sym}
 
 
+@router.get("/api/us-stock-lookup")
+async def us_stock_lookup(symbol: str):
+    """查詢美股代號的英文名稱（yfinance shortName），供前端新增時自動帶入"""
+    import yfinance as yf
+    from concurrent.futures import ThreadPoolExecutor
+    import asyncio
+    sym = symbol.strip().upper()
+    if not sym:
+        raise HTTPException(status_code=400, detail="symbol 不可為空")
+    def _fetch():
+        try:
+            info = yf.Ticker(sym).info
+            return info.get("shortName") or info.get("longName") or ""
+        except Exception:
+            return ""
+    loop = asyncio.get_event_loop()
+    with ThreadPoolExecutor(max_workers=1) as ex:
+        eng_name = await loop.run_in_executor(ex, _fetch)
+    return {"symbol": sym, "eng_name": eng_name}
+
+
 _us_stocks_cache: list[dict] = []
 
 
@@ -1950,6 +1971,39 @@ async def backfill_screener_range(start: str, end: str | None = None, db: AsyncS
             results.append(str(d))
         d += timedelta(days=1)
     return {"backfilled_dates": results}
+
+
+@router.post("/api/admin/backfill_shareholding")
+async def backfill_shareholding(weeks: int = 4, db: AsyncSession = Depends(get_db)):
+    """用 FinMind TaiwanStockShareholding 補抓歷史千張大戶資料（每支股票一次 API call）"""
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+    from app.services.fetcher.finmind import fetch_shareholding
+    from app.db.models import StockPool, Shareholding
+    import asyncio
+
+    codes = [r[0] for r in (await db.execute(select(StockPool.code))).all()]
+    success, failed, inserted = 0, [], 0
+    for code in codes:
+        try:
+            rows = await fetch_shareholding(code, weeks=weeks)
+            if rows:
+                async with AsyncSessionLocal() as s:
+                    stmt = pg_insert(Shareholding).values(rows)
+                    stmt = stmt.on_conflict_do_update(
+                        index_elements=["code", "report_date"],
+                        set_={
+                            "holders_1000_lot": stmt.excluded.holders_1000_lot,
+                            "pct_1000_lot": stmt.excluded.pct_1000_lot,
+                        },
+                    )
+                    await s.execute(stmt)
+                    await s.commit()
+                inserted += len(rows)
+                success += 1
+            await asyncio.sleep(0.3)
+        except Exception as e:
+            failed.append(f"{code}:{e}")
+    return {"ok": True, "stocks": len(codes), "success": success, "inserted": inserted, "failed": failed}
 
 
 @router.post("/api/admin/backfill_day")

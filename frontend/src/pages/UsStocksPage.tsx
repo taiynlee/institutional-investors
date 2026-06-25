@@ -17,6 +17,16 @@ interface WatchItem {
   name: string
 }
 
+const KNOWN_NAMES: Record<string, string> = {
+  TSM: '台積電ADR', NVDA: '輝達', MU: '美光', WDC: '威騰', TSLA: '特斯拉',
+  GOOGL: 'Alphabet', MSFT: '微軟', AMZN: '亞馬遜', AAPL: '蘋果',
+  MRVL: 'Marvell', LITE: 'Lumentum', AAOI: 'AAOI', SPCX: 'SpaceX',
+  SNDK: '晟碟', INTC: '英特爾', AMD: 'AMD', QCOM: '高通', AVGO: '博通',
+  AMAT: '應用材料', KLAC: 'KLA', LRCX: 'Lam Research', ASML: 'ASML',
+  ARM: 'Arm', SMCI: '超微電腦', ON: '安森美', WOLF: 'Wolfspeed',
+  NFLX: 'Netflix', META: 'Meta', AMKR: '艾克爾', ONTO: 'Onto Innovation',
+}
+
 function ChgBadge({ val }: { val: number | null }) {
   if (val === null) return <span className="text-gray-600">—</span>
   const color = val > 0 ? 'text-red-400' : val < 0 ? 'text-green-400' : 'text-gray-400'
@@ -33,6 +43,7 @@ export function UsStocksPage() {
   const [addName, setAddName] = useState('')
   const [addError, setAddError] = useState('')
   const [adding, setAdding] = useState(false)
+  const [lookingUp, setLookingUp] = useState(false)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const loadWatchlist = () => {
@@ -71,6 +82,30 @@ export function UsStocksPage() {
     scheduleNext()
     return () => { if (timerRef.current) clearTimeout(timerRef.current) }
   }, [])
+
+  const KNOWN_NAMES_REV = Object.fromEntries(Object.entries(KNOWN_NAMES).map(([k, v]) => [v, k]))
+
+  const handleNameBlur = () => {
+    const name = addName.trim()
+    if (!name || addSymbol) return
+    const sym = KNOWN_NAMES_REV[name]
+    if (sym) setAddSymbol(sym)
+  }
+
+  const handleSymbolBlur = async () => {
+    const sym = addSymbol.trim().toUpperCase()
+    if (!sym || addName) return
+    // 1. 先查靜態中文 map
+    if (KNOWN_NAMES[sym]) { setAddName(KNOWN_NAMES[sym]); return }
+    // 2. fallback：yfinance 英文名
+    setLookingUp(true)
+    try {
+      const r = await axios.get<{ symbol: string; eng_name: string }>(`/api/us-stock-lookup?symbol=${sym}`)
+      if (r.data.eng_name) setAddName(r.data.eng_name)
+    } catch { /* ignore */ } finally {
+      setLookingUp(false)
+    }
+  }
 
   const handleAdd = async () => {
     const sym = addSymbol.trim().toUpperCase()
@@ -142,21 +177,25 @@ export function UsStocksPage() {
                 <input
                   type="text"
                   value={addSymbol}
-                  onChange={e => setAddSymbol(e.target.value.toUpperCase())}
+                  onChange={e => { setAddSymbol(e.target.value.toUpperCase()); setAddName('') }}
+                  onBlur={handleSymbolBlur}
                   onKeyDown={e => e.key === 'Enter' && handleAdd()}
                   placeholder="NVDA"
                   className="bg-gray-800 border border-gray-700 text-white rounded px-3 py-1.5 text-sm w-28 focus:outline-none focus:border-blue-500"
                 />
               </div>
               <div>
-                <label className="text-xs text-gray-500 block mb-1">名稱（可選）</label>
+                <label className="text-xs text-gray-500 block mb-1">
+                  名稱　{lookingUp && <span className="text-gray-600">查詢中...</span>}
+                </label>
                 <input
                   type="text"
                   value={addName}
                   onChange={e => setAddName(e.target.value)}
+                  onBlur={handleNameBlur}
                   onKeyDown={e => e.key === 'Enter' && handleAdd()}
-                  placeholder="輝達"
-                  className="bg-gray-800 border border-gray-700 text-white rounded px-3 py-1.5 text-sm w-36 focus:outline-none focus:border-blue-500"
+                  placeholder="輝達（可改為中文）"
+                  className="bg-gray-800 border border-gray-700 text-white rounded px-3 py-1.5 text-sm w-44 focus:outline-none focus:border-blue-500"
                 />
               </div>
               <button

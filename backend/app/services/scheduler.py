@@ -1033,7 +1033,7 @@ async def startup_backfill():
     job4_due = (wd < 5 and due(21, 0)) or (wd == 6 and due(22, 30))
     if job4_due and not await _already_fetched("job4", today):
         tasks.append(("job4", job4_screener()))
-    if wd < 5 and due(21, 5) and not await _already_fetched("job8", today):
+    if wd < 5 and due(21, 15) and not await _already_fetched("job8", today):
         tasks.append(("job8", job8_daytrade_screener()))
 
     if tasks:
@@ -1072,7 +1072,7 @@ async def job_watchdog():
             logger.info("watchdog: 補跑 job4")
             await job4_screener()
 
-    if wd < 5 and due(21, 5) and h < 23:
+    if wd < 5 and due(21, 15) and h < 23:
         if not await _already_fetched("job8", today):
             logger.info("watchdog: 補跑 job8")
             await job8_daytrade_screener()
@@ -1086,7 +1086,7 @@ def create_scheduler() -> AsyncIOScheduler:
     scheduler.add_job(job3_shareholding, "cron", day_of_week="sun", hour=18, minute=30)
     scheduler.add_job(job4_screener, "cron", hour=21, minute=0)
     scheduler.add_job(job4_screener, "cron", day_of_week="sun", hour=22, minute=30)
-    scheduler.add_job(job8_daytrade_screener, "cron", hour=21, minute=5)
+    scheduler.add_job(job8_daytrade_screener, "cron", hour=21, minute=15)
     scheduler.add_job(job5_monthly_revenue, "cron", day="10-25", hour=12, minute=0)
     scheduler.add_job(job6_quarterly_eps, "cron", month="5", day=16, hour=9, minute=0)
     scheduler.add_job(job6_quarterly_eps, "cron", month="8", day=15, hour=9, minute=0)
