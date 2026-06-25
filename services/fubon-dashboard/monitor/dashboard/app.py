@@ -672,7 +672,12 @@ def create_app(
             add(2, "損益金額", True, detail=f"今日累積 {pnl:+.0f} 元，{tc} 筆",
                 data_source="ticks.db/intraday_trades", logic="MAX(cumulative_pnl)")
         except Exception as e:
-            add(2, "損益金額", False, detail=f"讀取失敗: {e}", data_source="ticks.db/intraday_trades")
+            _no_tbl = "no such table" in str(e) or "unable to open database file" in str(e)
+            if _no_tbl:
+                add(2, "損益金額", True, warn=True, detail="引擎尚未啟動（盤前正常）",
+                    data_source="ticks.db/intraday_trades")
+            else:
+                add(2, "損益金額", False, detail=f"讀取失敗: {e}", data_source="ticks.db/intraday_trades")
 
         # 03: positions
         try:
@@ -685,7 +690,12 @@ def create_app(
                 pc = row[0] if row else 0
             add(3, "持倉數", True, detail=f"{pc} 檔持倉", data_source="ticks.db/intraday_positions")
         except Exception as e:
-            add(3, "持倉數", False, detail=f"讀取失敗: {e}", data_source="ticks.db/intraday_positions")
+            _no_tbl = "no such table" in str(e) or "unable to open database file" in str(e)
+            if _no_tbl:
+                add(3, "持倉數", True, warn=True, detail="引擎尚未啟動（盤前正常）",
+                    data_source="ticks.db/intraday_positions")
+            else:
+                add(3, "持倉數", False, detail=f"讀取失敗: {e}", data_source="ticks.db/intraday_positions")
 
         # 04-05: index
         idx_price = idx_day_pct = None
@@ -779,7 +789,10 @@ def create_app(
                     else:
                         engine_detail = f"最後 tick {age_min:.0f} 分前（今日 {cnt:,} 筆）— 引擎未連線"
         except Exception as e:
-            engine_detail = f"ticks.db 讀取失敗: {e}"
+            if "no such table" in str(e) or "unable to open database file" in str(e):
+                engine_detail = "引擎尚未啟動（盤前正常）"
+            else:
+                engine_detail = f"ticks.db 讀取失敗: {e}"
         add(8, "tick 資料流", engine_ok, warn=not engine_ok,
             detail=engine_detail, data_source="ticks.db/ticks",
             logic="最後 tick < 15分 → 資料流正常（盤中）")
@@ -949,13 +962,18 @@ def create_app(
                     detail=f"{vol:,} 張" if vol > 0 else "盤前/休市 - 無成交",
                     data_source="ticks.db/ticks SUM(volume)/1000")
             except Exception as e:
-                add(19, f"成交量 ({sample_sym})", False,
-                    detail=f"讀取失敗: {e}", data_source="ticks.db/ticks")
+                _no_tbl = "no such table" in str(e) or "unable to open database file" in str(e)
+                if _no_tbl:
+                    add(19, f"成交量 ({sample_sym})", True, warn=True,
+                        detail="引擎尚未啟動（盤前正常）", data_source="ticks.db/ticks")
+                else:
+                    add(19, f"成交量 ({sample_sym})", False,
+                        detail=f"讀取失敗: {e}", data_source="ticks.db/ticks")
         else:
             for num, nm in [(9,"昨收"),(10,"現價"),(11,"漲跌"),(12,"漲跌%"),(13,"委買比"),
                             (14,"期貨價"),(15,"期現差"),(16,"Open"),(17,"High"),(18,"Low"),(19,"成交量")]:
                 add(num, nm, False, warn=True,
-                    detail="today daytrade_list 無資料", data_source="daily.db/daytrade_list")
+                    detail="today daytrade_list 無資料", data_source=f"{_BACKEND}/api/daytrade/list")
 
         hard_ok   = sum(1 for r in items if r["ok"] and not r["warn"])
         hard_fail = sum(1 for r in items if not r["ok"] and not r["warn"])

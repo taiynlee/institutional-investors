@@ -596,7 +596,7 @@ async def get_market_overview():
 
     def fetch_index(sym: str, name: str):
         try:
-            hist = yf.Ticker(sym).history(period="5d").dropna(subset=["Close"])
+            hist = yf.Ticker(sym).history(period="10d", auto_adjust=True).dropna(subset=["Close"])
             if len(hist) < 2:
                 return None
             last_close = float(hist["Close"].iloc[-1])
@@ -605,12 +605,17 @@ async def get_market_overview():
                 return None
             chg_pts = last_close - prev_close
             chg_pct = chg_pts / prev_close * 100
+            try:
+                date_str = hist.index[-1].strftime("%m/%d")
+            except Exception:
+                date_str = str(hist.index[-1])[:10][5:].replace("-", "/")
             return {
                 "symbol": sym,
                 "name": name,
                 "close": round(last_close, 2),
                 "chg_pts": round(chg_pts, 2),
                 "chg_pct": round(chg_pct, 2),
+                "date": date_str,
             }
         except Exception:
             return None

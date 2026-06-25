@@ -1,5 +1,6 @@
 import { type ReactNode, useEffect, useRef, useState } from 'react'
 import axios from 'axios'
+import { ManualTradeContent } from './ManualTradePage'
 
 // ── WebSocket engine stream ───────────────────────────────────────────────────
 function useEngineStream() {
@@ -28,10 +29,11 @@ function useEngineStream() {
 
 const API = '/fubon-api'
 
-type SubTab = 'live' | 'trades' | 'pre-session' | 'params' | 'config' | 'health'
+type SubTab = 'live' | 'manual' | 'trades' | 'pre-session' | 'params' | 'config' | 'health'
 
 const SUB_TABS: { id: SubTab; label: string }[] = [
   { id: 'live',        label: '今日交易' },
+  { id: 'manual',     label: '手動買賣' },
   { id: 'trades',      label: '交易紀錄' },
   { id: 'pre-session', label: '盤前狀況' },
   { id: 'params',      label: '交易設定' },
@@ -1357,6 +1359,7 @@ export function DayTradePage() {
         </div>
 
         {sub === 'live'        && <LiveTab />}
+        {sub === 'manual'      && <ManualTradeContent />}
         {sub === 'trades'      && <TradesTab />}
         {sub === 'pre-session' && <PreSessionTab />}
         {sub === 'params'      && <ParamsTab />}

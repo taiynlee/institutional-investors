@@ -14,16 +14,14 @@ import { StockResearch } from './pages/StockResearch'
 import { StockPoolPage } from './pages/StockPool'
 import { UsStocksPage } from './pages/UsStocksPage'
 import { DayTradePage } from './pages/DayTradePage'
-import { ManualTradePage } from './pages/ManualTradePage'
 import { MarketHeader } from './components/MarketHeader'
 import './index.css'
 
-type Tab = 'screener' | 'score-a' | 'score-b' | 'score-c' | 'watchlist-a' | 'result' | 'exit-alerts' | 'sector' | 'ic-chain' | 'holders' | 'pool' | 'us-stocks' | 'day-trade' | 'manual-trade'
+type Tab = 'screener' | 'score-a' | 'score-b' | 'score-c' | 'watchlist-a' | 'result' | 'exit-alerts' | 'sector' | 'ic-chain' | 'holders' | 'pool' | 'us-stocks' | 'day-trade'
 
 const TABS: { id: Tab; label: string; sub?: string }[] = [
   { id: 'screener',    label: '篩選總覽' },
   { id: 'day-trade',   label: '台股當沖' },
-  { id: 'manual-trade', label: '測試買賣' },
   { id: 'score-a',    label: '策略A',   sub: '最新' },
   { id: 'score-b',    label: '策略B',   sub: '近3日≥60' },
   { id: 'score-c',    label: '策略C' },
@@ -84,7 +82,6 @@ export default function App() {
         {tab === 'pool'       && <StockPoolPage />}
         {tab === 'us-stocks'  && <UsStocksPage />}
         {tab === 'day-trade'  && <DayTradePage />}
-        {tab === 'manual-trade' && <ManualTradePage />}
       </div>
       {researchCode && (
         <StockResearch code={researchCode} onClose={() => setResearchCode(null)} />

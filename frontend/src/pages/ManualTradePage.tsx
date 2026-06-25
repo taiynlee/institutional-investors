@@ -35,7 +35,7 @@ function round_down_tick(price: number): number {
   return Math.floor(Math.round(price / t * 1e8) / 1e8) * t
 }
 
-export function ManualTradePage() {
+export function ManualTradeContent() {
   const [pool, setPool] = useState<PoolStock[]>([])
   const [symbol, setSymbol] = useState('')
   const [name, setName] = useState('')
@@ -163,12 +163,10 @@ export function ManualTradePage() {
   const inp = 'bg-gray-800 border border-gray-700 text-white rounded px-3 py-2 text-sm focus:outline-none focus:border-blue-500 w-full'
 
   return (
-    <div className="min-h-screen bg-gray-950 text-white p-6">
-      <div className="max-w-4xl mx-auto space-y-6">
-        <div>
-          <h1 className="text-2xl font-black text-white">手動下單</h1>
-          <p className="text-gray-400 text-sm mt-0.5">真實下單 · 自動掛停損/停利觸價單</p>
-        </div>
+    <div className="space-y-6">
+      <div>
+        <p className="text-gray-400 text-sm">真實下單 · 自動掛停損/停利觸價單</p>
+      </div>
 
         {msg && (
           <div className={`text-sm px-4 py-3 rounded-lg ${msg.ok ? 'bg-green-900 text-green-300 border border-green-700' : 'bg-red-900 text-red-300 border border-red-700'}`}>
@@ -424,6 +422,18 @@ export function ManualTradePage() {
           <div>• <span className="text-blue-300">市價強制買</span>：使用 IOC 市價單，無法成交的部分自動取消，適合急單</div>
           <div>• <span className="text-blue-300">市價強制出場</span>：送出 IOC 市價賣單並同時取消兩張觸價單</div>
         </div>
+    </div>
+  )
+}
+
+export function ManualTradePage() {
+  return (
+    <div className="min-h-screen bg-gray-950 text-white p-6">
+      <div className="max-w-4xl mx-auto">
+        <div className="mb-6">
+          <h1 className="text-2xl font-black text-white">手動買賣</h1>
+        </div>
+        <ManualTradeContent />
       </div>
     </div>
   )

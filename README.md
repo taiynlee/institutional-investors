@@ -279,7 +279,8 @@ institutional-investors/
 │   │   │   └── Tooltip.tsx        # 通用 tooltip 元件
 │   │   ├── pages/
 │   │   │   ├── Dashboard.tsx      # 篩選結果（含AI精選狀態列 + job badges）
-│   │   │   ├── DayTradePage.tsx   # 台股當沖（6子頁：今日交易/交易紀錄/盤前狀況/交易設定/系統設定/系統健診）
+│   │   │   ├── DayTradePage.tsx   # 台股當沖（7子頁：今日交易/手動買賣/交易紀錄/盤前狀況/交易設定/系統設定/當沖健診）
+│   │   │   ├── ManualTradePage.tsx # 手動買賣（含 ManualTradeContent，嵌入 DayTradePage 手動買賣子頁）
 │   │   │   ├── Result.tsx         # 篩選績效頁（昨日結果 vs 次日收盤）
 │   │   │   ├── ExitAlertsPage.tsx # 退場止損（完整 list，技術/籌碼觸發）
 │   │   │   ├── Holders.tsx        # 千張大戶占比排行頁（週增減%排序）
@@ -782,16 +783,17 @@ python run.py
 
 ### 前端 Tab：台股當沖
 
-位於篩選總覽之後，包含 6 個子頁面：
+位於篩選總覽之後，包含 7 個子頁面：
 
 | 子頁 | 資料來源 | 說明 |
 |-----|---------|------|
 | 今日交易 | WebSocket `/fubon-api/ws/stream` | 即時持倉 + 盤中損益（WS 串流，每秒更新） |
+| 手動買賣 | `/fubon-api/manual-trade/*` | 手動限價/市價下單，自動掛停損停利觸價單 |
 | 交易紀錄 | `/fubon-api/trades` | 今日成交記錄（ticks.db） |
 | 盤前狀況 | `/fubon-api/pre-session/logs` | 盤前跑批紀錄（PG） |
 | 交易設定 | `/fubon-api/trading-params` + PG `trading_settings` | 所有引擎參數（即時生效：寫入 PG 持久化 + ticks.db 熱重載，引擎無需重啟） |
 | 系統設定 | `/fubon-api/config` | 讀取 config.yaml（帳密/憑證，只讀，密碼遮蔽） |
-| 系統健診 | `/fubon-api/health-check/results` + `/fubon-api/logs/today` | 引擎狀態、config、LINE 設定、tick 資料流 |
+| 當沖健診 | `/fubon-api/health-check/results` + `/fubon-api/logs/today` | 引擎狀態、config、LINE 設定、tick 資料流（盤前引擎未啟動時顯示告警而非錯誤） |
 
 ### 安全注意
 

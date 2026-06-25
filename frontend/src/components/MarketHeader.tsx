@@ -7,6 +7,7 @@ interface MarketIndex {
   close: number
   chg_pts: number
   chg_pct: number
+  date?: string
 }
 
 interface TaifexFutures {
@@ -48,6 +49,7 @@ export function MarketHeader() {
         {indices.map(idx => (
           <div key={idx.symbol} className="flex items-center gap-1.5 shrink-0">
             <span className="text-gray-400 text-xs">{idx.name}</span>
+            {idx.date && <span className="text-gray-600 text-[10px]">{idx.date}</span>}
             <span className="text-white text-xs font-bold">{idx.close.toLocaleString()}</span>
             <span className={`text-xs font-medium ${idx.chg_pct >= 0 ? 'text-red-400' : 'text-green-400'}`}>
               {idx.chg_pts >= 0 ? '+' : ''}{idx.chg_pts.toLocaleString()}

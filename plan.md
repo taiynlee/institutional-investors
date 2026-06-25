@@ -190,7 +190,9 @@ PG stock_pool + daytrade_candidate（由 job8 每日 21:05 更新）
 - [x] 篩選器歷史缺口補抓：`startup_gap_backfill` 啟動時自動補最近 14 天
 - [x] 篩選條件放寬：策略B bb_now ≤5→≤15，突破位階門檻 >8→>5，策略A MA20斜率 0.5~1.5%→0.3~2.0%
 - [x] 退場止損頁：移除「落榜N天」動能信號，籌碼/技術 badge 新增 tooltip 說明
-- [ ] ManualTradePage：手動下單頁面（前端已存在，後端 API 待接線）
+- [x] 手動買賣：ManualTradePage 拆 ManualTradeContent，移入 DayTradePage 第 2 子頁（今日交易↔交易紀錄之間），頂層 Tab 移除「測試買賣」
+- [x] 當沖健診：items 02/03/08/19 engine 未啟動時（no such table）改顯示告警⚠而非錯誤✘
+- [x] 大盤指數：market-overview period 5d→10d，回傳 date 欄位，MarketHeader 顯示資料日期（灰色小字）
 - [ ] 當沖篩選邏輯優化（chip_count 條件/標的數不足時顯示最高分備援）
 - [ ] v2：八大官股行庫買賣超（WantGoo，API 需 session+CSRF，待研究）
 - [ ] v2：券商分點前5大買超（CMoney，URL 需修正）
