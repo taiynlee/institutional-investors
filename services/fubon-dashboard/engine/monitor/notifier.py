@@ -25,9 +25,31 @@ class LineNotifier:
             logger.info("[LINE DRY RUN] %s", message)
             return True
 
+        bot_url = os.environ.get("LINE_BOT_URL", "")
+        if bot_url:
+            return self._send_bot_notify(bot_url, message)
         if self._token and self._target:
             return self._send_api(message)
         return self._send_subprocess(message)
+
+    def _send_bot_notify(self, bot_url: str, message: str) -> bool:
+        payload = json.dumps({"message": message}).encode("utf-8")
+        req = urllib.request.Request(
+            f"{bot_url.rstrip('/')}/notify",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                if resp.status == 200:
+                    logger.info("LINE 通知已送出 (bot /notify)")
+                    return True
+                logger.error("LINE bot /notify 回傳 %d", resp.status)
+                return False
+        except Exception as e:
+            logger.error("LINE bot /notify 例外: %s", e)
+            return False
 
     def _send_api(self, message: str) -> bool:
         payload = json.dumps({

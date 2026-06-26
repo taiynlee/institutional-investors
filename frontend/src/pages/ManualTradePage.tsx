@@ -104,7 +104,7 @@ export function ManualTradeContent() {
     setBusy(true)
     setMsg(null)
     try {
-      await axios.post(`${API}/manual-trade/buy`, null, {
+      const r = await axios.post(`${API}/manual-trade/buy`, null, {
         params: {
           symbol, lots, price: entryPrice,
           prev_close: refClose,
@@ -113,7 +113,8 @@ export function ManualTradeContent() {
           force_market: forceMarket,
         },
       })
-      setMsg({ ok: true, text: `✓ ${symbol} 買進 ${lots}張 @ ${entryPrice}，停損/停利觸價單已掛出` })
+      const note = r.data?.note ? ` ${r.data.note}` : ''
+      setMsg({ ok: true, text: `✓ ${symbol} 買進 ${lots}張 @ ${entryPrice}，停損/停利觸價單已掛出${note}` })
       setSymbol(''); setName(''); setPrice(''); setPrevClose('')
       loadPositions()
     } catch (e: any) {
@@ -259,8 +260,8 @@ export function ManualTradeContent() {
                 <span className="text-green-300 font-mono font-bold">≥ {takeProfit.toFixed(2)}</span>
                 <span className="text-gray-600">（昨收+{entryChg.toFixed(1)}%+{tpAddPct}%）</span>
               </div>
-              <div className="text-yellow-700 text-[10px] pt-1 border-t border-gray-700">
-                ⚠ 兩單同時掛出，任一觸發後另一張需手動取消
+              <div className="text-gray-500 text-[10px] pt-1 border-t border-gray-700">
+                兩單同時掛出，任一觸發後後端自動取消另一張
               </div>
             </div>
           )}
@@ -374,7 +375,7 @@ export function ManualTradeContent() {
         <div className="mt-3 space-y-1.5 text-xs text-gray-500">
           <div>• <span className="text-red-300">停損</span>：成交價 ≤ 停損價時送出市價賣單（ROD）。停損價 = 進場價 − N tick，向上捨入</div>
           <div>• <span className="text-green-300">停利</span>：成交價 ≥ 停利價時送出市價賣單（ROD）。停利價 = 昨收 × (1 + 進場漲幅 + 附加%)，向下捨入</div>
-          <div>• <span className="text-yellow-500">注意</span>：兩張觸價單同時存在，任一觸發後另一張<strong className="text-white">不會自動取消</strong>，需手動按「取消觸價」</div>
+          <div>• <span className="text-blue-400">OCO</span>：後端已掛 <code>set_on_order_changed</code> callback，任一觸發後自動取消另一張。若失敗可手動按「取消觸價」</div>
           <div>• <span className="text-orange-300">市價</span>：使用 IOC 市價單（買進）或 IOC 市價賣單（賣出）並同時取消觸價單</div>
         </div>
       </details>

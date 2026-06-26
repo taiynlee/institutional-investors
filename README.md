@@ -303,10 +303,14 @@ institutional-investors/
 ├── services/
 │   └── fubon-dashboard/      # 台股當沖自動交易（WSL 直接執行，非 Docker）
 │       ├── run.py            # 一鍵啟動（python run.py）
-│       ├── start.sh          # bash 替代啟動（bash start.sh）
+│       ├── start.sh          # systemd ExecStart（exec python3 run.py）
 │       ├── main.py           # FastAPI + WebSocket app（含 DailyScheduler）
-│       ├── engine/           # 交易引擎（ORB 策略、位置管理、觸價單、排程）
+│       ├── engine/           # 交易引擎（60s tick 動量、觸價單、broker.py）
+│       │   ├── trading_engine.py     # 主引擎（進場/出場邏輯，呼叫 broker.buy/sell）
+│       │   └── execution/broker.py   # FubonBroker（OrderType.Stock，dry_run guard）
 │       ├── monitor/dashboard/app.py  # REST + /ws/stream WebSocket 即時推送
+│       │                             # 含 futures-snapshot（30s cache，tickers API）
+│       │                             # 含 manual-trade/buy|sell（LINE 通知）
 │       ├── requirements.txt
 │       └── .env              # LINE token（不進 git）
 ├── scripts/
@@ -795,11 +799,23 @@ python run.py
 | 系統設定 | `/fubon-api/config` | 讀取 config.yaml（帳密/憑證，只讀，密碼遮蔽） |
 | 當沖健診 | `/fubon-api/health-check/results` + `/fubon-api/logs/today` | 引擎狀態、config、LINE 設定、tick 資料流（盤前引擎未啟動時顯示告警而非錯誤） |
 
+### 下單類別
+
+所有股票買賣使用 `OrderType.Stock`（現買/現賣），不使用 `OrderType.DayTrade`（會觸發「沒有交易類別」錯誤）。手動買賣（`/manual-trade/buy`、`/manual-trade/sell`）及引擎自動下單均採用此設定。
+
+### LINE 通知
+
+通知走 `claude-line-bot` 服務（`http://host.docker.internal:8001/notify`）：
+- `LineNotifier` 優先呼叫 `LINE_BOT_URL/notify`（bot 已初始化 token，fubon-dashboard 無需另設 LINE 憑證）
+- 觸發時機：手動買入、手動賣出、引擎進場（dry_run=False 時）
+- ⚠️ LINE Messaging API free plan 每月 200 則上限；滿額後推播失敗，月初重置
+
 ### 安全注意
 
 - `config.yaml`（含富邦帳密）已加入 `.gitignore`，放 `/home/tommy0322/fubon-config/`，不進 git
 - `.env`（LINE token）已加入 `.gitignore`
 - `vendor/`（富邦 SDK wheel binary）已加入 `.gitignore`
+- `log/`、`logs/`（執行期日誌）已加入 `.gitignore`
 - `/fubon-api/` 只能從本機 6174 port 存取，不對外暴露
 
 ---

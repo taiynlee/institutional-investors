@@ -44,27 +44,35 @@ class FubonBroker:
         self._sdk = sdk
         self._account = account
 
-    def buy(self, symbol: str, lots: int, price: float):
+    def buy(self, symbol: str, lots: int, price: float, order_type_override: str = "stock"):
+        """買進限價單。order_type_override: 'stock'=現買(預設), 'margin'=資買, 'daytrade'=當沖專用。"""
         price = round_down_tick(price)
         if self.dry_run:
             logger.info("[DRY RUN] BUY %s x%d張 @ %.2f", symbol, lots, price)
-            return
+            return "stock"
         if self._sdk is None:
             raise RuntimeError("SDK not initialized")
         from fubon_neo.sdk import Order
         from fubon_neo.constant import BSAction, MarketType, PriceType, TimeInForce, OrderType
-        order = Order(
-            buy_sell=BSAction.Buy,
-            symbol=symbol,
-            quantity=lots * 1000,
-            market_type=MarketType.Common,
-            price_type=PriceType.Limit,
-            time_in_force=TimeInForce.ROD,
-            order_type=OrderType.DayTrade,
-            price=str(price),
-        )
-        result = self._sdk.stock.place_order(self._account, order)
-        logger.info("BUY %s result: %s", symbol, result)
+        _ot_map = {"stock": OrderType.Stock, "margin": OrderType.Margin,
+                   "daytrade": OrderType.DayTrade}
+        ot = _ot_map.get(order_type_override, OrderType.Stock)
+        try:
+            o = Order(
+                buy_sell=BSAction.Buy,
+                symbol=symbol,
+                quantity=lots * 1000,
+                market_type=MarketType.Common,
+                price_type=PriceType.Limit,
+                time_in_force=TimeInForce.ROD,
+                order_type=ot,
+                price=str(price),
+            )
+            result = self._sdk.stock.place_order(self._account, o)
+            logger.info("BUY %s (%s) result: %s", symbol, order_type_override, result)
+            return order_type_override
+        except Exception as e:
+            raise RuntimeError(f"下單失敗: {e}") from e
 
     def sell(self, symbol: str, lots: int, price: float, reason: str = ""):
         if self.dry_run:
@@ -81,7 +89,7 @@ class FubonBroker:
             market_type=MarketType.Common,
             price_type=PriceType.Market,
             time_in_force=TimeInForce.IOC,
-            order_type=OrderType.DayTrade,
+            order_type=OrderType.Stock,  # 現賣
         )
         result = self._sdk.stock.place_order(self._account, order)
         logger.info("SELL %s reason=%s result: %s", symbol, reason, result)
@@ -121,7 +129,7 @@ class FubonBroker:
                 market_type=ConditionMarketType.Common,
                 price_type=ConditionPriceType.Market,
                 time_in_force=TimeInForce.ROD,
-                order_type=ConditionOrderType.DayTrade,
+                order_type=ConditionOrderType.Stock,  # 現賣
                 quantity=lots * 1000,
             )
             result = self._sdk.stock.single_condition(
@@ -179,7 +187,7 @@ class FubonBroker:
                 market_type=ConditionMarketType.Common,
                 price_type=ConditionPriceType.Market,
                 time_in_force=TimeInForce.ROD,
-                order_type=ConditionOrderType.DayTrade,
+                order_type=ConditionOrderType.Stock,  # 現賣
                 quantity=lots * 1000,
             )
             result = self._sdk.stock.single_condition(

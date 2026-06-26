@@ -152,7 +152,7 @@ function LiveTab() {
           <span className="text-[10px] text-[#6b84a0] mb-0.5">今日已交易</span>
           <span className="text-base font-bold text-[#60a5fa]">
             {stream?.pnl?.daily_entries ?? 0}
-            <span className="text-[#6b84a0] text-xs font-normal"> / {stream?.pnl?.max_daily ?? 3} 檔</span>
+            <span className="text-[#6b84a0] text-xs font-normal"> / {stream?.pnl?.max_daily ?? 5} 檔</span>
           </span>
           <span className="text-[10px] text-[#6b84a0]">持倉 {positions.length} 檔</span>
         </div>

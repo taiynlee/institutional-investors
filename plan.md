@@ -186,6 +186,10 @@ PG stock_pool + daytrade_candidate（由 job8 每日 21:05 更新）
 
 - [ ] 借券賣出歷史補填（目前只有當日資料，需選擇時間執行 90 日回填）
 - [ ] CORS allow_origins 加入 `http://localhost:6174`（目前允許 3000 / 5173，前端實際跑 6174）
+- [ ] 當沖篩選邏輯優化（chip_count 條件/標的數不足時顯示最高分備援）
+- [ ] LINE Messaging API 月額度（200 則）滿後無法推播；每月 1 日重置，或升級 Standard plan
+- [ ] v2：八大官股行庫買賣超（WantGoo，API 需 session+CSRF，待研究）
+- [ ] v2：券商分點前5大買超（CMoney，URL 需修正）
 - [x] 策略A追蹤清單退出機制：tracking 超過10個交易日未觸發 BB≤5 → 自動刪除，等下次重新突破再加入
 - [x] 篩選器歷史缺口補抓：`startup_gap_backfill` 啟動時自動補最近 14 天
 - [x] 篩選條件放寬：策略B bb_now ≤5→≤15，突破位階門檻 >8→>5，策略A MA20斜率 0.5~1.5%→0.3~2.0%
@@ -193,6 +197,7 @@ PG stock_pool + daytrade_candidate（由 job8 每日 21:05 更新）
 - [x] 手動買賣：ManualTradePage 拆 ManualTradeContent，移入 DayTradePage 第 2 子頁（今日交易↔交易紀錄之間），頂層 Tab 移除「測試買賣」
 - [x] 當沖健診：items 02/03/08/19 engine 未啟動時（no such table）改顯示告警⚠而非錯誤✘
 - [x] 大盤指數：market-overview period 5d→10d，回傳 date 欄位，MarketHeader 顯示資料日期（灰色小字）
-- [ ] 當沖篩選邏輯優化（chip_count 條件/標的數不足時顯示最高分備援）
-- [ ] v2：八大官股行庫買賣超（WantGoo，API 需 session+CSRF，待研究）
-- [ ] v2：券商分點前5大買超（CMoney，URL 需修正）
+- [x] 手動買賣下單類別修正：`OrderType.DayTrade` → `OrderType.Stock`（現買/現賣），修正「沒有交易類別」錯誤
+- [x] 期貨欄位修正：`futures-snapshot` endpoint 改用 `tickers(type=FUTURE)` API 取實際合約代號（FZFG6 等），30 秒 TTL cache，解決盤前 `ref_f=0` 無法建立 sym_map 問題
+- [x] 引擎下單整合：`trading_engine.py` 進場/出場呼叫 `broker.buy()` / `broker.sell()`，確保 dry_run=False 時實際下單
+- [x] LINE 通知整合：手動買入/賣出後透過 `claude-line-bot /notify` endpoint 推播，`LineNotifier` 優先呼叫 `LINE_BOT_URL/notify`

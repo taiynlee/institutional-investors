@@ -43,4 +43,13 @@ pgdata/
 
 # === 測試/暫存 ===
 *.log
+*.log.*
 *.tmp
+
+# === 執行期產生（不提交）===
+log/
+logs/
+backups/
+services/fubon-dashboard/vendor/
+services/fubon-dashboard/.deps_installed
+*Zone.Identifier

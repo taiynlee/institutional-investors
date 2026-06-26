@@ -199,17 +199,18 @@ def create_app(
             if not _ws_clients:
                 continue
             try:
+                _max_daily = _trading_params.get("max_daily_positions", 5)
                 if _engine is not None:
                     state = _engine.get_state()
                     if state.get("status") == "running":
                         pnl = _engine.get_pnl_summary()
                         positions = _sanitize(_engine.get_positions())
                     else:
-                        pnl = {}
+                        pnl = {"max_daily": _max_daily}
                         positions = []
                 else:
                     state = {"status": "unavailable"}
-                    pnl = {}
+                    pnl = {"max_daily": _max_daily}
                     positions = []
                 msg = json.dumps(
                     {"type": "state", **state, "pnl": pnl, "positions": positions},
@@ -580,62 +581,168 @@ def create_app(
     # ── Futures snapshot ─────────────────────────────────────────────────────
     @app.get("/futures-snapshot")
     def get_futures_snapshot(syms: str = ""):
-        """近月個股期貨價格 via SDK。非交易日 SDK 無法連線時 gracefully 回傳 error。"""
+        """個股期貨即時價格。優先從引擎 WebSocket 快取讀取，引擎未啟動時用 REST fallback。"""
         symbols = [s.strip() for s in syms.split(",") if s.strip()] if syms else []
         result: dict = {"ok": False, "ts": datetime.now().isoformat(), "data": {}, "error": None}
-        try:
-            import yaml
-            config_path = os.environ.get("FUBON_CONFIG", "/home/tommy0322/fubon-config/config.yaml")
-            with open(config_path, encoding="utf-8") as f:
-                cfg = yaml.safe_load(f)
-            fc = cfg["fubon"]
-        except Exception as e:
-            result["error"] = f"config 讀取失敗: {e}"
-            return result
-        try:
-            import datetime as dt
-            from fubon_neo.sdk import FubonSDK, Mode
-            sdk = FubonSDK()
-            r = sdk.login(fc["id"], fc["password"], fc["cert_path"], fc["cert_password"])
-            if not r.is_success:
-                result["error"] = f"SDK login 失敗: {getattr(r, 'message', '')}"
-                return result
-            sdk.init_realtime(Mode.Speed)
-            rc_f = sdk.marketdata.rest_client.futopt
-            today = dt.date.today()
-            mc = "FGHJKMNQUVXZ"
-            near = mc[today.month - 1] + str(today.year)[-1]
-            next_m = today.month % 12 + 1
-            next_y = str(today.year + (1 if today.month == 12 else 0))[-1]
-            next_code = mc[next_m - 1] + next_y
-            for sym in (symbols or ["TX"]):
-                for code in [f"{sym}{near}", f"{sym}{next_code}", f"{sym}F1", f"{sym}F"]:
-                    try:
-                        t = rc_f.intraday.ticker(symbol=code)
-                        if t is None:
-                            continue
-                        price = getattr(t, "lastPrice", None) or getattr(t, "close", None)
-                        if isinstance(t, dict):
-                            price = t.get("lastPrice") or t.get("close")
-                        if price is None:
-                            continue
-                        prev = getattr(t, "referencePrice", None) or getattr(t, "previousClose", None)
-                        if isinstance(t, dict):
-                            prev = t.get("referencePrice") or t.get("previousClose")
-                        chg = round(float(price) - float(prev), 2) if prev else 0
-                        chg_pct = round(chg / float(prev) * 100, 2) if prev else 0
-                        result["data"][sym] = {
-                            "price": float(price), "change": chg,
-                            "change_pct": chg_pct, "futures_code": code,
-                        }
-                        break
-                    except Exception:
-                        continue
+
+        # ── 優先：用引擎已建好的 futures_sym_map + futures_signals 快取 ──────────
+        if _engine is not None and _engine.futures_sym_map:
+            fsmap = _engine.futures_sym_map
+            fsig  = _engine.futures_signals
+            for sym in symbols:
+                if sym not in fsmap:
+                    continue
+                sig = fsig.get(sym)
+                if sig is None:
+                    continue
+                state = getattr(sig, "_state", None)
+                if state is None:
+                    continue
+                price = getattr(state, "futures_price", None)
+                chg_pct = getattr(state, "futures_change_pct", None)
+                if price and price > 0:
+                    result["data"][sym] = {
+                        "price": float(price),
+                        "change": 0.0,        # 暫無 change pts，用 chg_pct
+                        "change_pct": round(float(chg_pct or 0), 2),
+                        "futures_code": fsmap[sym],
+                    }
             result["ok"] = True
-        except ValueError as e:
-            result["error"] = f"SDK 連線失敗（非交易日）: {e}"
-        except ImportError:
-            result["error"] = "fubon_neo 未安裝"
+            if result["data"] or not symbols:
+                return result
+            # map 有但 tick 尚未收到 → fallback 到 REST
+
+        # ── Fallback：用 tickers API 建 {underlyingSymbol → 近月合約+price} ──────
+        # products 回傳泛型代碼（FZF），ticker/quote 不支援；tickers 才有實際近月代碼。
+        try:
+            sdk = (_engine.sdk if _engine is not None else None)
+            if sdk is None:
+                result["error"] = "引擎未啟動，無法查期貨"
+                return result
+            rc_f = sdk.marketdata.rest_client.futopt
+
+            # _futures_price_cache: {stock_id → {price, change_pct, futures_code}}
+            # 掛在 _engine 上，30 秒 TTL 或缺 symbol 時觸發重建
+            import time as _time
+            _cache = getattr(_engine, "_futures_price_cache", {}) if _engine else {}
+            _cache_ts = getattr(_engine, "_futures_cache_ts", 0.0) if _engine else 0.0
+            _cache_stale = (_time.time() - _cache_ts) > 30
+            need_rebuild = _cache_stale or (any(sym not in _cache for sym in symbols) if symbols else not _cache)
+
+            if need_rebuild and _engine is not None:
+                try:
+                    from collections import defaultdict as _dd
+                    import datetime as _dt
+
+                    # Step1: products API → {productCode → [underlyingSymbol]}
+                    _presp = rc_f.intraday.products(type="FUTURE")
+                    _plist = (_presp if isinstance(_presp, list)
+                              else _presp.get("data", []) if isinstance(_presp, dict) else [])
+                    prod_to_und: dict = {}  # productCode → underlyingSymbol (stock_id)
+                    und_to_prod: dict = {}  # underlyingSymbol → (productCode, contractSize, priority)
+                    for _p in _plist:
+                        _u = str(_p.get("underlyingSymbol", "") if isinstance(_p, dict)
+                                 else getattr(_p, "underlyingSymbol", "") or "")
+                        _s = str(_p.get("symbol", "") if isinstance(_p, dict)
+                                 else getattr(_p, "symbol", "") or "")
+                        _c = int((_p.get("contractSize") or 0) if isinstance(_p, dict)
+                                 else (getattr(_p, "contractSize", 0) or 0))
+                        if _u and _s:
+                            # Prefer codes NOT ending with digit (e.g. FZF > FZ1, KDF > KD1)
+                            # because digit-suffix codes are special near-month aliases,
+                            # not the base product code used in actual contract symbols.
+                            _not_digit = 1 if not _s[-1:].isdigit() else 0
+                            _priority = (_not_digit, _c)  # prefer non-digit-suffix, then larger size
+                            if _u not in und_to_prod or _priority > und_to_prod[_u][2]:
+                                und_to_prod[_u] = (_s, _c, _priority)
+                    # und_to_prod[stock_id] = (productCode, contractSize, priority)
+                    prod_to_und = {v[0]: k for k, v in und_to_prod.items()}
+
+                    # Step2: tickers API → all actual contracts with endDate + referencePrice
+                    _tresp = rc_f.intraday.tickers(type="FUTURE")
+                    _tlist = (_tresp if isinstance(_tresp, list)
+                              else _tresp.get("data", []) if isinstance(_tresp, dict) else [])
+                    today_str = _now_tw().date().isoformat()
+
+                    # Group by product code prefix: FZFG6 → prefix FZF
+                    # Find near-month (earliest endDate still >= today) for each prefix
+                    prefix_contracts: dict = _dd(list)
+                    for _t in _tlist:
+                        _tsym = str(_t.get("symbol", "") if isinstance(_t, dict)
+                                    else getattr(_t, "symbol", "") or "")
+                        _end  = str(_t.get("endDate", "") if isinstance(_t, dict)
+                                    else getattr(_t, "endDate", "") or "")
+                        _ref  = (_t.get("referencePrice") if isinstance(_t, dict)
+                                 else getattr(_t, "referencePrice", None))
+                        if _tsym and _end:
+                            # extract product code = all chars except last 2 (month+year)
+                            _prefix = _tsym[:-2] if len(_tsym) > 2 else _tsym
+                            prefix_contracts[_prefix].append((_end, _tsym, _ref))
+
+                    # Build new cache
+                    new_sym_map: dict = {}  # stock_id → actual_symbol
+                    all_syms = list(_engine.futures_signals.keys()) if _engine.futures_signals else symbols
+                    for _stk in all_syms:
+                        if _stk not in und_to_prod:
+                            continue
+                        prod_code = und_to_prod[_stk][0]  # e.g., FZF
+                        candidates = prefix_contracts.get(prod_code, [])
+                        if not candidates:
+                            continue
+                        candidates.sort()
+                        near = next(((e, s, r) for e, s, r in candidates if e >= today_str), None)
+                        if near is None:
+                            near = candidates[-1]
+                        _end, _actual_sym, _ref = near
+                        new_sym_map[_stk] = _actual_sym
+
+                    if new_sym_map:
+                        _engine.futures_sym_map = new_sym_map
+
+                    # Get real-time price via quote API for each near-month symbol
+                    new_cache: dict = {}
+                    for _stk, _actual_sym in new_sym_map.items():
+                        try:
+                            _q = rc_f.intraday.quote(symbol=_actual_sym)
+                            if _q is None:
+                                continue
+                            _lp = (_q.get("lastPrice") or _q.get("closePrice") or
+                                   _q.get("previousClose")) if isinstance(_q, dict) \
+                                  else (getattr(_q, "lastPrice", None) or getattr(_q, "previousClose", None))
+                            _ref = (_q.get("previousClose") or _q.get("referencePrice")) if isinstance(_q, dict) \
+                                   else (getattr(_q, "previousClose", None) or getattr(_q, "referencePrice", None))
+                            _chg = (_q.get("change") or 0) if isinstance(_q, dict) \
+                                   else (getattr(_q, "change", 0) or 0)
+                            _chg_pct = (_q.get("changePercent") or 0) if isinstance(_q, dict) \
+                                       else (getattr(_q, "changePercent", 0) or 0)
+                            if _lp is not None and float(_lp) > 0:
+                                new_cache[_stk] = {
+                                    "price": float(_lp), "change": float(_chg),
+                                    "change_pct": round(float(_chg_pct), 2),
+                                    "futures_code": _actual_sym,
+                                }
+                        except Exception:
+                            # fallback to referencePrice from tickers if quote fails
+                            for _e2, _s2, _r2 in prefix_contracts.get(und_to_prod.get(_stk, ('',))[0], []):
+                                if _s2 == _actual_sym and _r2 is not None and float(_r2) > 0:
+                                    new_cache[_stk] = {
+                                        "price": float(_r2), "change": 0.0,
+                                        "change_pct": 0.0, "futures_code": _actual_sym,
+                                    }
+                                    break
+
+                    if new_cache:
+                        _engine._futures_price_cache = new_cache  # type: ignore
+                        _engine._futures_cache_ts = _time.time()  # type: ignore
+                        _cache = new_cache
+                except Exception as _e:
+                    result["error"] = f"tickers rebuild失敗: {_e}"
+
+            for sym in symbols:
+                entry = _cache.get(sym)
+                if entry:
+                    result["data"][sym] = entry
+            result["ok"] = True
         except Exception as e:
             result["error"] = str(e)
         return result
@@ -1192,12 +1299,79 @@ def create_app(
 
     # ── Manual Trade（真實下單：獨立 broker dry_run=False）────────────────────
     _manual_positions: dict = {}  # symbol → position dict
+    _oco_registered = [False]  # mutable flag for closure
+
+    def _register_oco_callback(sdk):
+        """SDK 就緒後呼叫一次，設 set_on_order_changed 實現軟 OCO。"""
+        if _oco_registered[0]:
+            return
+        _oco_registered[0] = True
+
+        def _on_order_changed(data):
+            try:
+                # 解析資料：支援 dict / object 兩種格式
+                if isinstance(data, dict):
+                    d = data
+                elif hasattr(data, '__dict__'):
+                    d = vars(data)
+                else:
+                    # 嘗試 getattr 取常見欄位
+                    d = {f: getattr(data, f, None) for f in [
+                        'id', 'guid', 'parent_guid', 'status', 'condition_filled_volume',
+                        'order_no', 'buy_sell', 'symbol', 'action',
+                    ]}
+                __import__('logging').getLogger("manual_trade").debug("set_on_order_changed raw: %s", d)
+
+                # 取 guid
+                guid = (d.get('id') or d.get('guid') or d.get('parent_guid') or '')
+                if not guid:
+                    return
+                guid = str(guid)
+
+                # condition_filled_volume > 0 表示已觸發成交
+                filled_vol = d.get('condition_filled_volume', 0) or 0
+                status_str = str(d.get('status', '') or '')
+                # QCT03=完全成交, QCT02=部分成交（推測），也接受 condition_filled_volume > 0
+                triggered = (filled_vol > 0) or (status_str in ('QCT02', 'QCT03'))
+                if not triggered:
+                    return
+
+                for sym, pos in list(_manual_positions.items()):
+                    sg = str(pos.get('stop_guid') or '')
+                    tg = str(pos.get('tp_guid') or '')
+                    if guid == sg and tg:
+                        # 停損已觸發 → 取消停利
+                        try:
+                            if _engine and _engine.sdk and _engine.account:
+                                _engine.sdk.stock.cancel_condition_orders(_engine.account, tg)
+                            pos['tp_guid'] = None
+                            __import__('logging').getLogger("manual_trade").info("OCO: %s 停損觸發，自動取消停利 %s", sym, tg)
+                        except Exception as ce:
+                            __import__('logging').getLogger("manual_trade").warning("OCO 取消停利失敗: %s", ce)
+                    elif guid == tg and sg:
+                        # 停利已觸發 → 取消停損
+                        try:
+                            if _engine and _engine.sdk and _engine.account:
+                                _engine.sdk.stock.cancel_condition_orders(_engine.account, sg)
+                            pos['stop_guid'] = None
+                            __import__('logging').getLogger("manual_trade").info("OCO: %s 停利觸發，自動取消停損 %s", sym, sg)
+                        except Exception as ce:
+                            __import__('logging').getLogger("manual_trade").warning("OCO 取消停損失敗: %s", ce)
+            except Exception as e:
+                __import__('logging').getLogger("manual_trade").debug("OCO callback error: %s", e)
+
+        try:
+            sdk.set_on_order_changed(_on_order_changed)
+            __import__('logging').getLogger("manual_trade").info("OCO set_on_order_changed callback 已註冊")
+        except Exception as e:
+            __import__('logging').getLogger("manual_trade").warning("OCO callback 註冊失敗: %s", e)
 
     def _get_manual_broker():
         """建立真實下單 broker（需引擎已登入）"""
         from engine.execution.broker import FubonBroker
         if _engine is None or _engine.sdk is None or _engine.account is None:
             raise HTTPException(status_code=503, detail="引擎未啟動或 SDK 未連線，無法下單")
+        _register_oco_callback(_engine.sdk)
         b = FubonBroker(dry_run=False)
         b.initialize(_engine.sdk, _engine.account)
         return b
@@ -1264,21 +1438,28 @@ def create_app(
         trade_date = datetime.date.today().strftime("%Y/%m/%d")
 
         # 買進
-        if force_market:
-            from fubon_neo.sdk import Order
-            from fubon_neo.constant import BSAction, MarketType, PriceType, TimeInForce, OrderType
-            order = Order(
-                buy_sell=BSAction.Buy,
-                symbol=symbol,
-                quantity=lots * 1000,
-                market_type=MarketType.Common,
-                price_type=PriceType.Market,
-                time_in_force=TimeInForce.IOC,
-                order_type=OrderType.DayTrade,
-            )
-            result = broker._sdk.stock.place_order(broker._account, order)
-        else:
-            broker.buy(symbol, lots, price)
+        buy_mode = "stock"
+        try:
+            if force_market:
+                from fubon_neo.sdk import Order
+                from fubon_neo.constant import BSAction, MarketType, PriceType, TimeInForce, OrderType
+                order = Order(
+                    buy_sell=BSAction.Buy,
+                    symbol=symbol,
+                    quantity=lots * 1000,
+                    market_type=MarketType.Common,
+                    price_type=PriceType.Market,
+                    time_in_force=TimeInForce.IOC,
+                    order_type=OrderType.Stock,  # 現買
+                )
+                try:
+                    broker._sdk.stock.place_order(broker._account, order)
+                except Exception as _fe:
+                    raise RuntimeError(f"下單失敗: {_fe}") from _fe
+            else:
+                buy_mode = broker.buy(symbol, lots, price)  # 預設 stock（現買）
+        except RuntimeError as _e:
+            raise HTTPException(status_code=400, detail=str(_e))
 
         # 掛停損觸價單
         stop_guid = broker.place_conditional_stop(symbol, lots, stop_loss, trade_date)
@@ -1297,11 +1478,27 @@ def create_app(
             "entry_time": datetime.datetime.now().strftime("%H:%M:%S"),
         }
 
+        note = "（該股不支援當沖，改用普通單）" if "fallback" in (buy_mode or "") else ""
+
+        # LINE 通知
+        try:
+            from engine.monitor.notifier import LineNotifier
+            _notifier = LineNotifier(dry_run=False)
+            _notifier.send(
+                f"🟢 手動進場 {symbol}\n"
+                f"價={price:.2f}  張={lots}{('  ' + note) if note else ''}\n"
+                f"停損={stop_loss:.2f}  停利={take_profit:.2f}"
+            )
+        except Exception:
+            pass
+
         return {
             "ok": True,
             "symbol": symbol,
             "entry_price": price,
             "lots": lots,
+            "buy_mode": buy_mode,
+            "note": note,
             "stop_loss": stop_loss,
             "stop_loss_desc": f"成交價 ≤ {stop_loss:.2f}（進場價 - {stop_loss_ticks} tick）→ 市價賣出",
             "take_profit": take_profit,
@@ -1331,6 +1528,18 @@ def create_app(
 
         pnl = (sell_price - pos["entry_price"]) * pos["lots"] * 1000
         del _manual_positions[symbol]
+
+        # LINE 通知
+        try:
+            from engine.monitor.notifier import LineNotifier
+            _pnl_sign = "+" if pnl >= 0 else ""
+            LineNotifier(dry_run=False).send(
+                f"🔴 手動出場 {symbol}\n"
+                f"出場={sell_price:.2f}  張={pos['lots']}\n"
+                f"損益={_pnl_sign}{pnl:,.0f}"
+            )
+        except Exception:
+            pass
 
         return {"ok": True, "symbol": symbol, "exit_price": sell_price,
                 "pnl": round(pnl, 0), "lots": pos["lots"]}
@@ -1364,194 +1573,17 @@ def create_app(
         """完整交易日模擬（已停用：策略改為 60s tick 動量，請用 /debug/simulate-buy）。"""
         raise HTTPException(status_code=410, detail="simulate-full-day 已停用（舊 ORB 策略）。請改用 /debug/simulate-buy 測試新策略。")
 
-    def _simulate_full_day_deprecated(symbol: str = "2382", ref_price: float = 250.0):
-        """（已停用，保留供參考）完整交易日模擬：選股→ORB觀察→進場→移動停利→出場，送真實 LINE 通知。"""
-        import yaml
-        from datetime import datetime
-        from engine.data.session_state import SymbolSession
-        from engine.strategy.signal_combiner import SignalCombiner
-        from engine.execution.budget_manager import BudgetManager
-        from engine.execution.broker import round_up_tick
-        from engine.risk.position import Position
-        from engine.monitor.notifier import LineNotifier
+    @app.get("/debug/futures-map")
+    def debug_futures_map():
+        if _engine is None:
+            return {"error": "engine None"}
+        return {
+            "futures_sym_map": _engine.futures_sym_map,
+            "futures_signals": {k: str(getattr(getattr(v, '_state', None), 'futures_price', '?'))
+                                for k, v in _engine.futures_signals.items()},
+            "status": _engine.status,
+        }
 
-        log: list[dict] = []
-
-        def step(phase: str, msg: str, **kv):
-            entry = {"phase": phase, "msg": msg, **kv}
-            log.append(entry)
-            return entry
-
-        # ── 讀取 config ──────────────────────────────────────────────
-        cfg_path = os.environ.get("FUBON_CONFIG", "/home/tommy0322/fubon-config/config.yaml")
-        with open(cfg_path, encoding="utf-8") as f:
-            cfg = yaml.safe_load(f)
-        risk_cfg   = cfg.get("risk", {})
-        signal_cfg = cfg.get("signal", {})
-        trading_cfg = cfg.get("trading", {})
-
-        atr_multiplier       = float(risk_cfg.get("atr_multiplier", 1.8))
-        risk_per_trade_pct   = float(risk_cfg.get("risk_per_trade_pct", 1.0))
-        trailing_trigger_pct = float(risk_cfg.get("trailing_trigger_pct", 2.0))
-        trailing_pullback_pct = float(risk_cfg.get("trailing_pullback_pct", 1.5))
-        take_profit_pct      = float(risk_cfg.get("take_profit_pct", 5.0))
-        max_entry_gain_pct   = float(signal_cfg.get("max_entry_gain_pct", 4.0))
-        limit_up_buffer_pct  = float(signal_cfg.get("limit_up_buffer", 4.0))
-        max_pos_capital      = float(trading_cfg.get("max_position_capital", 1_000_000))
-
-        step("設定讀取", "config.yaml 讀取完成",
-             atr_multiplier=atr_multiplier, trailing_trigger_pct=trailing_trigger_pct,
-             trailing_pullback_pct=trailing_pullback_pct)
-
-        # ── Phase 1: 選股 ────────────────────────────────────────────
-        atr = round(ref_price * 0.015, 1)
-        limitup_price = round(ref_price * 1.10, 1)
-        step("選股", f"{symbol}  ref={ref_price}  ATR≈{atr}  漲停={limitup_price}",
-             symbol=symbol, ref_price=ref_price, atr=atr, limitup_price=limitup_price)
-
-        # ── Phase 2: 注入 1min K 棒（前10根盤整 → 後5根量價齊揚）────
-        sess = SymbolSession(symbol, ref_price, limitup_price, atr)
-
-        avg_vol = 900  # 模擬均量
-        bar_closes = [ref_price] * 10 + [
-            ref_price + 0.5, ref_price + 1.0,
-            ref_price + 1.0, ref_price + 1.5,
-            ref_price + 2.0,
-        ]
-        bar_vols = [avg_vol] * 10 + [900, 950, 900, 920, 1000]
-
-        for i, (close, vol) in enumerate(zip(bar_closes, bar_vols)):
-            sess._df_1min.append({
-                "open": round(close - 0.2, 1), "high": round(close + 0.5, 1),
-                "low": round(close - 0.5, 1), "close": close, "volume": vol,
-            })
-            sess.prev_1min_volume = vol
-            sess.prev_1min_close  = close
-
-        # ── Phase 3: 模擬進場信號（量價齊揚）───────────────────────
-        surge_price = round(ref_price + 2.5, 1)   # 比前收高
-        surge_vol   = int(avg_vol * 2.0)           # 爆量 ≥ 均量×1.5
-
-        sess.curr_price = surge_price
-        class _FakeBar:
-            volume = surge_vol
-        sess.bar_builder.current_1min = _FakeBar()
-
-        # 模擬委買壓力 ≥ 65%
-        sess.last_bids = [{"size": 700}]
-        sess.last_asks = [{"size": 300}]
-
-        combiner = SignalCombiner(
-            max_entry_gain_pct=max_entry_gain_pct,
-            limit_up_buffer_pct=limit_up_buffer_pct,
-        )
-        vp   = VolumePriceStrategy()
-        tech = TechnicalStrategy()
-
-        entry_time = datetime(2026, 6, 16, 9, 16)
-        sig = sess.evaluate(
-            combiner=combiner, vp=vp, tech=tech,
-            current_time=entry_time,
-            positions_count=0, max_positions=3,
-            not_in_position=True,
-            entry_cutoff_mins=13 * 60 + 10,
-            market_ok=True,
-        )
-
-        vp_score = sess.volume_price_score(vp)
-        step("信號評估", f"should_enter={sig.should_enter}  vp_score={vp_score}  "
-                         f"reason={sig.reason or '—'}  surge_vol={surge_vol}(均量={avg_vol}×2.0)",
-             should_enter=sig.should_enter, vp_score=vp_score,
-             surge_price=surge_price)
-
-        # ── 計算張數 ─────────────────────────────────────────────────
-        bm   = BudgetManager(total_capital=max_pos_capital * 3,
-                             risk_per_trade_pct=risk_per_trade_pct,
-                             max_position_capital=max_pos_capital)
-        lots = bm.calculate_lots(atr=atr, atr_multiplier=atr_multiplier,
-                                 price=surge_price, remaining_budget=max_pos_capital)
-        lots = max(lots, 1)
-
-        # ── 建立持倉 ─────────────────────────────────────────────────
-        pos = Position(
-            symbol=symbol,
-            entry_price=surge_price,
-            lots=lots,
-            atr=atr,
-            atr_multiplier=atr_multiplier,
-            trailing_trigger_pct=trailing_trigger_pct,
-            trailing_pullback_pct=trailing_pullback_pct,
-            orb_low=None,
-        )
-        cond_stop = round_up_tick(pos.stop_loss)
-
-        step("進場", f"價={surge_price}  張={lots}  "
-                     f"停損={pos.stop_loss:.2f}→tick捨入={cond_stop}  "
-                     f"資金={surge_price*lots*1000:,.0f}",
-             entry_price=surge_price, lots=lots,
-             stop_loss=pos.stop_loss, cond_stop=cond_stop,
-             capital_used=surge_price*lots*1000)
-
-        notifier = LineNotifier(dry_run=False)
-        buy_msg = (
-            f"🟢【完整模擬進場】{symbol}\n"
-            f"時間=09:16  價={surge_price}  張={lots}\n"
-            f"ATR={atr}(×{atr_multiplier})  停損={pos.stop_loss:.2f}\n"
-            f"觸價單={cond_stop}  量價齊揚(量={surge_vol}張)"
-        )
-        sent_buy = notifier.send(buy_msg)
-        step("LINE進場通知", f"sent={sent_buy}")
-
-        # ── Phase 4: 持倉追蹤（模擬漲到 +3%）───────────────────────
-        step("持倉追蹤", f"模擬價格從 {surge_price} 上漲到 +3%")
-        sim_prices = [
-            round(surge_price * (1 + i * 0.005), 1)
-            for i in range(7)  # +0%, +0.5%, +1%, +1.5%, +2%, +2.5%, +3%
-        ]
-
-        trail_step = None
-        exit_reason = None
-        for p in sim_prices:
-            before_trail = pos.trailing_active
-            r = pos.update_price(p)
-            if pos.trailing_active and not before_trail:
-                trail_step = step("移動停利啟動",
-                                  f"價={p}  peak={pos.peak_price}  "
-                                  f"漲幅={((p-surge_price)/surge_price*100):.1f}%",
-                                  trigger_price=p, peak=pos.peak_price)
-            if r:
-                exit_reason = r
-                step("提前出場", f"price={p}  reason={r}", price=p)
-                break
-
-        # ── Phase 5: 高點拉回 → 移動停利出場 ────────────────────────
-        if exit_reason is None:
-            peak = pos.peak_price
-            pullback_price = round(peak * (1 - trailing_pullback_pct / 100 - 0.001), 1)
-            exit_reason = pos.update_price(pullback_price)
-            step("回落觸發",
-                 f"peak={peak}  exit_price={pullback_price}  "
-                 f"回落={(peak-pullback_price)/peak*100:.2f}%  reason={exit_reason}",
-                 peak=peak, exit_price=pullback_price, reason=exit_reason)
-        else:
-            pullback_price = pos.peak_price  # 已提前出場
-
-        pnl = (pullback_price - surge_price) * lots * 1000
-
-        sell_msg = (
-            f"🔴【完整模擬出場】{symbol}\n"
-            f"原因={exit_reason}  {surge_price}→{pullback_price}  {lots}張\n"
-            f"損益={pnl:+,.0f}  peak={pos.peak_price}"
-        )
-        sent_sell = notifier.send(sell_msg)
-        step("LINE出場通知", f"sent={sent_sell}")
-
-        step("結算",
-             f"損益={pnl:+,.0f}  {'獲利' if pnl > 0 else '虧損'}  "
-             f"進={surge_price}→出={pullback_price}  {lots}張",
-             pnl=pnl, win=pnl > 0, entry=surge_price, exit=pullback_price, lots=lots)
-
-        return {"ok": True, "pnl": pnl, "win": pnl > 0, "log": log}
 
     # ── Restart FastAPI ───────────────────────────────────────────────────────
     @app.post("/restart/fastapi")

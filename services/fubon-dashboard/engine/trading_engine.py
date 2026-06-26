@@ -65,6 +65,9 @@ class TradingEngine:
         # SDK/account 供外部手動下單使用
         self.sdk = None
         self.account = None
+        # 個股期貨 symbol map 和即時快取
+        self.futures_sym_map: dict[str, str] = {}   # stock_id → futures symbol
+        self.futures_signals: dict = {}              # stock_id → FuturesSignal
 
         _data = os.environ.get("FUBON_DATA_DIR", "/home/tommy0322/fubon-data")
         self._default_config = os.environ.get("FUBON_CONFIG", "/home/tommy0322/fubon-config/config.yaml")
@@ -454,6 +457,10 @@ class TradingEngine:
                 except Exception as e:
                     logger.debug("期貨 symbol %s 失敗: %s", fsym, e)
 
+        # 暴露給 API endpoint 使用
+        self.futures_sym_map = futures_sym_map
+        self.futures_signals = futures_signals
+
         # ── 交易模組 ─────────────────────────────────────────────────────────
         # broker 永遠 dry_run=True 作安全護欄，真實下單需明確修改此行並充分測試
         broker = FubonBroker(dry_run=True)
@@ -536,13 +543,17 @@ class TradingEngine:
                 dt.record_trade(pnl=pnl, symbol=symbol, lots=pos_before.lots,
                                 entry_price=pos_before.entry_price, exit_price=price)
                 _entry_times.pop(symbol, None)
-                # 取消未成交的停損/停利觸價單
+                # 取消未成交的停損/停利觸價單，並主動賣出（dry_run=True 時只 log）
                 if symbol in condition_ids:
                     cids = condition_ids.pop(symbol)
                     if cids.get("sl"):
                         broker.cancel_conditional_order(cids["sl"])
                     if cids.get("tp"):
                         broker.cancel_conditional_order(cids["tp"])
+                try:
+                    broker.sell(symbol, pos_before.lots, price, reason=exit_reason)
+                except Exception as _se:
+                    logger.error("賣出下單失敗 %s: %s", symbol, _se)
                 logger.info("🔴 出場 %s  原因=%s  損益=%+.0f", symbol, exit_reason, pnl)
                 log_event("order_sell", symbol=symbol, reason=exit_reason,
                           entry_price=pos_before.entry_price, exit_price=price,
@@ -710,9 +721,17 @@ class TradingEngine:
             _entry_times[symbol] = now_tw()
             dt.record_entry(symbol)
 
+            # 實際買進（dry_run=True 時只 log，不送單）
+            # order_type=Stock（現買），與觸價賣單一致
+            try:
+                broker.buy(symbol, lots, price)
+            except Exception as _be:
+                logger.error("買進下單失敗 %s: %s", symbol, _be)
+
+            mode_tag = "DRY RUN" if broker.dry_run else "買進"
             logger.info(
-                "🟢 DRY RUN 買進 %s  價=%.2f  張=%d  停損=%.2f  停利=%.2f",
-                symbol, price, lots, stop_loss, take_profit,
+                "🟢 %s %s  價=%.2f  張=%d  停損=%.2f  停利=%.2f",
+                mode_tag, symbol, price, lots, stop_loss, take_profit,
             )
             log_event("order_buy", symbol=symbol, price=price, lots=lots,
                       stop_loss=stop_loss, take_profit=take_profit,
