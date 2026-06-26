@@ -351,6 +351,7 @@ institutional-investors/
 每月10-25日 12:00  Job 5 — 抓月營收（MOPS）
 每季（3/1, 5/16, 8/15, 11/15）  Job 6 — 抓季報 EPS（FinMind TaiwanStockFinancialStatements）
 每半年（1/1, 7/1）  Job 7 — 抓產業鏈分類（IC Chain），更新 ic_classification
+每週日 02:30       Cleanup — 刪除超過保留期的舊資料（PG；詳見「資料保留策略」）
 
 啟動時補抓（startup_gap_backfill）:
   容器/系統重啟時自動往回掃最近 14 曆日，找出 job1 缺失的交易日並補抓 job1/job2；
@@ -360,6 +361,33 @@ institutional-investors/
 > **排程引擎：** APScheduler（`AsyncIOScheduler`，timezone=Asia/Taipei），搭配 `job_watchdog`（每 30 分鐘檢查當日 job1/2/4/8 是否成功，失敗則補跑）與 `startup_gap_backfill`（開機時補歷史缺口）。
 
 > **Job 4 資料完整性防護：** Job 4 執行前查詢 DB 確認當日 `institutional` 資料已入庫；若無資料則跳過篩選並記錄警告，避免用舊資料計算 chip_ratio_6d。
+
+### 資料保留策略（DB 清理）
+
+每週日 02:30 自動執行 `job_cleanup_db`，刪除超過保留期的舊資料，防止長期運作後磁碟膨脹。清理結果記錄至 `fetch_log`（job_name = `job_cleanup`）。
+
+| 資料表 | 保留期 | 原因 |
+|--------|--------|------|
+| `daily_price` | **400 曆日** | screener 用 200d 窗口；雙倍緩衝確保不誤刪 |
+| `institutional` | **180 曆日** | chip_ratio 最大 30d 窗口；6 倍緩衝 |
+| `margin_trading` | **90 曆日** | margin 5d 變化窗口；11 倍緩衝 |
+| `securities_lending` | **90 曆日** | 同上 |
+| `shareholding` | **365 曆日** | TDCC 週更，保留 1 年趨勢分析 |
+| `screening_result` | **365 曆日** | 退場止損頁依賴歷史篩選紀錄 |
+| `fetch_log` | **90 曆日** | 作業日誌，無長期分析價值 |
+| `daytrade_candidate` | **90 曆日** | 當沖候選，短期參考 |
+| `daytrade_pre_session_log` | **90 曆日** | 作業日誌 |
+| `ai_pick` | **365 曆日** | AI 精選歷史記錄 |
+| `monthly_revenue` | **36 個月（3 年）** | YoY 計算需 2 年前資料；多留 1 年緩衝 |
+| `quarterly_eps` | **3 年** | EPS 趨勢分析 |
+| 其餘資料表 | **永久保留** | 使用者設定 / 參照表 / 產業鏈，不自動清除 |
+
+**SQLite（`ticks.db`）清理（由 fubon-dashboard 自行管理）：**
+
+| 資料表 | 保留期 | 觸發時機 |
+|--------|--------|----------|
+| `ticks` / `index_ticks` | **30 曆日** | 每日 20:00 自動清理 + VACUUM |
+| `intraday_trades` / `intraday_positions` | **60 曆日** | 引擎每次啟動時清理 |
 
 儀表板頂部狀態列顯示 7 個排程的執行狀態，完成後顯示台北時間更新時刻（如 `✓ 18:02`），尚未執行顯示「等待中」。Job5/6/7 使用動態 log key（如 `job5_202605`、`job6_q2_2026`、`job7_2026H1`）以支援多期紀錄。
 

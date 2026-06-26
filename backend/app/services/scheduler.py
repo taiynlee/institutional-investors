@@ -3,7 +3,7 @@ import logging
 import numpy as np
 from datetime import date, timedelta
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from sqlalchemy import select, and_, func
+from sqlalchemy import select, and_, func, text
 from app.db.base import AsyncSessionLocal
 from app.db.models import (
     FetchLog, DailyPrice, Institutional, MarginTrading,
@@ -1119,6 +1119,88 @@ async def job_watchdog():
             await job8_daytrade_screener()
 
 
+async def job_cleanup_db():
+    """每週日 02:30 — 刪除超過保留期的舊資料，回收磁碟空間。
+
+    保留策略（calendar days）：
+      daily_price          400d  screener 用 200d；雙倍緩衝
+      institutional        180d  chip_ratio 最大 30d 窗口；6x 緩衝
+      margin_trading        90d  margin 5d 窗口；11x 緩衝
+      securities_lending    90d
+      shareholding         365d  TDCC 週更，留 1 年趨勢
+      screening_result     365d  exit alerts 依賴
+      fetch_log             90d  作業日誌，無長期價值
+      daytrade_candidate    90d
+      daytrade_pre_session  90d
+      ai_pick              365d
+      monthly_revenue      36個月（3年 YoY）
+      quarterly_eps        12季（3年）
+
+    不清理：stock_list / stock_pool / us_watchlist / watchlist_a /
+             trading_settings / ic_classification / company_tags
+    """
+    from sqlalchemy import text
+    today = date.today()
+    total_deleted = 0
+
+    # (table_name, date_column, cutoff_days)  ← cutoff_days 為 calendar days
+    _DATE_CUTOFFS = [
+        ("daily_price",               "trade_date",  400),
+        ("institutional",             "trade_date",  180),
+        ("margin_trading",            "trade_date",   90),
+        ("securities_lending",        "trade_date",   90),
+        ("shareholding",              "report_date", 365),
+        ("screening_result",          "calc_date",   365),
+        ("fetch_log",                 "fetch_date",   90),
+        ("daytrade_candidate",        "trade_date",   90),
+        ("daytrade_pre_session_log",  "run_date",     90),
+        ("ai_pick",                   "calc_date",   365),
+    ]
+
+    try:
+        async with AsyncSessionLocal() as db:
+            for table, col, days in _DATE_CUTOFFS:
+                cutoff = today - timedelta(days=days)
+                result = await db.execute(
+                    text(f"DELETE FROM {table} WHERE {col} < :cutoff"),
+                    {"cutoff": cutoff},
+                )
+                n = result.rowcount
+                if n:
+                    logger.info("cleanup: %s 刪除 %d 筆（cutoff=%s）", table, n, cutoff)
+                total_deleted += n
+
+            # monthly_revenue：刪除 3 年前（36 個月）
+            cutoff_yr = today.year - 3
+            result = await db.execute(
+                text("DELETE FROM monthly_revenue WHERE (year < :yr) OR (year = :yr AND month < :mo)"),
+                {"yr": cutoff_yr, "mo": today.month},
+            )
+            n = result.rowcount
+            if n:
+                logger.info("cleanup: monthly_revenue 刪除 %d 筆（cutoff=%d-%02d）",
+                            n, cutoff_yr, today.month)
+            total_deleted += n
+
+            # quarterly_eps：刪除 3 年前（12 季）
+            result = await db.execute(
+                text("DELETE FROM quarterly_eps WHERE year < :yr"),
+                {"yr": today.year - 3},
+            )
+            n = result.rowcount
+            if n:
+                logger.info("cleanup: quarterly_eps 刪除 %d 筆（year < %d）", n, today.year - 3)
+            total_deleted += n
+
+            await db.commit()
+
+        logger.info("job_cleanup_db 完成：共刪除 %d 筆", total_deleted)
+        await _log_fetch("job_cleanup", today, "success", total_deleted)
+    except Exception as e:
+        logger.error("job_cleanup_db 失敗: %s", e)
+        await _log_fetch("job_cleanup", today, "failed")
+
+
 def create_scheduler() -> AsyncIOScheduler:
     scheduler = AsyncIOScheduler(timezone="Asia/Taipei", misfire_grace_time=300)
     scheduler.add_job(job1_institutional_price, "cron", hour=18, minute=0)
@@ -1134,6 +1216,7 @@ def create_scheduler() -> AsyncIOScheduler:
     scheduler.add_job(job6_quarterly_eps, "cron", month="11", day=15, hour=9, minute=0)
     scheduler.add_job(job6_quarterly_eps, "cron", month="3", day=1, hour=9, minute=0)
     scheduler.add_job(job7_ic_chain, "cron", month="1,7", day=1, hour=2, minute=0)
+    scheduler.add_job(job_cleanup_db, "cron", day_of_week="sun", hour=2, minute=30)
     scheduler.add_job(job_watchdog, "interval", minutes=30)
     return scheduler
 
