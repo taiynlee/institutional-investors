@@ -1099,7 +1099,8 @@ function SimulateBuySell() {
       })
       setSimPos(r.data)
       setExitPrice(String((r.data.stop_loss ?? 0).toFixed(1)))
-      setMsg({ ok: true, text: `✓ 模擬買入 ${symbol}，LINE 已送出` })
+      const lineSent = r.data.sent === true
+      setMsg({ ok: lineSent, text: lineSent ? `✓ 模擬買入 ${symbol}，LINE 已送出` : `✓ 模擬買入 ${symbol}（LINE 未送出，請確認 token 設定）` })
     } catch (e: any) {
       setMsg({ ok: false, text: `✕ ${e?.response?.data?.detail ?? e.message}` })
     } finally { setBusy(false) }
@@ -1111,7 +1112,8 @@ function SimulateBuySell() {
       const r = await axios.post(`${API}/debug/simulate-sell`, null, {
         params: { symbol, price: Number(exitPrice) || 0, reason: 'atr_stop' }
       })
-      setMsg({ ok: true, text: `✓ 模擬出場 ${symbol}，損益 ${r.data.pnl >= 0 ? '+' : ''}${r.data.pnl.toLocaleString()}，LINE 已送出` })
+      const lineSentS = r.data.sent === true
+      setMsg({ ok: true, text: `✓ 模擬出場 ${symbol}，損益 ${r.data.pnl >= 0 ? '+' : ''}${r.data.pnl.toLocaleString()}${lineSentS ? '，LINE 已送出' : '（LINE 未送出）'}` })
       setSimPos(null)
     } catch (e: any) {
       setMsg({ ok: false, text: `✕ ${e?.response?.data?.detail ?? e.message}` })
@@ -1148,7 +1150,7 @@ function SimulateBuySell() {
         {simPos && (
           <div className="flex flex-wrap items-end gap-3">
             <div className={`text-xs ${muted}`}>
-              持倉：{simPos.symbol} @ {simPos.entry_price}  停損={simPos.stop_loss?.toFixed(2)}  張={simPos.lots}
+              持倉：{simPos.symbol} @ {simPos.entry_price}  停損={simPos.stop_loss?.toFixed(2)}  停利={simPos.take_profit?.toFixed(2)}  張={simPos.lots}
             </div>
             <label className="flex flex-col gap-1">
               <span className={`text-[10px] uppercase tracking-wide ${muted}`}>出場價（預設停損）</span>
