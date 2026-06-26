@@ -22,8 +22,8 @@ type Tab = 'screener' | 'score-a' | 'score-b' | 'score-c' | 'watchlist-a' | 'res
 const TABS: { id: Tab; label: string; sub?: string }[] = [
   { id: 'screener',    label: '篩選總覽' },
   { id: 'day-trade',   label: '台股當沖' },
-  { id: 'score-a',    label: '策略A',   sub: '最新' },
-  { id: 'score-b',    label: '策略B',   sub: '近3日≥60' },
+  { id: 'score-a',    label: '策略A' },
+  { id: 'score-b',    label: '策略B' },
   { id: 'score-c',    label: '策略C' },
   { id: 'watchlist-a',label: 'A追蹤' },
   { id: 'result',       label: '篩選績效' },

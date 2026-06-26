@@ -54,6 +54,7 @@ class TradingEngine:
             "dry_run": True,
             "symbols": [],
             "tick_count": 0,
+            "signal_log": [],      # 訊號 log (newest first, max 200)
         }
         # 共享物件（引擎執行時填入，停止後清空）
         self.om: Optional[OrderManager] = None
@@ -212,6 +213,10 @@ class TradingEngine:
             try: return max(0, float(_gs("max_position_capital", str(max_position_capital))))
             except Exception: return max_position_capital
 
+        def _is_dry_run() -> bool:
+            try: return str(_gs("dry_run", "true")).lower() in ("true", "1", "yes")
+            except Exception: return True
+
         def _max_daily_positions() -> int:
             try: return max(1, int(_gs("max_daily_positions", str(max_daily_positions))))
             except Exception: return max_daily_positions
@@ -330,6 +335,51 @@ class TradingEngine:
                     logger.info("從 PG daytrade_candidate 取得 %d 檔標的（%s）", len(symbols), _data.get("date", "?"))
         except Exception as e:
             logger.warning("daytrade_list 讀取失敗，使用 config: %s", e)
+
+        # ── 盤前：過濾不可現股當沖的股票 ───────────────────────────────────
+        _before = len(symbols)
+        _restricted: set[str] = set()
+        import urllib.request as _ureq
+
+        # 1. 全額交割股（MI_MARGN 註記含 'O'）→ 不可當沖
+        try:
+            _req = _ureq.Request(
+                "https://openapi.twse.com.tw/v1/exchangeReport/MI_MARGN",
+                headers={"User-Agent": "Mozilla/5.0", "accept": "application/json"},
+            )
+            with _ureq.urlopen(_req, timeout=10) as _resp:
+                _margn = json.loads(_resp.read().decode("utf-8"))
+            _full_cash = {row["股票代號"].strip() for row in _margn if "O" in row.get("註記", "")}
+            _restricted |= _full_cash
+            logger.info("全額交割股 %d 檔", len(_full_cash))
+        except Exception as _e:
+            logger.warning("全額交割清單取得失敗（略過）: %s", _e)
+
+        # 2. 處置股票（TWT85U 分盤集合競價欄位含 '**'）→ 不可當沖
+        try:
+            _req2 = _ureq.Request(
+                "https://www.twse.com.tw/exchangeReport/TWT85U?response=json",
+                headers={"User-Agent": "Mozilla/5.0", "Referer": "https://www.twse.com.tw/"},
+            )
+            with _ureq.urlopen(_req2, timeout=10) as _resp2:
+                _twtdata = json.loads(_resp2.read().decode("utf-8"))
+            _disposal = {
+                row[0].strip()
+                for row in _twtdata.get("data", [])
+                if "**" in (row[2] if len(row) > 2 else "")
+            }
+            _restricted |= _disposal
+            logger.info("處置股票（分盤）%d 檔: %s", len(_disposal), list(_disposal))
+        except Exception as _e:
+            logger.warning("處置股票清單取得失敗（略過）: %s", _e)
+
+        if _restricted:
+            _removed = [s for s in symbols if s in _restricted]
+            symbols   = [s for s in symbols if s not in _restricted]
+            if _removed:
+                logger.info("排除不可當沖標的 %d 檔: %s", len(_removed), _removed)
+
+        logger.info("當沖標的最終 %d 檔（原 %d 檔）", len(symbols), _before)
 
         with self._lock:
             self._state["symbols"] = symbols
@@ -513,6 +563,24 @@ class TradingEngine:
         tick_count = [0]
         last_signal_eval: dict[str, datetime] = {}
         _entry_times: dict[str, datetime] = {}
+        _cum_bid: dict[str, int] = {}  # 累積已成交主買量
+        _cum_ask: dict[str, int] = {}  # 累積已成交主賣量
+        _log_cleared_date = [None]     # 追蹤清除日期
+
+        def _append_log(entry: dict):
+            """新增訊號 log，最新在最前；每個交易日 09:00 清除前一天資料。"""
+            now_d = today_tw().isoformat()
+            now_t = now_tw()
+            if (now_d != _log_cleared_date[0]
+                    and now_t.hour == 9 and now_t.minute <= 5):
+                with self._lock:
+                    self._state["signal_log"] = []
+                _log_cleared_date[0] = now_d
+            with self._lock:
+                log: list = self._state["signal_log"]
+                log.insert(0, entry)
+                if len(log) > 200:
+                    self._state["signal_log"] = log[:200]
 
         def on_tick(symbol: str, price: float, size: int, ts_ns: int):
             tick_count[0] += 1
@@ -558,6 +626,17 @@ class TradingEngine:
                 log_event("order_sell", symbol=symbol, reason=exit_reason,
                           entry_price=pos_before.entry_price, exit_price=price,
                           lots=pos_before.lots, pnl=pnl, cumulative_pnl=dt.total_pnl)
+                _append_log({
+                    "type": "sell",
+                    "ts": now_tw().strftime("%H:%M:%S"),
+                    "symbol": symbol,
+                    "name": sname(symbol),
+                    "lots": pos_before.lots,
+                    "entry_price": pos_before.entry_price,
+                    "exit_price": price,
+                    "pnl": round(pnl),
+                    "reason": exit_reason,
+                })
                 notifier.send(
                     f"🔴 出場 {symbol} {sname(symbol)}\n"
                     f"原因={exit_reason}  {pos_before.entry_price:.0f}→{price:.0f}\n"
@@ -595,6 +674,8 @@ class TradingEngine:
                         "  updated_at=excluded.updated_at",
                         (symbol, bid_vol, ask_vol, now_tw().strftime("%H:%M:%S")),
                     )
+                _cum_bid[symbol] = _cum_bid.get(symbol, 0) + bid_vol
+                _cum_ask[symbol] = _cum_ask.get(symbol, 0) + ask_vol
             except Exception as e:
                 logger.debug("on_quote 異常: %s", e)
 
@@ -645,10 +726,15 @@ class TradingEngine:
             combiner.max_change_pct = _max_change_pct()
             combiner.market_rise_min = _market_rise_min()
             rm.force_exit_time = _force_exit_time()
+            self._state["dry_run"] = _is_dry_run()  # 讓 WebSocket push 反映最新設定
 
             # 大盤日漲幅 gate：昨收取得失敗（_idx_ref=0）時放行
             market_chg = _idx.get("chg_day_pct", 0.0) if _idx_ref > 0 else 999.0
 
+            _b = _cum_bid.get(symbol, 0)
+            _a = _cum_ask.get(symbol, 0)
+            _bp = _b / (_b + _a) * 100 if (_b + _a) > 0 else 50.0
+            _thr = _tick_rise_threshold()
             result = sess.evaluate(
                 combiner=combiner,
                 current_time=now_time,
@@ -656,11 +742,26 @@ class TradingEngine:
                 max_positions=_max_daily_positions(),
                 not_in_position=not_in_pos,
                 market_chg_pct=market_chg,
-                tick_rise_threshold=_tick_rise_threshold(),
+                tick_rise_threshold=_thr,
                 futures_signal=futures_signals.get(symbol),
                 entry_cutoff_mins=_entry_cutoff(),
                 entry_start_mins=_entry_start_mins(),
+                bid_pct=_bp,
             )
+            # 只在 60s tick 條件達標時才記 log（避免噪音）
+            if sess.tick_rise_60s >= _thr:
+                _append_log({
+                    "type": "eval",
+                    "ts": now_tw().strftime("%H:%M:%S"),
+                    "symbol": symbol,
+                    "name": sname(symbol),
+                    "passed": result.should_enter,
+                    "reason": result.reason or "ok",
+                    "tick_rise": round(sess.tick_rise_60s, 1),
+                    "bid_pct": round(_bp, 1),
+                    "change_pct": round(sess.change_pct, 2),
+                    "market_pct": round(market_chg, 2),
+                })
             theory = sess.evaluate_theoretical(
                 combiner=combiner,
                 current_time=now_time,
@@ -689,6 +790,7 @@ class TradingEngine:
                 _place_order(symbol, sess)
 
         def _place_order(symbol: str, sess: SymbolSession):
+            broker.dry_run = _is_dry_run()  # 每次下單前同步最新 dry_run 設定
             price = sess.curr_price
             remaining = total_capital - sum(
                 p.entry_price * p.lots * 1000 for p in om.positions.values()
@@ -736,6 +838,17 @@ class TradingEngine:
             log_event("order_buy", symbol=symbol, price=price, lots=lots,
                       stop_loss=stop_loss, take_profit=take_profit,
                       capital_used=price * lots * 1000)
+            _append_log({
+                "type": "buy",
+                "ts": now_tw().strftime("%H:%M:%S"),
+                "symbol": symbol,
+                "name": sname(symbol),
+                "lots": lots,
+                "price": price,
+                "stop_loss": stop_loss,
+                "take_profit": take_profit,
+                "dry_run": broker.dry_run,
+            })
             notifier.send(
                 f"🟢 進場 {symbol} {sname(symbol)}\n"
                 f"價={price:.0f}  張數={lots}\n"
@@ -743,11 +856,12 @@ class TradingEngine:
             )
 
             # 掛觸價停損/停利賣單（dry_run 時只 log）
+            trade_date_slash = today_str.replace("-", "/")  # Fubon SDK 需要 YYYY/MM/DD
             sl_guid = broker.place_conditional_stop(
-                symbol=symbol, lots=lots, stop_price=stop_loss, trade_date=today_str
+                symbol=symbol, lots=lots, stop_price=stop_loss, trade_date=trade_date_slash
             )
             tp_guid = broker.place_conditional_take_profit(
-                symbol=symbol, lots=lots, trigger_price=take_profit, trade_date=today_str
+                symbol=symbol, lots=lots, trigger_price=take_profit, trade_date=trade_date_slash
             )
             condition_ids[symbol] = {"sl": sl_guid, "tp": tp_guid}
 

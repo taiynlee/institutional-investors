@@ -35,9 +35,9 @@ const SUB_TABS: { id: SubTab; label: string }[] = [
   { id: 'live',        label: '今日交易' },
   { id: 'manual',     label: '手動買賣' },
   { id: 'trades',      label: '交易紀錄' },
-  { id: 'pre-session', label: '盤前狀況' },
+  { id: 'pre-session', label: '當沖篩選' },
   { id: 'params',      label: '交易設定' },
-  { id: 'config',      label: '當沖設定' },
+  { id: 'config',      label: '後台設定' },
   { id: 'health',      label: '當沖健診' },
 ]
 
@@ -70,6 +70,87 @@ function Badge({ text, color }: { text: string; color?: string }) {
 function SectionLabel({ children }: { children: ReactNode }) {
   return (
     <div className={`text-[10px] uppercase tracking-[.5px] ${muted} mb-1.5`}>{children}</div>
+  )
+}
+
+// ── 訊號 Log ─────────────────────────────────────────────────────────────────
+const REASON_LABEL: Record<string, string> = {
+  time_not_ok:              '時間窗口外',
+  already_in_position:      '同標的持倉中',
+  max_daily_trades_reached: '已達當日上限',
+  ok:                       '全通過',
+}
+function reasonLabel(r: string): string {
+  if (REASON_LABEL[r]) return REASON_LABEL[r]
+  if (r.startsWith('market_rise_low_'))  return `大盤漲幅不足(${r.split('_').pop()}%)`
+  if (r.startsWith('change_pct_exceeded_')) return `個股漲跌過大(${r.split('exceeded_')[1]}%)`
+  if (r.startsWith('tick_rise_low_'))    return `60s tick不足(${r.split('low_')[1]})`
+  if (r.startsWith('bid_pct_low_'))      return `買盤不足(${r.split('low_')[1]}%)`
+  if (r === 'futures_not_leading')       return '期貨未領漲'
+  return r
+}
+
+function SignalLogRow({ e, windowSecs = 60 }: { e: any; windowSecs?: number }) {
+  if (e.type === 'buy') {
+    return (
+      <div className={`flex gap-1.5 items-baseline text-green-400`}>
+        <span className="text-[#6b84a0] shrink-0">[{e.ts}]</span>
+        <span className="shrink-0">🟢 BUY</span>
+        <span className="font-bold shrink-0">{e.name} {e.symbol}</span>
+        <span>{e.lots}張 @{e.price?.toFixed(1)}</span>
+        <span className="text-orange-400">停損{e.stop_loss?.toFixed(1)}</span>
+        <span className="text-green-300">停利{e.take_profit?.toFixed(1)}</span>
+        {e.dry_run && <span className="text-blue-400 text-[10px]">[DRY]</span>}
+      </div>
+    )
+  }
+  if (e.type === 'sell') {
+    const pnlCls = (e.pnl ?? 0) >= 0 ? 'text-red-400' : 'text-green-400'
+    return (
+      <div className={`flex gap-1.5 items-baseline text-red-400`}>
+        <span className="text-[#6b84a0] shrink-0">[{e.ts}]</span>
+        <span className="shrink-0">🔴 SELL</span>
+        <span className="font-bold shrink-0">{e.name} {e.symbol}</span>
+        <span>{e.lots}張</span>
+        <span>{e.entry_price?.toFixed(1)}→{e.exit_price?.toFixed(1)}</span>
+        <span className={pnlCls}>損益{(e.pnl ?? 0) >= 0 ? '+' : ''}{(e.pnl ?? 0).toLocaleString()}</span>
+        <span className="text-[#6b84a0] text-[10px]">{e.reason}</span>
+      </div>
+    )
+  }
+  // eval
+  const passed = e.passed === true
+  return (
+    <div className={`flex gap-1.5 items-baseline ${passed ? 'text-green-300' : 'text-yellow-400'}`}>
+      <span className="text-[#6b84a0] shrink-0">[{e.ts}]</span>
+      <span className="shrink-0">{passed ? '✅' : '⚠'}</span>
+      <span className="font-bold shrink-0">{e.name} {e.symbol}</span>
+      <span className={`${mono} text-[10px]`}>{windowSecs}s▲{e.tick_rise}tick</span>
+      <span className={`${mono} text-[10px]`}>bid={e.bid_pct}%</span>
+      <span className={`${mono} text-[10px]`}>漲{e.change_pct}%</span>
+      <span className={`${mono} text-[10px]`}>市場{e.market_pct}%</span>
+      {!passed && <span className="text-red-400 text-[10px]">✗{reasonLabel(e.reason)}</span>}
+    </div>
+  )
+}
+
+function SignalLog({ entries, windowSecs, threshold }: { entries: any[]; windowSecs: number; threshold: number }) {
+  return (
+    <div className={card}>
+      <div className="px-4 py-2 border-b border-[#253d5c] flex items-center gap-2">
+        <span className="text-xs text-[#6b84a0]">訊號 Log</span>
+        <span className={`text-[10px] ${muted}`}>{windowSecs}s tick ≥{threshold} 達標才記錄・最新在上・開盤前清除</span>
+        {entries.length > 0 && <span className="ml-auto text-[10px] text-[#6b84a0]">{entries.length} 筆</span>}
+      </div>
+      {entries.length === 0
+        ? <div className={`px-4 py-3 text-[11px] ${muted}`}>等待訊號觸發...</div>
+        : (
+          <div className={`overflow-y-auto max-h-[260px] px-3 py-2 space-y-[3px] font-mono text-[11px]`}>
+            {entries.map((e, i) => <SignalLogRow key={i} e={e} windowSecs={windowSecs} />)}
+          </div>
+        )
+      }
+    </div>
   )
 }
 
@@ -127,17 +208,18 @@ function LiveTab() {
   const idxData = ticks['__index__'] ?? {}
   const idxPrice: number | null = idxData.price ?? null
   const idxChgDayPct: number = idxData.chg_day_pct ?? 0
-  const isDry = status !== null
-
 
   return (
     <div className="space-y-4">
       {/* 6 top metrics row */}
       <div className="grid grid-cols-6 gap-2">
-        {/* DRY RUN */}
+        {/* 模式（dry_run 熱重載）*/}
         <div className={`${card} px-3 py-3 flex flex-col justify-center`}>
           <span className="text-[10px] text-[#6b84a0] mb-0.5">模式</span>
-          <span className="text-xs font-bold text-blue-400">● DRY RUN 模擬模式</span>
+          {stream?.dry_run !== false
+            ? <span className="text-xs font-bold text-blue-400">● DRY RUN 模擬</span>
+            : <span className="text-xs font-bold text-red-400">● 實盤 LIVE</span>
+          }
         </div>
         {/* 損益 */}
         <div className={`${card} px-3 py-3 flex flex-col justify-center`}>
@@ -148,7 +230,10 @@ function LiveTab() {
           <span className={`text-[10px] ${muted}`}>{status?.trade_count ?? 0} 筆</span>
         </div>
         {/* 今日已交易 / 持倉 */}
-        <div className={`${card} px-3 py-3 flex flex-col justify-center`}>
+        <div
+          className={`${card} px-3 py-3 flex flex-col justify-center cursor-help`}
+          title={`進場八條件：\n① 時間窗口（進場開始 ~ 進場截止）\n② 大盤日漲幅 > market_rise_min\n③ 同標的當下未持倉\n④ 今日進場次數 < max_daily_positions\n⑤ 個股漲跌幅在 ±max_change_pct 內\n⑥ ${stream?.tick_window_seconds ?? 60}秒內上漲 ≥ ${stream?.tick_rise_threshold ?? 4} 個 tick\n⑦ 若有個股期貨：期貨價 > 現價（正價差）\n⑧ 已成交買盤 > 賣盤（bid_pct > 50%）`}
+        >
           <span className="text-[10px] text-[#6b84a0] mb-0.5">今日已交易</span>
           <span className="text-base font-bold text-[#60a5fa]">
             {stream?.pnl?.daily_entries ?? 0}
@@ -231,7 +316,10 @@ function LiveTab() {
       <div className={card}>
         {/* 列表標頭 */}
         <div className="px-4 py-2 border-b border-[#253d5c] flex items-center gap-2">
-          <span className="text-sm font-semibold text-[#dde6f0]">明日選股</span>
+          <span
+            className="text-sm font-semibold text-[#dde6f0] cursor-help border-b border-dotted border-[#4a6fa8]"
+            title={`最新觀察名單 — 產生邏輯（每日 21:05 自動執行）\n\n四個來源取聯集：\n① 股票池 × 當沖篩選條件\n   必要條件（4條全過）：TWSE當沖標的 + 近5日均量≥2000張 + 收盤>MA20 + 外資淨+投信淨≥0\n   籌碼加分（≥2條）：外資買超 + 投信買超 + 融資日減\n② ∪ 策略A + 策略B 當日篩選結果\n③ ∪ 策略C 滿分100分\n   （月營收YoY≥10% + 連續加速 + 近2季EPS>0 + 各項評分滿分）\n④ ∪ A追蹤清單（status: tracking / triggered / entered）\n\n過濾：\n⑤ 扣除退場止損名單\n⑥ 昨收 200~990 元（可在當沖設定調整）`}
+          >最新觀察名單</span>
           {list && <Badge text={`${list.count} 檔`} color="blue" />}
           {list?.date && <span className={`text-xs ${muted}`}>{list.date}</span>}
         </div>
@@ -250,13 +338,13 @@ function LiveTab() {
                   <th className="px-3 py-2 text-right" style={{minWidth:60}}>現價</th>
                   <th className="px-3 py-2 text-right" style={{minWidth:56}}>漲跌</th>
                   <th className="px-3 py-2 text-right" style={{minWidth:66}}>漲跌%</th>
-                  <th className="px-3 py-2 text-left"  style={{minWidth:104}}>買賣盤</th>
+                  <th className="px-3 py-2 text-left"  style={{minWidth:104}}>已成交買賣盤</th>
                   <th className="px-3 py-2 text-right" style={{minWidth:56}}>期貨</th>
                   <th className="px-3 py-2 text-right" style={{minWidth:50}}>差價</th>
                   <th className="px-3 py-2 text-right" style={{minWidth:56}}>Open</th>
                   <th className="px-3 py-2 text-right" style={{minWidth:56}}>High</th>
                   <th className="px-3 py-2 text-right" style={{minWidth:56}}>Low</th>
-                  <th className="px-3 py-2 text-right" style={{minWidth:72}}>今量</th>
+                  <th className="px-3 py-2 text-right" style={{minWidth:72}}>今日累積量/5日均量</th>
                 </tr>
               </thead>
               <tbody>
@@ -351,23 +439,20 @@ function LiveTab() {
                       <td className={`px-3 py-2.5 text-right ${mono} text-xs text-green-400`}>
                         {low_v != null ? low_v.toFixed(1) : '—'}
                       </td>
-                      {/* 今量 ratio bar */}
+                      {/* 今日累積量 / 5日均量 % */}
                       <td className="px-3 py-2.5">
-                        {vol != null ? (() => {
-                          const ratio = s.avg_vol5 > 0 ? vol / s.avg_vol5 : null
-                          const barW  = ratio != null ? Math.min(ratio * 100, 100) : 0
-                          const barCl = ratio == null ? 'bg-[#6b84a0]' : ratio >= 1.2 ? 'bg-green-400' : ratio >= 0.5 ? 'bg-yellow-400' : 'bg-[#6b84a0]'
-                          const txtCl = ratio == null ? muted : ratio >= 1.2 ? 'text-green-400' : ratio >= 0.5 ? 'text-yellow-400' : muted
+                        {vol != null && vol > 0 && s.avg_vol5 > 0 ? (() => {
+                          const paceRaw = vol / s.avg_vol5 * 100
+                          const barW    = Math.min(paceRaw, 100)
+                          const barCl   = paceRaw >= 100 ? 'bg-green-400' : paceRaw >= 50 ? 'bg-yellow-400' : 'bg-[#6b84a0]'
+                          const txtCl   = paceRaw >= 100 ? 'text-green-400' : paceRaw >= 50 ? 'text-yellow-400' : muted
+                          const label   = paceRaw < 1 ? '<1%' : `${Math.round(paceRaw)}%`
                           return (
-                            <div style={{width:92}}>
+                            <div style={{width:60}}>
                               <div className="h-[4px] rounded mb-1 bg-[#253d5c]">
                                 <div className={`h-full rounded ${barCl}`} style={{width:`${barW}%`}} />
                               </div>
-                              <div className={`flex items-center gap-1 text-[10px] ${mono}`}>
-                                <span className={txtCl}>{vol >= 1000 ? `${Math.floor(vol/1000)}K` : vol}張</span>
-                                <span className={muted}>│</span>
-                                <span className={muted}>avg {s.avg_vol5 >= 1000 ? `${Math.round(s.avg_vol5/1000)}K` : s.avg_vol5}</span>
-                              </div>
+                              <span className={`text-[10px] ${mono} ${txtCl}`}>{label}</span>
                             </div>
                           )
                         })() : <span className={muted}>—</span>}
@@ -380,6 +465,13 @@ function LiveTab() {
           </div>
         )}
       </div>
+
+      {/* 訊號 Log */}
+      <SignalLog
+        entries={stream?.signal_log ?? []}
+        windowSecs={stream?.tick_window_seconds ?? 60}
+        threshold={stream?.tick_rise_threshold ?? 4}
+      />
     </div>
   )
 }
@@ -558,16 +650,23 @@ function TradesTab() {
   )
 }
 
-// ── 盤前狀況 ─────────────────────────────────────────────────────────────────
+// ── 當沖篩選 ─────────────────────────────────────────────────────────────────
 function PreSessionTab() {
-  const [logs, setLogs]         = useState<any[]>([])
   const [dates, setDates]       = useState<{ date: string; count: number }[]>([])
   const [selDate, setSelDate]   = useState('')
   const [list, setList]         = useState<any | null>(null)
   const [listLoading, setListLoading] = useState(false)
+  const [priceMin, setPriceMin] = useState<number>(200)
+  const [priceMax, setPriceMax] = useState<number>(990)
 
   useEffect(() => {
-    axios.get(`${API}/pre-session/logs`).then(r => setLogs(r.data)).catch(() => {})
+    axios.get(`${API}/trading-params`).then(r => {
+      if (r.data.daytrade_price_min != null) setPriceMin(r.data.daytrade_price_min)
+      if (r.data.daytrade_price_max != null) setPriceMax(r.data.daytrade_price_max)
+    }).catch(() => {})
+  }, [])
+
+  useEffect(() => {
     axios.get(`${API}/daytrade-list/dates`).then(r => {
       setDates(r.data)
       if (r.data.length > 0) setSelDate(r.data[0].date)
@@ -583,7 +682,6 @@ function PreSessionTab() {
       .finally(() => setListLoading(false))
   }, [selDate])
 
-  const latest = logs[0]
   const stocks: any[] = list?.stocks ?? []
 
   const ck  = (v: boolean) => v
@@ -595,50 +693,38 @@ function PreSessionTab() {
 
   return (
     <div className="space-y-4">
-      {/* 盤前批次摘要 */}
-      {latest && (
-        <div className={`${card} px-4 py-3 flex items-center gap-6`}>
-          <div>
-            <div className={`text-[10px] ${muted}`}>最後執行</div>
-            <div className={`${mono} text-sm text-[#dde6f0]`}>{latest.run_date}</div>
-          </div>
-          <div>
-            <div className={`text-[10px] ${muted}`}>結果</div>
-            <div className={`text-sm font-bold ${latest.status === 'ok' ? 'text-green-400' : 'text-red-400'}`}>
-              {latest.status === 'ok' ? '✔ 成功' : '✘ 失敗'}
-            </div>
-          </div>
-          <div>
-            <div className={`text-[10px] ${muted}`}>成功 / 總計</div>
-            <div className={`${mono} text-sm text-[#dde6f0]`}>{latest.success_stocks} / {latest.total_stocks}</div>
-          </div>
-          {latest.finished_at && (
-            <div>
-              <div className={`text-[10px] ${muted}`}>完成時間</div>
-              <div className={`${mono} text-xs text-[#dde6f0]`}>{latest.finished_at}</div>
-            </div>
-          )}
-          {latest.error_msg && (
-            <div className="flex-1">
-              <div className={`text-[10px] ${muted}`}>錯誤</div>
-              <div className="text-xs text-red-400">{latest.error_msg}</div>
-            </div>
-          )}
-        </div>
-      )}
-
       {/* 篩選條件說明 */}
       <div className={`${card} px-4 py-3`}>
-        <div className={`text-[10px] uppercase tracking-widest ${muted} mb-2`}>每日選股規則</div>
-        <div className="grid grid-cols-2 gap-x-8 gap-y-1 text-xs text-[#dde6f0]">
-          <div className="font-semibold text-[#60a5fa] mb-0.5">必要條件（3條全過）</div>
-          <div className="font-semibold text-[#60a5fa] mb-0.5">籌碼加分（≥ 2條入選）</div>
-          <div>✔ 在 TWSE 當沖標的名單</div>
-          <div>⬡ 外資昨日買超（foreign_net &gt; 0）</div>
-          <div>✔ 近5日均量 ≥ 2000張（avg_vol5）</div>
-          <div>⬡ 投信連續買超（trust_net &gt; 0）</div>
-          <div>✔ 收盤價 &gt; MA20（日線）</div>
-          <div>⬡ 融資餘額日減少（margin_change &lt; 0）</div>
+        <div className={`text-[10px] uppercase tracking-widest ${muted} mb-3`}>最新觀察名單產生邏輯（每日 21:05）</div>
+        <div className="space-y-3 text-xs text-[#dde6f0]">
+          <div>
+            <div className="font-semibold text-[#60a5fa] mb-1">① 股票池 × 當沖篩選條件</div>
+            <div className="grid grid-cols-2 gap-x-8 gap-y-0.5 pl-3">
+              <div className="text-[#6b84a0] text-[11px]">必要條件（4條全過）</div>
+              <div className="text-[#6b84a0] text-[11px]">籌碼加分（≥ 2條入選）</div>
+              <div>✔ 在 TWSE 當沖標的名單</div>
+              <div>⬡ 外資昨日買超（foreign_net &gt; 0）</div>
+              <div>✔ 近5日均量 ≥ 2000張</div>
+              <div>⬡ 投信連續買超（trust_net &gt; 0）</div>
+              <div>✔ 收盤價 &gt; MA20（日線）</div>
+              <div>⬡ 融資餘額日減少（margin_change &lt; 0）</div>
+              <div>✔ 外資淨＋投信淨 ≥ 0</div>
+              <div></div>
+            </div>
+          </div>
+          <div>
+            <div className="font-semibold text-[#60a5fa] mb-0.5">② ∪ 策略A + 策略B 當日篩選結果</div>
+          </div>
+          <div>
+            <div className="font-semibold text-[#60a5fa] mb-0.5">③ ∪ 策略C 滿分100分（月營收加速 + 季EPS全正）</div>
+          </div>
+          <div>
+            <div className="font-semibold text-[#60a5fa] mb-0.5">④ ∪ A追蹤清單（tracking / triggered / entered）</div>
+          </div>
+          <div className="pt-1 border-t border-[#253d5c]">
+            <div className="font-semibold text-[#f59e0b] mb-0.5">過濾</div>
+            <div>扣除退場止損名單　·　昨收 {priceMin}~{priceMax} 元</div>
+          </div>
         </div>
       </div>
 
@@ -706,10 +792,10 @@ function PreSessionTab() {
                         </span>
                       </td>
                       <td className={`px-3 py-2.5 text-right ${mono} text-xs ${forOk ? 'text-green-400' : 'text-red-400'}`}>
-                        {s.foreign_net > 0 ? '+' : ''}{s.foreign_net?.toLocaleString() ?? '—'}
+                        {s.foreign_net > 0 ? '+' : ''}{s.foreign_net != null ? Math.round(s.foreign_net).toLocaleString() : '—'}
                       </td>
                       <td className={`px-3 py-2.5 text-right ${mono} text-xs ${truOk ? 'text-green-400' : 'text-red-400'}`}>
-                        {s.trust_net > 0 ? '+' : ''}{s.trust_net?.toLocaleString() ?? '—'}
+                        {s.trust_net > 0 ? '+' : ''}{s.trust_net != null ? Math.round(s.trust_net).toLocaleString() : '—'}
                       </td>
                       <td className={`px-3 py-2.5 text-right ${mono} text-xs ${mgnOk ? 'text-green-400' : 'text-[#dde6f0]'}`}>
                         {s.margin_change > 0 ? '+' : ''}{s.margin_change?.toLocaleString() ?? '—'}
@@ -723,25 +809,6 @@ function PreSessionTab() {
         )}
       </div>
 
-      {/* 歷史執行紀錄（折疊摘要） */}
-      {logs.length > 1 && (
-        <div className={card}>
-          <div className={`px-4 py-2 border-b border-[#253d5c] text-xs ${muted}`}>執行紀錄（最近{logs.length}次）</div>
-          <table className="w-full text-xs">
-            <tbody>
-              {logs.map(log => (
-                <tr key={log.id} className="border-b border-[#253d5c] hover:bg-[#1a2d4a]">
-                  <td className={`px-4 py-1.5 ${mono} text-[#dde6f0]`}>{log.run_date}</td>
-                  <td className={`px-4 py-1.5 font-bold ${log.status === 'ok' ? 'text-green-400' : 'text-red-400'}`}>{log.status}</td>
-                  <td className={`px-4 py-1.5 ${muted}`}>{log.success_stocks}/{log.total_stocks}</td>
-                  <td className={`px-4 py-1.5 ${mono} ${muted}`}>{log.started_at ?? '—'}</td>
-                  <td className={`px-4 py-1.5 text-red-400`}>{log.error_msg ?? ''}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
     </div>
   )
 }
@@ -757,7 +824,7 @@ const PARAM_DEFS: PD[] = [
   { id:'tick_window_seconds',  group:'進場條件', label:'tick 觀察窗口',        desc:'計算 tick_rise 用的滾動時間窗口（秒）；預設60秒 = 看過去1分鐘漲了幾tick', unit:'秒', rtKey:'tick_window_seconds', type:'number', step:10, min:10, max:300, canDisable:false },
   { id:'tick_rise_threshold',  group:'進場條件', label:'tick 上漲門檻',        desc:'觀察窗口內股價上漲需 ≥ 此 tick 數才觸發進場；tick 依各價位不同計算', unit:'tick', rtKey:'tick_rise_threshold', type:'number', step:1, min:1, canDisable:false },
   { id:'max_change_pct',       group:'進場條件', label:'最大漲跌幅',           desc:'個股當日漲跌幅（絕對值）超過此%不進場，避免追高或跌太多', unit:'%', rtKey:'max_change_pct', type:'number', step:0.5, min:0.5, canDisable:false },
-  { id:'market_rise_min',      group:'進場條件', label:'大盤日漲幅門檻',       desc:'加權今日較昨收漲幅須 > 此%才允許開倉；0 = 不限制', unit:'%', rtKey:'market_rise_min', type:'number', step:0.5, canDisable:false },
+  { id:'market_rise_min',      group:'進場條件', label:'大盤日漲幅門檻',       desc:'加權今日較昨收漲幅須 > 此%才允許開倉；建議 0.1（大盤必須是漲的）；0 = 不限制', unit:'%', rtKey:'market_rise_min', type:'number', step:0.1, min:0, canDisable:false },
   // 停損停利
   { id:'stop_loss_ticks',      group:'停損停利', label:'停損 tick 數',    desc:'進場後向下跌超過此 tick 數觸發停損（觸價單）；停損價 = 進場價 - N × tick_size，向上捨入', unit:'tick', rtKey:'stop_loss_ticks', type:'number', step:1, min:1, canDisable:false },
   { id:'take_profit_add_pct',  group:'停損停利', label:'停利附加漲幅',    desc:'停利觸價單 = 昨收 × (1 + (進場時漲幅 + 此%) / 100)，向下捨入 tick；例：進場漲4%、附加4% → 停利在昨收漲8%', unit:'%', rtKey:'take_profit_add_pct', type:'number', step:0.5, min:0.5, canDisable:false },
@@ -822,28 +889,7 @@ function ParamsTab() {
 
   return (
     <div className="space-y-4">
-      {/* DRY RUN 橫幅 */}
-      <div className={`${card} px-5 py-3 flex items-center justify-between`}>
-        <span className={`text-sm font-bold ${isDry ? 'text-blue-400' : 'text-red-400'}`}>
-          {isDry ? '🔵 模擬模式（Dry Run）' : '🔴 實盤模式（LIVE）'}
-        </span>
-        <label className="flex items-center gap-2 cursor-pointer select-none">
-          <div className="relative w-10 h-5">
-            <input type="checkbox" className="sr-only" checked={isDry}
-              onChange={e => setRtParams({ ...rtParams, dry_run: e.target.checked })} />
-            <div className={`w-10 h-5 rounded-full transition-colors ${isDry ? 'bg-blue-500' : 'bg-red-500'}`} />
-            <div className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${isDry ? 'translate-x-0.5' : 'translate-x-5'}`} />
-          </div>
-          <span className={`text-sm ${muted}`}>Dry Run</span>
-        </label>
-      </div>
-      {!isDry && (
-        <div className="bg-red-900/20 border border-red-500/30 rounded-lg px-4 py-2 text-sm text-red-400">
-          ⚠ 關閉 Dry Run 後將進行真實交易，請確認所有設定正確
-        </div>
-      )}
-
-      {/* 儲存按鈕（在 list 上方） */}
+      {/* 儲存按鈕 */}
       <div className="flex items-center gap-3 flex-wrap">
         <button onClick={save} disabled={saving}
           className="px-6 py-2 bg-gradient-to-r from-blue-600 to-blue-500 text-white text-sm rounded-lg font-semibold disabled:opacity-50">
@@ -853,6 +899,27 @@ function ParamsTab() {
           ⚡ <span className="text-blue-400/80">所有參數即時生效，無需重啟引擎</span>
         </span>
         {note && <span className={`text-xs font-medium ${note.ok ? 'text-green-400' : 'text-red-400'}`}>{note.msg}</span>}
+      </div>
+
+      {/* Dry Run 開關（儲存後才生效）*/}
+      <div className={`${card} px-5 py-3 flex items-center justify-between`}>
+        <div>
+          <span className={`text-sm font-bold ${isDry ? 'text-blue-400' : 'text-red-400'}`}>
+            {isDry ? '🔵 模擬模式（Dry Run）' : '🔴 實盤模式（LIVE）'}
+          </span>
+          {!isDry && (
+            <div className="text-xs text-red-400 mt-1">⚠ 實盤模式將真實下單，請確認所有設定正確後再儲存</div>
+          )}
+        </div>
+        <label className="flex items-center gap-2 cursor-pointer select-none">
+          <div className="relative w-10 h-5">
+            <input type="checkbox" className="sr-only" checked={isDry}
+              onChange={e => setRtParams({ ...rtParams, dry_run: e.target.checked })} />
+            <div className={`w-10 h-5 rounded-full transition-colors ${isDry ? 'bg-blue-500' : 'bg-red-500'}`} />
+            <div className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${isDry ? 'translate-x-0.5' : 'translate-x-5'}`} />
+          </div>
+          <span className={`text-sm ${muted}`}>Dry Run</span>
+        </label>
       </div>
 
       {/* 參數清單表格 */}

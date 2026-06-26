@@ -63,9 +63,10 @@ async def _log_fetch(job_name: str, fetch_date: date, status: str, rows: int = 0
 
 
 async def job1_institutional_price():
-    """18:00（週一～五）— 三大法人 + 日成交（只處理股票池）"""
+    """18:00（週一～五）— 三大法人 + 日成交（TWSE + TPEx pool 股票）"""
     from sqlalchemy.dialects.postgresql import insert as pg_insert
-    from app.db.models import StockPool
+    from app.db.models import StockPool, StockList
+    from app.services.fetcher.twse import fetch_tpex_daily_price
     today = date.today()
     if today.weekday() in (5, 6):
         return
@@ -73,14 +74,21 @@ async def job1_institutional_price():
         return
     try:
         async with AsyncSessionLocal() as db:
-            pool_codes = {r.code for r in (await db.execute(select(StockPool))).scalars().all()}
+            pool_rows = (await db.execute(select(StockPool))).scalars().all()
+            pool_codes = {r.code for r in pool_rows}
+            # 取得各股票市場別（TWSE / TPEx）
+            mkt_rows = (await db.execute(
+                select(StockList.code, StockList.market).where(StockList.code.in_(pool_codes))
+            )).all()
+            mkt_map = {r.code: r.market for r in mkt_rows}
 
-        target_codes = pool_codes
-        pool_size = len(target_codes)
+        twse_codes = {c for c in pool_codes if mkt_map.get(c) != "TPEx"}
+        tpex_codes = {c for c in pool_codes if mkt_map.get(c) == "TPEx"}
+        pool_size = len(pool_codes)
         inst_min = max(1, int(pool_size * 0.5))
 
         all_inst = await fetch_institutional(today)
-        rows = [r for r in all_inst if r["code"] in target_codes]
+        rows = [r for r in all_inst if r["code"] in pool_codes]
 
         logger.info(f"job1 completeness: inst={len(rows)}/{pool_size} (min={inst_min})")
         if len(rows) < inst_min:
@@ -88,9 +96,13 @@ async def job1_institutional_price():
             logger.error(f"job1 incomplete: only {len(rows)}/{pool_size} pool stocks fetched")
             return
 
-        price_rows = await fetch_daily_price(today, codes=target_codes)
+        # TWSE 日成交
+        price_rows = await fetch_daily_price(today, codes=twse_codes)
+        # TPEx 日成交
+        tpex_price_rows = await fetch_tpex_daily_price(today, codes=tpex_codes)
+        price_rows = price_rows + tpex_price_rows
         price_hit = len(price_rows)
-        logger.info(f"job1 price completeness: {price_hit}/{pool_size}")
+        logger.info(f"job1 price completeness: {price_hit}/{pool_size} (twse={len(price_rows)-len(tpex_price_rows)} tpex={len(tpex_price_rows)})")
         if price_hit < inst_min:
             await _log_fetch("job1", today, "failed", price_hit)
             logger.error(f"job1 price incomplete: {price_hit}/{pool_size}")
@@ -249,7 +261,7 @@ async def job4_screener(force: bool = False, target_date: date | None = None):
             b_chip_ok = (
                 chip.get("chip_ratio_6d", 0) >= 1.0
                 and chip.get("chip_ratio_12d", 0) >= 1.0
-                and holders_bonus["w1"] >= -0.5
+                and holders_bonus["w1"] >= 0
             )
             a_passes = entry["passes_A"] and a_chip_ok
             b_passes = entry["passes_B_price"] and b_chip_ok
@@ -423,6 +435,35 @@ async def job4_screener(force: bool = False, target_date: date | None = None):
                         await db.commit()
             except Exception as e:
                 logger.error(f"WatchlistA trigger check failed for {item.code}: {e}", exc_info=True)
+
+        # triggered 股票：到位後 3 個開盤日自動移除
+        async with AsyncSessionLocal() as db:
+            triggered_items = (await db.execute(
+                select(WatchlistA).where(WatchlistA.status == "triggered")
+            )).scalars().all()
+        for item in triggered_items:
+            if not item.triggered_date:
+                continue
+            try:
+                async with AsyncSessionLocal() as db:
+                    days_since = (await db.execute(
+                        select(func.count()).where(
+                            DailyPrice.code == item.code,
+                            DailyPrice.trade_date > item.triggered_date,
+                            DailyPrice.trade_date <= target_date,
+                        )
+                    )).scalar() or 0
+                if days_since >= 3:
+                    async with AsyncSessionLocal() as db:
+                        item_db = (await db.execute(
+                            select(WatchlistA).where(WatchlistA.id == item.id)
+                        )).scalar_one_or_none()
+                        if item_db:
+                            await db.delete(item_db)
+                            await db.commit()
+                    logger.info(f"WatchlistA auto-removed {item.code} ({days_since} days after trigger)")
+            except Exception as e:
+                logger.error(f"WatchlistA triggered-expiry failed for {item.code}: {e}", exc_info=True)
 
         # 已進場股票：停損提醒
         async with AsyncSessionLocal() as db:

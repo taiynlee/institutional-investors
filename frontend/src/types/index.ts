@@ -70,9 +70,10 @@ export interface ExitAlert {
   code: string
   name: string
   bb: number
-  peak_bb: number
   chip_3d_pct: number | null
-  triggered: ExitSignal[]
+  last_seen_date: string
+  days_off: number
+  badges: { type: string; label: string }[]
 }
 
 export interface JobStatus {

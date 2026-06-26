@@ -213,7 +213,11 @@ def create_app(
                     pnl = {"max_daily": _max_daily}
                     positions = []
                 msg = json.dumps(
-                    {"type": "state", **state, "pnl": pnl, "positions": positions},
+                    {"type": "state", **state,
+                     "dry_run": _trading_params.get("dry_run", True),
+                     "tick_window_seconds": _trading_params.get("tick_window_seconds", 60),
+                     "tick_rise_threshold": _trading_params.get("tick_rise_threshold", 4),
+                     "pnl": pnl, "positions": positions},
                     ensure_ascii=False, default=str,
                 )
                 dead: set = set()
@@ -470,6 +474,16 @@ def create_app(
                     codes = [row["code"] for row in r.json() if "code" in row]
                     score_count += len(codes)
                     selected.update(codes)
+        except Exception:
+            pass
+
+        # 2b. 策略C 滿分100分
+        try:
+            r = _httpx.get(f"{_BACKEND}/api/score-c", timeout=15)
+            if r.status_code == 200:
+                codes = [row["code"] for row in r.json() if row.get("score_c") == 100 and "code" in row]
+                score_count += len(codes)
+                selected.update(codes)
         except Exception:
             pass
 
@@ -1543,6 +1557,32 @@ def create_app(
 
         return {"ok": True, "symbol": symbol, "exit_price": sell_price,
                 "pnl": round(pnl, 0), "lots": pos["lots"]}
+
+    @app.post("/manual-trade/limit-sell")
+    def mt_limit_sell(symbol: str, lots: int = 1, price: float = 0.0):
+        """手動限價賣出（真實），不需要有持倉記錄。"""
+        broker = _get_manual_broker()
+
+        if price <= 0:
+            price = _curr_price(symbol)
+        if price <= 0:
+            raise HTTPException(status_code=400, detail=f"無法取得 {symbol} 報價，請手動輸入賣出價格")
+
+        try:
+            broker.limit_sell(symbol, lots, price)
+        except RuntimeError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+        try:
+            from engine.monitor.notifier import LineNotifier
+            LineNotifier(dry_run=False).send(
+                f"🔴 手動限價賣出 {symbol}\n"
+                f"限價={price:.2f}  張={lots}"
+            )
+        except Exception:
+            pass
+
+        return {"ok": True, "symbol": symbol, "price": price, "lots": lots}
 
     @app.post("/manual-trade/cancel-conditions/{symbol}")
     def mt_cancel_conditions(symbol: str):

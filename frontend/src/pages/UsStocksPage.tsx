@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
 import axios from 'axios'
-import { msUntilNextTaiwanTime } from '../hooks/useServerTime'
 
 interface UsStock {
   symbol: string
@@ -44,7 +43,7 @@ export function UsStocksPage() {
   const [addError, setAddError] = useState('')
   const [adding, setAdding] = useState(false)
   const [lookingUp, setLookingUp] = useState(false)
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
 
   const loadWatchlist = () => {
     axios.get<WatchItem[]>('/api/us-watchlist').then(r => setWatchlist(r.data)).catch(() => {})
@@ -61,26 +60,12 @@ export function UsStocksPage() {
       .finally(() => setLoading(false))
   }
 
-  const scheduledLoad = async () => {
-    try {
-      const r = await axios.get<{ trading: boolean }>('/api/is-trading-day')
-      if (!r.data.trading) return
-    } catch { /* if check fails, still fetch */ }
-    load()
-  }
-
   useEffect(() => {
     load()
     loadWatchlist()
-    const scheduleNext = () => {
-      const ms = msUntilNextTaiwanTime(8, 55)
-      timerRef.current = setTimeout(() => {
-        scheduledLoad()
-        setInterval(scheduledLoad, 24 * 60 * 60 * 1000)
-      }, ms)
-    }
-    scheduleNext()
-    return () => { if (timerRef.current) clearTimeout(timerRef.current) }
+    // 每 5 分鐘自動刷新
+    const tid = setInterval(load, 5 * 60 * 1000)
+    return () => clearInterval(tid)
   }, [])
 
   const KNOWN_NAMES_REV = Object.fromEntries(Object.entries(KNOWN_NAMES).map(([k, v]) => [v, k]))
@@ -133,16 +118,13 @@ export function UsStocksPage() {
     } catch {}
   }
 
-  // Merge watchlist order with price data
-  const stockMap = Object.fromEntries(stocks.map(s => [s.symbol, s]))
-
   return (
     <div className="min-h-screen bg-gray-950 text-white p-6">
       <div className="max-w-7xl mx-auto">
         <div className="flex justify-between items-end mb-6">
           <div>
             <h1 className="text-2xl font-black text-white">美股追蹤</h1>
-            <p className="text-gray-400 text-sm">收盤價 ＋ 盤後價　每日 08:55 自動更新</p>
+            <p className="text-gray-400 text-sm">收盤價 ＋ 盤後價　每 5 分鐘自動更新</p>
           </div>
           <div className="flex items-center gap-3">
             {updatedAt && <span className="text-xs text-gray-500">更新 {updatedAt}</span>}

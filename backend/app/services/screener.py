@@ -188,7 +188,7 @@ def check_entry_criteria(
     if early_breakout and trend_ok:
         result = _find_30d_high_breakout(
             closes, highs, lows, volumes, lookback=1, require_volume=True,
-            vol_multiplier=1.5, start_days_ago=0, require_first_day=False,
+            vol_multiplier=1.5, start_days_ago=0, require_first_day=True,
         )
         if result:
             bb_peak_A, _ = result
@@ -197,7 +197,7 @@ def check_entry_criteria(
     passes_B_price = False
     bb_peak_B = 0.0
     days_ago_B = 0
-    if trend_ok and bb_now <= 15:
+    if trend_ok and bb_now <= 8:
         result = _find_30d_high_breakout(
             closes, highs, lows, volumes, lookback=50, require_volume=False,
             start_days_ago=1,

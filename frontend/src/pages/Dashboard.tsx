@@ -104,13 +104,32 @@ export function Dashboard({ onResearchStock }: { onResearchStock?: (code: string
         <div className="flex justify-between items-center mb-6">
           <div>
             <h1 className="text-2xl font-black text-white">台股電子股主力篩選</h1>
-            <p className="text-gray-400 text-sm">策略 A: 突破籌碼好　策略 B: 創高後拉回、主力未出場　策略 C: 基本面加速</p>
+            <div className="flex flex-wrap gap-2 mt-1">
+              <span
+                className="cursor-help inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-green-900/50 text-green-300 border border-green-700/50 hover:bg-green-900/80 transition-colors"
+                title={`策略 A — 剛突破籌碼好\n\n入場條件（全部同時成立）：\n① 趨勢保護：月線>季線、月線向上、季線向上、收盤>季線\n② 啟動初期：MA20斜率 0.3~2%、布林上軌斜率>2%、帶寬<35%、站上MA5≤5天（還在初期）\n③ 今日首次突破：收盤>前30日最高（昨日尚未突破）、尾盤在高低區間上70%、出量≥均量×1.5、BB位階>5\n④ 籌碼：chip_1d≥1%且chip_12d>0（或反之）\n\n評分（0~100）：籌碼強度30分（chip_1d+chip_12d）、突破品質35分（位階+收盤位置+漲幅+量比）、動能品質15分（上軌斜率+MA20斜率）、千張大戶20分`}
+              >
+                <span className="font-black">A</span> 剛突破籌碼好
+              </span>
+              <span
+                className="cursor-help inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-yellow-900/50 text-yellow-300 border border-yellow-700/50 hover:bg-yellow-900/80 transition-colors"
+                title={`策略 B — 創高後拉回、主力未出場\n\n入場條件（全部同時成立）：\n① 趨勢保護：月線>季線、月線向上、季線向上、收盤>季線\n② 歷史突破：近50個交易日內曾出現「收盤突破30日高且BB位階>5」的突破事件（昨日或更早，不含今日）\n③ 今日拉回：BB位階≤8（已回落至布林上軌附近或以下，算真正拉回）\n④ 主力未撤：近6日法人淨買超÷股本≥1% 且 近12日同≥1%（拉回期間持續買超）\n⑤ 大戶未跑：千張大戶本週人數持平或增加（w1≥0，主力確實未出場）\n\n評分（0~100）：BB位階(20分)+chip_6d(20分)+chip_12d(15分)+chip_20d(15分)+大戶w1/w2/w3(各10分)`}
+              >
+                <span className="font-black">B</span> 創高後拉回、主力未出場
+              </span>
+              <span
+                className="cursor-help inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-blue-900/50 text-blue-300 border border-blue-700/50 hover:bg-blue-900/80 transition-colors"
+                title={`策略 C — 基本面加速\n\n完全獨立的基本面篩選，不需通過 A/B 條件：\n① 月營收 YoY ≥ 10%（年增率達標）\n② 連續 2 個月 YoY 持續加速（月增率趨勢向上）\n③ 近 2 季 EPS > 0（獲利為正）\n\n評分（0~100）：YoY幅度25分＋連加速15分＋MoM月增率15分＋EPS QoQ季增率30分＋TTM YoY年化成長15分\n\n注意：策略C與A/B完全分開，主要用於抓基本面正在加速的標的，搭配A/B技術面訊號效果最佳`}
+              >
+                <span className="font-black">C</span> 基本面加速
+              </span>
+            </div>
           </div>
           <div className="text-right">
             <div className={`text-sm font-medium ${status?.is_reliable ? 'text-green-400' : 'text-yellow-400'}`}>
               {status?.is_reliable ? '資料完整' : '資料更新中'}
             </div>
-            <div className="text-xs text-gray-500">{status?.date} 21:00 後可信</div>
+            <div className="text-xs text-gray-500">{status?.date} 21:10 後可信</div>
           </div>
         </div>
 
@@ -171,9 +190,15 @@ export function Dashboard({ onResearchStock }: { onResearchStock?: (code: string
               <div className="w-px h-8 bg-gray-700 shrink-0" />
               {/* Job badges */}
               <div className="flex gap-6 flex-wrap flex-1">
-                {status.jobs.map(job => (
-                  <JobStatusBadge key={job.name} job={job} />
-                ))}
+                {(() => {
+                  const ORDER = ['法人＋股價', '融資借券', '選股篩選', '當沖篩選', '大戶持股', '月營收', '季報EPS', '產業鏈']
+                  const sorted = [...status.jobs].sort((a, b) => {
+                    const ai = ORDER.indexOf(a.name)
+                    const bi = ORDER.indexOf(b.name)
+                    return (ai === -1 ? 999 : ai) - (bi === -1 ? 999 : bi)
+                  })
+                  return sorted.map(job => <JobStatusBadge key={job.name} job={job} />)
+                })()}
               </div>
               <span className="text-xs text-gray-500 self-center shrink-0">
                 {isStaleData ? `今日 0 支通過 (${screenerJob?.updated_at})` : `篩出 ${results.length} 檔`}

@@ -295,6 +295,7 @@ export function StockPoolPage() {
                     <td className="px-4 py-3 text-right">
                       <button
                         onClick={async () => {
+                          if (!confirm(`確定移除 ${stock.code} ${stock.name}？`)) return
                           await axios.delete(`/api/pool/${stock.code}`)
                           loadPool()
                         }}

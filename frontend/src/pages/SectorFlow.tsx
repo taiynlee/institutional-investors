@@ -19,13 +19,15 @@ function SectorCard({
   sector,
   onSelect,
   selected,
+  maxNet,
 }: {
   sector: SectorFlow
   onSelect: (s: string) => void
   selected: boolean
+  maxNet: number
 }) {
   const positive = sector.net >= 0
-  const barWidth = Math.min(100, Math.abs(sector.net) / 500)
+  const barWidth = maxNet > 0 ? Math.min(100, Math.abs(sector.net) / maxNet * 100) : 0
   return (
     <div
       className={`bg-gray-900 border rounded-lg p-3 cursor-pointer transition-colors ${
@@ -101,14 +103,18 @@ export function SectorFlow({ onResearchStock }: { onResearchStock?: (code: strin
           <div className="flex gap-6">
             <div className="w-72 shrink-0">
               <div className="grid grid-cols-1 gap-2">
-                {sectors.map(s => (
-                  <SectorCard
-                    key={s.sector}
-                    sector={s}
-                    onSelect={setSelected}
-                    selected={selected === s.sector}
-                  />
-                ))}
+                {(() => {
+                  const maxNet = Math.max(...sectors.map(s => Math.abs(s.net)), 1)
+                  return sectors.map(s => (
+                    <SectorCard
+                      key={s.sector}
+                      sector={s}
+                      onSelect={setSelected}
+                      selected={selected === s.sector}
+                      maxNet={maxNet}
+                    />
+                  ))
+                })()}
               </div>
             </div>
 

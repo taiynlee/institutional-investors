@@ -98,7 +98,7 @@ export function ScoreB({ onResearchStock }: { onResearchStock?: (code: string) =
       <div className="max-w-7xl mx-auto">
         <div className="mb-6">
           <h1 className="text-2xl font-black text-white">策略B：籌碼拉回評分</h1>
-          <p className="text-gray-400 text-sm">50日內創30日新高後，BB拉回≤5，法人6日+12日均持續買超</p>
+          <p className="text-gray-400 text-sm">50日內創30日新高後，BB拉回≤8，法人6日+12日均持續買超</p>
           <p className="text-gray-500 text-xs mt-1">BB壓縮+35分 / 籌碼強度+30分 / 洗盤深度+20分 / 大戶+15分</p>
         </div>
 

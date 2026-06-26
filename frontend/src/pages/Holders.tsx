@@ -1,17 +1,5 @@
 import { useEffect, useState } from 'react'
-
-interface HolderRow {
-  code: string
-  name: string
-  sector: string
-  report_date: string
-  holders: number
-  pct: number
-  prev_holders: number | null
-  prev_pct: number | null
-  holders_chg: number | null
-  pct_chg: number | null
-}
+import type { HolderRow } from '../types'
 
 function ChgBadge({ v, suffix = '' }: { v: number | null; suffix?: string }) {
   if (v === null) return <span className="text-gray-600">—</span>

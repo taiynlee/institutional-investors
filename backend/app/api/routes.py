@@ -872,18 +872,34 @@ async def get_us_stocks(db: AsyncSession = Depends(get_db)):
             prev  = float(hist["Close"].iloc[-2]) if len(hist) >= 2 else close
             chg_pct = (close - prev) / prev * 100 if prev else 0
 
-            info = t.fast_info  # fast_info 比 info 快很多
-            post_price = getattr(info, "post_market_price", None)
+            # 盤後價：先試 fast_info（盤後時段有值），再 fallback 到 .info
+            post_price = None
+            try:
+                fi = t.fast_info
+                pp = getattr(fi, "post_market_price", None)
+                if pp and float(pp) != close:
+                    post_price = float(pp)
+            except Exception:
+                pass
+            if post_price is None:
+                try:
+                    info = t.info
+                    pp = info.get("postMarketPrice")
+                    if pp and float(pp) != close:
+                        post_price = float(pp)
+                except Exception:
+                    pass
+
             post_chg_pct = None
             if post_price and close:
-                post_chg_pct = (float(post_price) - close) / close * 100
+                post_chg_pct = (post_price - close) / close * 100
 
             return {
                 "symbol": sym,
                 "name": name,
                 "close": round(close, 2),
                 "chg_pct": round(chg_pct, 2),
-                "post_price": round(float(post_price), 2) if post_price else None,
+                "post_price": round(post_price, 2) if post_price else None,
                 "post_chg_pct": round(post_chg_pct, 2) if post_chg_pct is not None else None,
             }
         except Exception:
@@ -899,9 +915,16 @@ async def get_us_stocks(db: AsyncSession = Depends(get_db)):
 
     fresh = [r for r in results if r is not None]
     if fresh:
-        # 按 watchlist 順序排，並保留 cache 以防下次失敗
         sym_order = {sym: i for i, (sym, _) in enumerate(watchlist)}
         fresh.sort(key=lambda r: sym_order.get(r["symbol"], 999))
+        # 保留快取的盤後價（非盤後時段 fetch 會是 None，延用上次盤後資料）
+        cache_map = {item["symbol"]: item for item in _us_stocks_cache}
+        for item in fresh:
+            if item["post_price"] is None and item["symbol"] in cache_map:
+                prev_cached = cache_map[item["symbol"]]
+                if prev_cached.get("post_price"):
+                    item["post_price"] = prev_cached["post_price"]
+                    item["post_chg_pct"] = prev_cached.get("post_chg_pct")
         _us_stocks_cache = fresh
         return fresh
 
@@ -1420,38 +1443,40 @@ async def get_exit_alerts(db: AsyncSession = Depends(get_db)):
     for row in price_rows:
         closes_by_code.setdefault(row.code, []).append(row.close)
 
+    # 計算每個落榜股「已消失幾個篩選日」（recent_dates 已依日期降序）
+    recent_dates_sorted_asc = list(reversed(recent_dates))  # 升序
     alerts = []
     for code, latest in stock_latest.items():
         closes = closes_by_code.get(code, [])
         bb = calc_bb_position(closes) if len(closes) >= 20 else (latest.bb_position or 0)
-        peak_bb = stock_peak_bb.get(code, 0)
         capital = capitals.get(code) or 0
         chip_sum = chip_3d.get(code, 0)
+        last_seen = latest.calc_date
 
-        triggered = []
+        # 消失幾個篩選日（recent_dates 裡在 last_seen 之後的個數）
+        days_off = sum(1 for d in recent_dates if d > last_seen)
 
-        # 籌碼訊號：stock capital 已知才計算
+        badges = []
         chip_pct = None
         if capital and capital > 0:
             chip_pct = chip_sum / capital * 100
             chip_12d_pct = chip_12d.get(code, 0) / capital * 100
             if chip_pct <= -1.5 and chip_12d_pct <= 0:
-                triggered.append({"type": "chip", "label": "籌碼出場"})
+                badges.append({"type": "chip", "label": "籌碼出場"})
 
-        # 技術訊號：高點 BB 高但現在跌破中線
-        if peak_bb >= 75 and bb < 40:
-            triggered.append({"type": "tech", "label": "跌破中線"})
+        alerts.append({
+            "code": code,
+            "name": latest.name,
+            "bb": round(bb, 1),
+            "chip_3d_pct": round(chip_pct, 2) if chip_pct is not None else None,
+            "last_seen_date": str(last_seen),
+            "days_off": days_off,
+            "badges": badges,
+        })
 
-        if triggered:
-            alerts.append({
-                "code": code,
-                "name": latest.name,
-                "bb": round(bb, 1),
-                "peak_bb": round(peak_bb, 1),
-                "chip_3d_pct": round(chip_pct, 2) if chip_pct is not None else None,
-                "triggered": triggered,
-            })
-
+    # 5個篩選日後自動移除；最近才落榜的排前面
+    alerts = [a for a in alerts if a["days_off"] < 5]
+    alerts.sort(key=lambda x: x["days_off"])
     return alerts
 
 
@@ -1819,6 +1844,58 @@ async def trigger_institutional():
     from app.services.scheduler import job1_institutional_price
     asyncio.create_task(job1_institutional_price())
     return {"status": "triggered"}
+
+
+@router.post("/api/admin/backfill_price_range")
+async def trigger_backfill_price_range(start_date: str, end_date: str):
+    """補抓指定日期區間的法人+股價+融資（pool 所有股票）"""
+    import asyncio, logging
+    from datetime import date as _date, timedelta
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+    from app.services.fetcher.twse import fetch_daily_price, fetch_institutional, fetch_margin
+    from app.db.models import DailyPrice, Institutional, MarginTrading, StockPool
+    _logger = logging.getLogger(__name__)
+
+    async def _run():
+        from app.db.base import AsyncSessionLocal as _ASL
+        async with _ASL() as db:
+            pool_codes = {r.code for r in (await db.execute(select(StockPool))).scalars().all()}
+
+        d = _date.fromisoformat(start_date)
+        end = _date.fromisoformat(end_date)
+        ok_count = 0
+        while d <= end:
+            if d.weekday() < 5:
+                try:
+                    price_rows = await fetch_daily_price(d)
+                    inst_rows  = await fetch_institutional(d)
+                    margin_rows = await fetch_margin(d)
+                    price_rows  = [r for r in price_rows  if r["code"] in pool_codes]
+                    inst_rows   = [r for r in inst_rows   if r["code"] in pool_codes]
+                    margin_rows = [r for r in margin_rows if r["code"] in pool_codes]
+                    async with _ASL() as db:
+                        if price_rows:
+                            stmt = pg_insert(DailyPrice).values(price_rows)
+                            await db.execute(stmt.on_conflict_do_update(
+                                index_elements=["code", "trade_date"],
+                                set_={"open": stmt.excluded.open, "high": stmt.excluded.high,
+                                      "low": stmt.excluded.low, "close": stmt.excluded.close,
+                                      "volume": stmt.excluded.volume},
+                            ))
+                        if inst_rows:
+                            await db.execute(pg_insert(Institutional).values(inst_rows).on_conflict_do_nothing(index_elements=["code", "trade_date"]))
+                        if margin_rows:
+                            await db.execute(pg_insert(MarginTrading).values(margin_rows).on_conflict_do_nothing(index_elements=["code", "trade_date"]))
+                        await db.commit()
+                    _logger.info(f"backfill {d}: price={len(price_rows)} inst={len(inst_rows)} margin={len(margin_rows)}")
+                    ok_count += 1
+                except Exception as e:
+                    _logger.warning(f"backfill {d} failed: {e}")
+            d += timedelta(days=1)
+        _logger.info(f"backfill_price_range done: {ok_count} days")
+
+    asyncio.create_task(_run())
+    return {"status": "triggered", "start": start_date, "end": end_date}
 
 
 @router.post("/api/admin/run_screener")
@@ -2220,7 +2297,7 @@ async def get_daytrade_list(
         change = round((prev_close or 0) - (prev_prev_close or prev_close or 0), 2)
         change_pct = round(change / prev_prev_close * 100, 2) if prev_prev_close else 0
 
-        if live and not (above_ma20 and vol_ok and chip_count >= 2):
+        if live and not (above_ma20 and vol_ok and chip_count >= 2 and (foreign_net + trust_net) >= 0):
             continue
 
         result.append({

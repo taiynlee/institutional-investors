@@ -160,6 +160,43 @@ async def fetch_lending(trade_date: date) -> list[dict]:
     return rows
 
 
+async def fetch_tpex_daily_price(trade_date: date, codes: set[str] | None = None) -> list[dict]:
+    """TPEx 上櫃股票日成交（TPEx OpenAPI，只支援當日）"""
+    import httpx
+    roc_year = trade_date.year - 1911
+    expected_date = f"{roc_year}{trade_date.month:02d}{trade_date.day:02d}"
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+            r = await client.get(
+                "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes",
+                headers={"User-Agent": "Mozilla/5.0"},
+            )
+            r.raise_for_status()
+            data = r.json()
+    except Exception:
+        return []
+    rows = []
+    for item in data:
+        if item.get("Date", "") != expected_date:
+            continue
+        code = item.get("SecuritiesCompanyCode", "").strip()
+        if not code or (codes and code not in codes):
+            continue
+        try:
+            rows.append({
+                "code": code,
+                "trade_date": trade_date,
+                "open":   _parse_num(item.get("Open", 0)),
+                "high":   _parse_num(item.get("High", 0)),
+                "low":    _parse_num(item.get("Low", 0)),
+                "close":  _parse_num(item.get("Close", 0)),
+                "volume": int(str(item.get("TradingShares", "0")).replace(",", "") or "0"),
+            })
+        except (ValueError, KeyError):
+            continue
+    return rows
+
+
 def _parse_num(s) -> float:
     if isinstance(s, (int, float)):
         return float(s)

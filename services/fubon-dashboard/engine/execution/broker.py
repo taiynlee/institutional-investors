@@ -94,6 +94,32 @@ class FubonBroker:
         result = self._sdk.stock.place_order(self._account, order)
         logger.info("SELL %s reason=%s result: %s", symbol, reason, result)
 
+    def limit_sell(self, symbol: str, lots: int, price: float):
+        """限價現賣 ROD。"""
+        price = round_up_tick(price)
+        if self.dry_run:
+            logger.info("[DRY RUN] LIMIT SELL %s x%d張 @ %.2f", symbol, lots, price)
+            return
+        if self._sdk is None:
+            raise RuntimeError("SDK not initialized")
+        from fubon_neo.sdk import Order
+        from fubon_neo.constant import BSAction, MarketType, PriceType, TimeInForce, OrderType
+        order = Order(
+            buy_sell=BSAction.Sell,
+            symbol=symbol,
+            quantity=lots * 1000,
+            market_type=MarketType.Common,
+            price_type=PriceType.Limit,
+            time_in_force=TimeInForce.ROD,
+            order_type=OrderType.Stock,
+            price=str(price),
+        )
+        try:
+            result = self._sdk.stock.place_order(self._account, order)
+            logger.info("LIMIT SELL %s result: %s", symbol, result)
+        except Exception as e:
+            raise RuntimeError(f"下單失敗: {e}") from e
+
     def place_conditional_stop(
         self,
         symbol: str,
