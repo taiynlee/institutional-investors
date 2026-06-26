@@ -775,7 +775,19 @@ LINE Bot 連結透過 ngrok tunnel 對外，開機自動重建 webhook URL。
 - 停損：進場價 - `stop_loss_ticks`（預設 4）tick（向上捨入）→ LessThanOrEqual 條件單
 - 停利：昨收 × (1 + (進場時漲幅 + `take_profit_add_pct`（預設 4%）) / 100)（向下捨入）→ GreaterThanOrEqual 條件單
 
-**強制出場：** `force_exit_time`（預設 13:20）市價賣出所有持倉
+**強制出場機制（三層保護）：**
+
+| 層次 | 觸發方式 | 動作 | 時間 |
+|------|---------|------|------|
+| **① OCO 觸價單（伺服器端）** | Fubon 伺服器偵測到成交價 ≤ 停損 或 ≥ 停利 | 自動市價賣出（由 Fubon 執行，不依賴引擎連線） | 即時 |
+| **② RiskManager（tick 路徑）** | WebSocket on_tick 收到 tick，且時間 ≥ `force_exit_time`（預設 13:20） | 取消觸價單 + 市價 IOC 賣出 | 13:20 後下一個 tick |
+| **③ 主迴圈時間兜底（tick-independent）** | 主迴圈每秒比對系統時間，不依賴 WebSocket | 取消觸價單 → 市價 IOC + 備援 ROD 限價賣 → LINE 通知「請確認成交」 | 13:20（每秒檢查） |
+
+**層次 ③ 的必要性：** 跌停板時可能長時間無成交 tick（on_tick 不回調），或 WebSocket 斷線期間，層次 ② 完全失效。主迴圈與 WebSocket 並行運行，確保時間到必定執行。
+
+**備援 ROD 說明：** IOC（Immediate or Cancel）在跌停無買方時會立即取消；備援 ROD 限價賣以當時報價送出，若跌停仍無人承接則掛單至收盤。如 IOC 已成交，券商因無庫存會拒絕 ROD，不會裸空。
+
+**13:15 預警：** 若 13:15 仍持倉，自動送 LINE 通知列出標的、張數、進場價，提醒距強制出場剩餘時間。
 
 ### 架構說明
 
