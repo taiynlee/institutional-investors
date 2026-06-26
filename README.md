@@ -761,13 +761,20 @@ LINE Bot 連結透過 ngrok tunnel 對外，開機自動重建 webhook URL。
 
 ### 進場/出場策略
 
-**進場條件（全部滿足）：**
-1. 時間：`entry_start_time`（預設 09:15）~ `latest_dynamic_add_time`（預設 13:09）
-2. `tick_window_seconds`（預設 60 秒）內上漲 ≥ `tick_rise_threshold`（預設 4）tick
-3. 個股漲跌幅在 ±`max_change_pct`（預設 5%）以內
-4. 大盤日漲幅 > `market_rise_min`（預設 1%，vs 昨收）
-5. 今日進場次數 < `max_daily_positions`（預設 5，可同標的重複進場）
-6. 個股期貨（有資料時）：期貨價 > 現價（正價差）
+**進場條件（全部滿足，短路順序）：**
+
+| # | 條件 | 相關參數 | 可設定 |
+|---|------|----------|--------|
+| 1 | 時間窗口 | `entry_start_time` / `latest_dynamic_add_time` | ✅ 數值 |
+| 2 | 大盤日漲幅 > N% | `market_rise_min`（預設 1%） | ✅ 數值 |
+| 3 | 同標的當下未持倉 | `check_not_in_position`（預設 true） | ✅ 開關 |
+| 4 | 今日進場次數 < 上限 | `max_daily_positions`（預設 5） | ✅ 數值 |
+| 5 | 個股漲跌幅在 ±N% 以內 | `max_change_pct`（預設 5%） | ✅ 數值 |
+| **6** | **⭐ `tick_window_seconds` 秒內上漲 ≥ N tick（必要條件）** | `tick_rise_threshold`（預設 4） | ✅ 數值 |
+| 7 | 個股期貨正價差（有期貨資料才判斷） | `check_futures_signal`（預設 true） | ✅ 開關 |
+| 8 | 買盤 > 賣盤（bid_pct > 50%） | `check_bid_pct`（預設 true） | ✅ 開關 |
+
+條件 3、7、8 原為硬碼邏輯，現可在前端「交易設定」頁面透過 checkbox 開關（勾選 = 啟用該條件；取消 = 放行不檢查）。
 
 所有參數儲存於 PostgreSQL `trading_settings`，透過前端「交易設定」頁面修改後**立即生效**（寫入 PG + 同步 ticks.db 熱重載快取，引擎每 tick 重讀，無需重啟）。
 

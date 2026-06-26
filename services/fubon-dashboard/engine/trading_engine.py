@@ -270,6 +270,15 @@ class TradingEngine:
             try: return max(10, int(_gs("tick_window_seconds", "60")))
             except Exception: return 60
 
+        def _check_not_in_position() -> bool:
+            return str(_gs("check_not_in_position", "True")).lower() in ("true", "1", "yes")
+
+        def _check_futures_signal() -> bool:
+            return str(_gs("check_futures_signal", "True")).lower() in ("true", "1", "yes")
+
+        def _check_bid_pct() -> bool:
+            return str(_gs("check_bid_pct", "True")).lower() in ("true", "1", "yes")
+
         with self._lock:
             self._state["dry_run"] = dry_run
             self._state["max_daily_positions"] = max_daily_positions
@@ -747,6 +756,9 @@ class TradingEngine:
                 entry_cutoff_mins=_entry_cutoff(),
                 entry_start_mins=_entry_start_mins(),
                 bid_pct=_bp,
+                check_not_in_position=_check_not_in_position(),
+                check_futures_signal=_check_futures_signal(),
+                check_bid_pct=_check_bid_pct(),
             )
             # 只在 60s tick 條件達標時才記 log（避免噪音）
             if sess.tick_rise_60s >= _thr:
@@ -770,6 +782,8 @@ class TradingEngine:
                 futures_signal=futures_signals.get(symbol),
                 entry_cutoff_mins=_entry_cutoff(),
                 entry_start_mins=_entry_start_mins(),
+                check_futures_signal=_check_futures_signal(),
+                check_bid_pct=_check_bid_pct(),
             )
 
             logger.info(

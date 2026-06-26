@@ -77,6 +77,9 @@ class SymbolSession:
         entry_cutoff_mins: int = 13 * 60 + 10,
         entry_start_mins: int = 9 * 60 + 15,
         bid_pct: float = 50.0,
+        check_not_in_position: bool = True,
+        check_futures_signal: bool = True,
+        check_bid_pct: bool = True,
     ) -> SignalResult:
         current_mins = current_time.hour * 60 + current_time.minute
         time_ok = current_mins >= entry_start_mins and current_mins < entry_cutoff_mins
@@ -92,6 +95,9 @@ class SymbolSession:
             tick_rise_threshold=tick_rise_threshold,
             futures_signal=futures_signal,
             bid_pct=bid_pct,
+            check_not_in_position=check_not_in_position,
+            check_futures_signal=check_futures_signal,
+            check_bid_pct=check_bid_pct,
         )
 
     def evaluate_theoretical(
@@ -103,6 +109,8 @@ class SymbolSession:
         futures_signal=None,
         entry_cutoff_mins: int = 13 * 60 + 10,
         entry_start_mins: int = 9 * 60 + 15,
+        check_futures_signal: bool = True,
+        check_bid_pct: bool = True,
     ) -> SignalResult:
         current_mins = current_time.hour * 60 + current_time.minute
         time_ok = current_mins >= entry_start_mins and current_mins < entry_cutoff_mins
@@ -117,4 +125,7 @@ class SymbolSession:
             tick_rise=self.tick_rise_60s,
             tick_rise_threshold=tick_rise_threshold,
             futures_signal=futures_signal,
+            check_not_in_position=False,
+            check_futures_signal=check_futures_signal,
+            check_bid_pct=check_bid_pct,
         )

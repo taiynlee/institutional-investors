@@ -814,7 +814,7 @@ function PreSessionTab() {
 }
 
 // ── 交易設定 ─────────────────────────────────────────────────────────────────
-interface PD { id: string; group: string; label: string; desc: string; unit: string; rtKey: string; type: 'number'|'time'; step?: number; min?: number; max?: number; canDisable: boolean }
+interface PD { id: string; group: string; label: string; desc: string; unit: string; rtKey: string; type: 'number'|'time'|'boolean'; step?: number; min?: number; max?: number; canDisable: boolean }
 const PARAM_DEFS: PD[] = [
   // 倉位控制
   { id:'max_position_capital', group:'倉位控制', label:'每次進場資金上限', desc:'每次進場最多動用的資金（超過就截斷）；張數 = floor(min(上限, 剩餘總資金) / (價格 × 1000))', unit:'TWD', rtKey:'max_position_capital', type:'number', step:100000, min:100000, canDisable:false },
@@ -823,8 +823,11 @@ const PARAM_DEFS: PD[] = [
   { id:'entry_start_time',     group:'進場條件', label:'進場開始時間',         desc:'此時間之前不開新倉（例：09:15 = 開盤後觀察15分鐘再進場）', unit:'HH:MM', rtKey:'entry_start_time', type:'time', canDisable:false },
   { id:'tick_window_seconds',  group:'進場條件', label:'tick 觀察窗口',        desc:'計算 tick_rise 用的滾動時間窗口（秒）；預設60秒 = 看過去1分鐘漲了幾tick', unit:'秒', rtKey:'tick_window_seconds', type:'number', step:10, min:10, max:300, canDisable:false },
   { id:'tick_rise_threshold',  group:'進場條件', label:'tick 上漲門檻',        desc:'觀察窗口內股價上漲需 ≥ 此 tick 數才觸發進場；tick 依各價位不同計算', unit:'tick', rtKey:'tick_rise_threshold', type:'number', step:1, min:1, canDisable:false },
-  { id:'max_change_pct',       group:'進場條件', label:'最大漲跌幅',           desc:'個股當日漲跌幅（絕對值）超過此%不進場，避免追高或跌太多', unit:'%', rtKey:'max_change_pct', type:'number', step:0.5, min:0.5, canDisable:false },
-  { id:'market_rise_min',      group:'進場條件', label:'大盤日漲幅門檻',       desc:'加權今日較昨收漲幅須 > 此%才允許開倉；建議 0.1（大盤必須是漲的）；0 = 不限制', unit:'%', rtKey:'market_rise_min', type:'number', step:0.1, min:0, canDisable:false },
+  { id:'max_change_pct',           group:'進場條件', label:'最大漲跌幅',             desc:'個股當日漲跌幅（絕對值）超過此%不進場，避免追高或跌太多', unit:'%', rtKey:'max_change_pct', type:'number', step:0.5, min:0.5, canDisable:false },
+  { id:'market_rise_min',          group:'進場條件', label:'大盤日漲幅門檻',         desc:'加權今日較昨收漲幅須 > 此%才允許開倉；建議 0.1（大盤必須是漲的）；0 = 不限制', unit:'%', rtKey:'market_rise_min', type:'number', step:0.1, min:0, canDisable:false },
+  { id:'check_not_in_position',    group:'進場條件', label:'同標的未持倉才可進場',   desc:'勾選（預設）：同一標的已有持倉時拒絕再進場；取消勾選：允許同標的持倉中再進一張', unit:'', rtKey:'check_not_in_position', type:'boolean', canDisable:false },
+  { id:'check_futures_signal',     group:'進場條件', label:'期貨正價差才可進場',     desc:'勾選（預設）：個股有期貨資料時，期貨價須 > 現貨才允許進場；取消勾選：忽略期貨訊號', unit:'', rtKey:'check_futures_signal', type:'boolean', canDisable:false },
+  { id:'check_bid_pct',            group:'進場條件', label:'買盤 > 賣盤才可進場',   desc:'勾選（預設）：累積已成交買盤須 > 50% 才允許進場；取消勾選：忽略買賣盤比例', unit:'', rtKey:'check_bid_pct', type:'boolean', canDisable:false },
   // 停損停利
   { id:'stop_loss_ticks',      group:'停損停利', label:'停損 tick 數',    desc:'進場後向下跌超過此 tick 數觸發停損（觸價單）；停損價 = 進場價 - N × tick_size，向上捨入', unit:'tick', rtKey:'stop_loss_ticks', type:'number', step:1, min:1, canDisable:false },
   { id:'take_profit_add_pct',  group:'停損停利', label:'停利附加漲幅',    desc:'停利觸價單 = 昨收 × (1 + (進場時漲幅 + 此%) / 100)，向下捨入 tick；例：進場漲4%、附加4% → 停利在昨收漲8%', unit:'%', rtKey:'take_profit_add_pct', type:'number', step:0.5, min:0.5, canDisable:false },
@@ -968,21 +971,37 @@ function ParamsTab() {
                       </td>
                       <td className={`px-3 py-2.5 text-xs ${muted} leading-relaxed`}>{p.desc}</td>
                       <td className="px-3 py-2.5 text-right">
-                        <input
-                          type={p.type === 'time' ? 'text' : 'number'}
-                          value={vals[p.id] ?? ''}
-                          disabled={!on}
-                          step={p.step}
-                          min={p.min}
-                          max={p.max}
-                          onChange={e => setVals(prev => ({
-                            ...prev,
-                            [p.id]: p.type === 'time' ? e.target.value : Number(e.target.value)
-                          }))}
-                          className={`w-24 text-right bg-[#0c1929] border border-[#253d5c] text-[#dde6f0]
-                            px-2 py-1 text-xs ${mono} rounded focus:outline-none focus:border-[#60a5fa]
-                            disabled:opacity-40 disabled:cursor-not-allowed`}
-                        />
+                        {p.type === 'boolean' ? (
+                          <label className="inline-flex items-center gap-2 cursor-pointer select-none">
+                            <div className="relative w-9 h-5">
+                              <input type="checkbox" className="sr-only"
+                                checked={vals[p.id] !== false}
+                                onChange={e => setVals(prev => ({ ...prev, [p.id]: e.target.checked }))}
+                              />
+                              <div className={`w-9 h-5 rounded-full transition-colors ${vals[p.id] !== false ? 'bg-blue-500' : 'bg-[#3d5570]'}`} />
+                              <div className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${vals[p.id] !== false ? 'translate-x-4' : 'translate-x-0.5'}`} />
+                            </div>
+                            <span className={`text-xs ${vals[p.id] !== false ? 'text-blue-400' : muted}`}>
+                              {vals[p.id] !== false ? '啟用' : '停用'}
+                            </span>
+                          </label>
+                        ) : (
+                          <input
+                            type={p.type === 'time' ? 'text' : 'number'}
+                            value={vals[p.id] ?? ''}
+                            disabled={!on}
+                            step={p.step}
+                            min={p.min}
+                            max={p.max}
+                            onChange={e => setVals(prev => ({
+                              ...prev,
+                              [p.id]: p.type === 'time' ? e.target.value : Number(e.target.value)
+                            }))}
+                            className={`w-24 text-right bg-[#0c1929] border border-[#253d5c] text-[#dde6f0]
+                              px-2 py-1 text-xs ${mono} rounded focus:outline-none focus:border-[#60a5fa]
+                              disabled:opacity-40 disabled:cursor-not-allowed`}
+                          />
+                        )}
                       </td>
                       <td className={`px-3 py-2.5 text-xs ${muted}`}>{p.unit}</td>
                     </tr>
