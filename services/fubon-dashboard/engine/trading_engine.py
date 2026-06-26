@@ -886,13 +886,100 @@ class TradingEngine:
             self._state["started_at"] = now_tw().isoformat()
 
         last_persist_min = -1
+        _force_exit_done: set[str] = set()
+        _warned_1315 = False
         try:
             while not self._stop_event.is_set():
                 time_module.sleep(1)
-                curr_min = now_tw().minute
+                now_loop = now_tw()
+                curr_min = now_loop.minute
                 if curr_min != last_persist_min:
                     last_persist_min = curr_min
                     persist_daily_tracker(ticks_db, dt, dry_run=dry_run)
+
+                # ── 13:15 持倉預警（不依賴 tick，只送一次）────────────────────
+                if not _warned_1315 and now_loop.time() >= time(13, 15) and om.positions:
+                    _warned_1315 = True
+                    pos_summary = "、".join(
+                        f"{s}×{p.lots}張({p.entry_price:.0f}元)"
+                        for s, p in list(om.positions.items())
+                    )
+                    notifier.send(
+                        f"⚠️ 收盤前仍有持倉\n"
+                        f"{pos_summary}\n"
+                        f"距強制出場約 5 分鐘（{_force_exit_time().strftime('%H:%M')}）"
+                    )
+                    logger.warning("13:15 持倉預警：%s", pos_summary)
+
+                # ── 時間強制出場（主迴圈兜底，不依賴 WebSocket tick）───────────
+                # 當跌停無成交或 WS 斷線導致 on_tick 不回調時確保必定出場
+                if now_loop.time() >= _force_exit_time() and om.positions:
+                    for sym in list(om.positions.keys()):
+                        if sym in _force_exit_done:
+                            continue
+                        _force_exit_done.add(sym)
+                        pos = om.positions.get(sym)
+                        if pos is None:
+                            continue  # 已由 tick 路徑出場，跳過
+
+                        curr = (sessions[sym].curr_price
+                                if sym in sessions and sessions[sym].curr_price
+                                else pos.entry_price)
+                        pnl_est = (curr - pos.entry_price) * pos.lots * 1000
+
+                        logger.warning(
+                            "⏰ 強制時間出場（主迴圈）%s %d張 @ %.2f，估損益=%+.0f",
+                            sym, pos.lots, curr, pnl_est,
+                        )
+
+                        # 先取消未到期的觸價單
+                        cids = condition_ids.pop(sym, {})
+                        if cids.get("sl"):
+                            broker.cancel_conditional_order(cids["sl"])
+                        if cids.get("tp"):
+                            broker.cancel_conditional_order(cids["tp"])
+
+                        # ① 市價 IOC（快速成交優先）
+                        try:
+                            broker.sell(sym, pos.lots, 0.0, reason="force_exit_loop")
+                        except Exception as _fe1:
+                            logger.error("強制出場 IOC 失敗 %s: %s", sym, _fe1)
+
+                        # ② 備援 ROD 限價賣（防跌停 IOC 無人承接；
+                        #    若 IOC 已成交，券商會因無庫存拒絕此單）
+                        try:
+                            broker.limit_sell(sym, pos.lots, curr)
+                        except Exception as _fe2:
+                            logger.warning("強制出場備援 ROD 失敗 %s: %s", sym, _fe2)
+
+                        # 從引擎記憶中移除持倉
+                        om.positions.pop(sym, None)
+                        _entry_times.pop(sym, None)
+                        dt.record_trade(
+                            pnl=pnl_est, symbol=sym, lots=pos.lots,
+                            entry_price=pos.entry_price, exit_price=curr,
+                        )
+                        log_event("order_sell", symbol=sym, reason="force_exit_loop",
+                                  entry_price=pos.entry_price, exit_price=curr,
+                                  lots=pos.lots, pnl=pnl_est,
+                                  cumulative_pnl=dt.total_pnl)
+                        _append_log({
+                            "type": "sell",
+                            "ts": now_loop.strftime("%H:%M:%S"),
+                            "symbol": sym,
+                            "name": sname(sym),
+                            "lots": pos.lots,
+                            "entry_price": pos.entry_price,
+                            "exit_price": curr,
+                            "pnl": round(pnl_est),
+                            "reason": "force_exit_loop",
+                        })
+                        notifier.send(
+                            f"⏰ 強制出場（時間到）{sym} {sname(sym)}\n"
+                            f"已同時送市價IOC + 限價ROD\n"
+                            f"損益估計 {pnl_est:+,.0f}\n"
+                            f"⚠️ 請至富邦確認是否成交"
+                        )
         finally:
             feed.disconnect()
             persist_daily_tracker(ticks_db, dt, dry_run=dry_run)
