@@ -190,7 +190,7 @@ Docker Compose（frontend nginx）
   nginx → /fubon-api/*    → host.docker.internal:8090/*      （REST fallback）
 ```
 
-### 前端 Tab：台股當沖（7 個子頁）
+### 前端 Tab：台股當沖（8 個子頁）
 
 | 子頁 | 資料來源 | 說明 |
 |-----|---------|------|
@@ -201,6 +201,7 @@ Docker Compose（frontend nginx）
 | 交易設定 | `/fubon-api/trading-params` + PG `trading_settings` | 所有引擎參數（即時生效：寫入 PG 持久化 + ticks.db 熱重載，引擎無需重啟） |
 | 系統設定 | `/fubon-api/config` | 讀取 config.yaml（帳密/憑證，只讀，密碼遮蔽） |
 | 當沖健診 | `/fubon-api/health-check/results` + `/fubon-api/logs/today` | 引擎狀態、config、LINE 設定、tick 資料流（盤前引擎未啟動時顯示告警而非錯誤） |
+| 訊息 Log | `/fubon-api/line-notifications` | 近 5 天 LINE 通知記錄（類型、第N次、訊息內容）；本月已送/剩餘配額顯示；LINE 超過 200 則月限時可在此查閱所有通知內容 |
 
 ### 台股 Tick 跳動規則
 
@@ -260,11 +261,22 @@ Docker Compose（frontend nginx）
 
 ### LINE 通知
 
-通知走 `claude-line-bot` 服務（`http://host.docker.internal:8001/notify`）：
+通知走 `claude-line-bot` 服務（port 8001）：
 - `LineNotifier` 優先呼叫 `LINE_BOT_URL/notify`（bot 已初始化 token，fubon-dashboard 無需另設 LINE 憑證）
-- 每則通知附帶「本月第 N 次通知」序號，並寫入 `ticks.db/line_notifications`
-- 觸發時機：引擎自動進場（含 dry_run 模式）、自動出場、強制出場、13:15 預警
-- ⚠️ LINE Messaging API free plan 每月 200 則上限；滿額後推播失敗，月初重置
+- 每則通知附帶「本月第 N 次通知」序號，並寫入 `ticks.db/line_notifications`（保留 5 天，超過自動刪除）
+- 所有通知訊息內容包含**股票代號 + 名稱**（如 `1303 南亞`）
+- 觸發時機與 `msg_type` 對照：
+
+| 時機 | msg_type（dry_run=True） | msg_type（實盤） |
+|------|--------------------------|-----------------|
+| 引擎自動進場 | `dry_entry` | `auto_entry` |
+| 引擎自動出場 | `dry_exit` | `auto_exit` |
+| 13:15 持倉預警 | `warning` | `warning` |
+| 強制出場（時間到） | `force_exit` | `force_exit` |
+| 模擬測試（前端手動） | `debug` | `debug` |
+
+- ⚠️ LINE Messaging API free plan 每月 200 則上限；滿額後推播失敗（`success=0` 仍寫 log），月初重置
+- LINE 月配額用完時，可在前端「台股當沖 → 訊息 Log」頁面或傳 `/log` 給 LINE bot 查閱完整通知記錄
 
 ### 安全注意
 
@@ -689,6 +701,7 @@ vol_ratio = mean(volume[-5:]) / mean(volume[-10:-5])
 |--------|--------|----------|
 | `ticks` / `index_ticks` | **30 曆日** | 每日 20:00 自動清理 + VACUUM |
 | `intraday_trades` / `intraday_positions` | **60 曆日** | 引擎每次啟動時清理 |
+| `line_notifications` | **5 曆日** | `LineNotifier` 初始化時自動刪除（每次 send 前觸發） |
 
 ---
 
@@ -713,6 +726,7 @@ vol_ratio = mean(volume[-5:]) / mean(volume[-10:-5])
 | `us_watchlist` | 美股追蹤清單 | `symbol` |
 | `fetch_log` | 爬取作業紀錄（防重複） | `(job_name, fetch_date)` |
 | `trading_settings` | 當沖引擎可調參數（key-value，15 項，即時熱重載） | `key` |
+| `line_notifications`（SQLite） | LINE 通知記錄（月序號、msg_type、內容、成功/失敗；保留 5 天） | `id` |
 
 ### 詳細欄位設計
 
@@ -962,8 +976,10 @@ LINE Bot 連結透過 ngrok tunnel 對外，開機自動重建 webhook URL。
 
 | 指令 | 說明 |
 |------|------|
-| `/stocks` | 傳回當日篩選結果 |
-| `/result` | 傳回最新篩選績效 |
+| `/stocks` | 傳回當日篩選結果截圖 |
+| `/result` | 傳回最新篩選績效截圖 |
+| `/us` / `/美股` | 傳回美股追蹤頁截圖 |
+| `/log` / `/訊息log` | 傳回近 5 天 LINE 通知記錄截圖（僅截表格，不含頁面其他元素） |
 | `/reset` | 清除對話記憶（保留 function context） |
 | `/重啟保留` | 重啟 Claude session，保留記憶 |
 | `/重啟清除` | 重啟 Claude session，清除記憶 |
