@@ -20,6 +20,7 @@ class SignalCombiner:
     7. 有個股期貨資料時：期貨價 > 現價（正價差，可關閉）
     8. 已成交買盤 >= bid_pct_threshold（預設 60%，可調）
     9. 今日累積量/5日均量 >= 開盤後觀察分鐘數 × 1.3%
+    10. 當日振幅（(High-Low)/昨收×100）>= amplitude_min_pct（預設 3%，可調）
     """
 
     def __init__(
@@ -48,6 +49,8 @@ class SignalCombiner:
         check_futures_signal: bool = True,
         vol_ratio: float = 100.0,
         vol_ratio_min_pct: float = 0.0,
+        amplitude_pct: float = 0.0,
+        amplitude_min_pct: float = 3.0,
     ) -> SignalResult:
         def no(r):
             return SignalResult(symbol=symbol, should_enter=False, reason=r)
@@ -70,5 +73,7 @@ class SignalCombiner:
             return no(f"bid_pct_low_{bid_pct:.0f}")
         if vol_ratio_min_pct > 0 and vol_ratio < vol_ratio_min_pct:
             return no(f"vol_ratio_low_{vol_ratio:.1f}pct_need_{vol_ratio_min_pct:.1f}pct")
+        if amplitude_min_pct > 0 and amplitude_pct < amplitude_min_pct:
+            return no(f"amplitude_low_{amplitude_pct:.1f}pct_need_{amplitude_min_pct:.1f}pct")
 
         return SignalResult(symbol=symbol, should_enter=True, reason="ok")

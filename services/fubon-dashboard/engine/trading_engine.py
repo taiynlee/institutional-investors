@@ -274,6 +274,10 @@ class TradingEngine:
             mins_after_open = max(0, _entry_start_mins() - 9 * 60)
             return round(mins_after_open * 1.3, 1)
 
+        def _amplitude_min_pct() -> float:
+            try: return max(0.0, float(_gs("amplitude_min_pct", "3.0")))
+            except Exception: return 3.0
+
         def _check_not_in_position() -> bool:
             return str(_gs("check_not_in_position", "True")).lower() in ("true", "1", "yes")
 
@@ -591,9 +595,11 @@ class TradingEngine:
         tick_count = [0]
         last_signal_eval: dict[str, datetime] = {}
         _entry_times: dict[str, datetime] = {}
-        _cum_bid: dict[str, int] = {}  # 累積外盤成交量（成交價 >= 賣一，主動買方）
-        _cum_ask: dict[str, int] = {}  # 累積內盤成交量（成交價 <= 買一，主動賣方）
-        _cum_vol: dict[str, int] = {}  # 累積今日成交量（股，用於 vol_ratio 計算）
+        _cum_bid: dict[str, int] = {}     # 累積外盤成交量（成交價 >= 賣一，主動買方）
+        _cum_ask: dict[str, int] = {}     # 累積內盤成交量（成交價 <= 買一，主動賣方）
+        _cum_vol: dict[str, int] = {}     # 累積今日成交量（股，用於 vol_ratio 計算）
+        _daily_high: dict[str, float] = {}  # 今日最高成交價
+        _daily_low:  dict[str, float] = {}  # 今日最低成交價
         _log_cleared_date = [None]     # 追蹤清除日期
 
         def _append_log(entry: dict):
@@ -631,6 +637,8 @@ class TradingEngine:
                 pass
 
             _cum_vol[symbol] = _cum_vol.get(symbol, 0) + size
+            _daily_high[symbol] = max(_daily_high.get(symbol, price), price)
+            _daily_low[symbol]  = min(_daily_low.get(symbol, price), price)
             sess.on_tick(price, size, ts_ns, tick_window_seconds=_tick_window_seconds())
             now = now_tw()
 
@@ -766,6 +774,10 @@ class TradingEngine:
             _bp = _b / (_b + _a) * 100 if (_b + _a) > 0 else 50.0
             _avg5 = _avg_vol5.get(symbol, 0)
             _vr = (_cum_vol.get(symbol, 0) / 1000 / _avg5 * 100) if _avg5 > 0 else 100.0
+            _ref_price = sess.reference_price
+            _h = _daily_high.get(symbol, 0)
+            _l = _daily_low.get(symbol, _h)
+            _amp = (_h - _l) / _ref_price * 100 if _ref_price > 0 and _h > _l else 0.0
             _thr = _tick_rise_threshold()
             result = sess.evaluate(
                 combiner=combiner,
@@ -784,6 +796,8 @@ class TradingEngine:
                 check_futures_signal=_check_futures_signal(),
                 vol_ratio=_vr,
                 vol_ratio_min_pct=_vol_ratio_min_pct(),
+                amplitude_pct=_amp,
+                amplitude_min_pct=_amplitude_min_pct(),
             )
             # 只在 60s tick 條件達標時才記 log（避免噪音）
             if sess.tick_rise_60s >= _thr:
@@ -811,6 +825,8 @@ class TradingEngine:
                 bid_pct_threshold=_bid_pct_threshold(),
                 vol_ratio=_vr,
                 vol_ratio_min_pct=_vol_ratio_min_pct(),
+                amplitude_pct=_amp,
+                amplitude_min_pct=_amplitude_min_pct(),
             )
 
             logger.info(

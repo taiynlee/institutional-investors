@@ -237,7 +237,7 @@ function LiveTab() {
             const [_h, _m] = est.split(':').map(Number)
             const _mins = _h * 60 + _m - 9 * 60
             const _volPct = Math.round(_mins * 1.3 * 10) / 10
-            return `進場九條件：\n① 時間窗口（進場開始 ~ 進場截止）\n② 大盤日漲幅 > market_rise_min\n③ 同標的當下未持倉（可關閉）\n④ 今日進場次數 < max_daily_positions\n⑤ 個股漲跌幅在 ±max_change_pct 內\n⑥ ${stream?.tick_window_seconds ?? 60}秒內上漲 ≥ ${stream?.tick_rise_threshold ?? 4} 個 tick（必要）\n⑦ 若有個股期貨：期貨價 > 現價（正價差，可關閉）\n⑧ 已成交買盤 ≥ ${stream?.bid_pct_threshold ?? 60}%（可調）\n⑨ 今日累積量/5日均量 ≥ 開盤後觀察${_mins}分鐘×1.3 = ${_volPct}%`
+            return `進場十條件：\n① 時間窗口（進場開始 ~ 進場截止）\n② 大盤日漲幅 > market_rise_min\n③ 同標的當下未持倉（可關閉）\n④ 今日進場次數 < max_daily_positions\n⑤ 個股漲跌幅在 ±max_change_pct 內\n⑥ ${stream?.tick_window_seconds ?? 60}秒內上漲 ≥ ${stream?.tick_rise_threshold ?? 4} 個 tick（必要）\n⑦ 若有個股期貨：期貨價 > 現價（正價差，可關閉）\n⑧ 已成交買盤 ≥ ${stream?.bid_pct_threshold ?? 60}%（可調）\n⑨ 今日累積量/5日均量 ≥ 開盤後觀察${_mins}分鐘×1.3 = ${_volPct}%\n⑩ 振幅（今日動能）≥ ${stream?.amplitude_min_pct ?? 3}%（可調）`
           })()}
         >
           <span className="text-[10px] text-[#6b84a0] mb-0.5">今日已交易</span>
@@ -843,6 +843,7 @@ const PARAM_DEFS: PD[] = [
   { id:'check_not_in_position',    group:'進場條件', label:'同標的未持倉才可進場',   desc:'勾選（預設）：同一標的已有持倉時拒絕再進場；取消勾選：允許同標的持倉中再進一張', unit:'', rtKey:'check_not_in_position', type:'boolean', canDisable:false },
   { id:'check_futures_signal',     group:'進場條件', label:'期貨正價差才可進場',     desc:'勾選（預設）：個股有期貨資料時，期貨價須 > 現貨才允許進場；取消勾選：忽略期貨訊號', unit:'', rtKey:'check_futures_signal', type:'boolean', canDisable:false },
   { id:'bid_pct_threshold',        group:'進場條件', label:'買盤比例門檻',           desc:'已成交買盤佔總成交量須達此比例才允許進場；買盤比例 = 買方成交量 / (買+賣) × 100', unit:'%', rtKey:'bid_pct_threshold', type:'number', step:5, min:0, max:100, canDisable:false },
+  { id:'amplitude_min_pct',        group:'進場條件', label:'振幅門檻',               desc:'振幅 = (當日最高價 − 最低價) / 昨收 × 100%，反映這支股票今天的動能。振幅太低代表盤整沒方向，不適合當沖，建議設 3~5%', unit:'%', rtKey:'amplitude_min_pct', type:'number', step:0.5, min:0, max:20, canDisable:false },
   // 停損停利
   { id:'stop_loss_ticks',      group:'停損停利', label:'停損 tick 數',    desc:'進場後向下跌超過此 tick 數觸發停損（觸價單）；停損價 = 進場價 - N × tick_size，向上捨入', unit:'tick', rtKey:'stop_loss_ticks', type:'number', step:1, min:1, canDisable:false },
   { id:'take_profit_add_pct',  group:'停損停利', label:'停利附加漲幅',    desc:'停利觸價單 = 昨收 × (1 + (進場時漲幅 + 此%) / 100)，向下捨入 tick；例：進場漲4%、附加4% → 停利在昨收漲8%', unit:'%', rtKey:'take_profit_add_pct', type:'number', step:0.5, min:0.5, canDisable:false },

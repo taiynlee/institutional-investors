@@ -35,6 +35,7 @@ class TradingParamsBody(BaseModel):
     check_not_in_position: bool = True
     check_futures_signal: bool = True
     bid_pct_threshold: float = 60.0
+    amplitude_min_pct: float = 3.0
     # 停損停利
     stop_loss_ticks: int = 4
     take_profit_add_pct: float = 4.0
@@ -114,7 +115,7 @@ def create_app(
     _PARAM_KEYS = [
         "dry_run", "max_position_capital", "max_daily_positions", "commission_discount",
         "tick_rise_threshold", "tick_window_seconds", "max_change_pct", "market_rise_min",
-        "check_not_in_position", "check_futures_signal", "bid_pct_threshold",
+        "check_not_in_position", "check_futures_signal", "bid_pct_threshold", "amplitude_min_pct",
         "stop_loss_ticks", "take_profit_add_pct",
         "entry_start_time", "latest_dynamic_add_time", "force_exit_time",
         "daytrade_price_min", "daytrade_price_max",
@@ -131,6 +132,7 @@ def create_app(
         "check_not_in_position": True,
         "check_futures_signal": True,
         "bid_pct_threshold": 60.0,
+        "amplitude_min_pct": 3.0,
         "stop_loss_ticks": 4,
         "take_profit_add_pct": 4.0,
         "entry_start_time": "09:15",
@@ -148,7 +150,8 @@ def create_app(
                  "tick_rise_threshold", "tick_window_seconds", "stop_loss_ticks"):
             return int(v)
         if k in ("commission_discount", "take_profit_add_pct", "max_change_pct",
-                 "market_rise_min", "daytrade_price_min", "daytrade_price_max", "bid_pct_threshold"):
+                 "market_rise_min", "daytrade_price_min", "daytrade_price_max",
+                 "bid_pct_threshold", "amplitude_min_pct"):
             return float(v)
         return str(v)  # time strings
 
@@ -225,6 +228,7 @@ def create_app(
                      "tick_window_seconds": _trading_params.get("tick_window_seconds", 60),
                      "tick_rise_threshold": _trading_params.get("tick_rise_threshold", 4),
                      "bid_pct_threshold": _trading_params.get("bid_pct_threshold", 60.0),
+                     "amplitude_min_pct": _trading_params.get("amplitude_min_pct", 3.0),
                      "entry_start_time": _trading_params.get("entry_start_time", "09:15"),
                      "pnl": pnl, "positions": positions},
                     ensure_ascii=False, default=str,
@@ -1247,6 +1251,7 @@ def create_app(
         _trading_params["check_not_in_position"] = body.check_not_in_position
         _trading_params["check_futures_signal"] = body.check_futures_signal
         _trading_params["bid_pct_threshold"] = max(0.0, min(100.0, body.bid_pct_threshold))
+        _trading_params["amplitude_min_pct"] = max(0.0, min(20.0, body.amplitude_min_pct))
         _trading_params["stop_loss_ticks"] = max(1, body.stop_loss_ticks)
         _trading_params["take_profit_add_pct"] = max(0.1, body.take_profit_add_pct)
         _trading_params["entry_start_time"] = body.entry_start_time
