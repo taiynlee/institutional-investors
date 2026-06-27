@@ -766,17 +766,16 @@ LINE Bot 連結透過 ngrok tunnel 對外，開機自動重建 webhook URL。
 | # | 條件 | 相關參數 | 可設定 |
 |---|------|----------|--------|
 | 1 | 時間窗口 | `entry_start_time` / `latest_dynamic_add_time` | ✅ 數值 |
-| 2 | 大盤日漲幅 > N% | `market_rise_min`（預設 1%） | ✅ 數值 |
-| 3 | 同標的當下未持倉 | `check_not_in_position`（預設 true） | ✅ 開關 |
-| 4 | 今日進場次數 < 上限 | `max_daily_positions`（預設 5） | ✅ 數值 |
-| 5 | 個股漲跌幅在 ±N% 以內 | `max_change_pct`（預設 5%） | ✅ 數值 |
-| **6** | **⭐ 必要條件（二擇一）：觀察窗口內上漲 ≥ N tick，或觀察窗口買盤佔比 ≥ M%** | `tick_rise_threshold`（預設 4）、`bid_1m_pct_threshold`（預設 70%） | ✅ 數值 |
-| 7 | 個股期貨正價差（有期貨資料才判斷） | `check_futures_signal`（預設 true） | ✅ 開關 |
-| 8 | 買盤比例 >= 門檻 | `bid_pct_threshold`（預設 60%） | ✅ 數值 |
-| 9 | 今日累積量/5日均量 >= 開盤後觀察分鐘數×1.3% | 由 `entry_start_time` 衍生（09:15→19.5%） | 自動計算 |
-| 10 | 振幅（今日動能）>= 門檻 | `amplitude_min_pct`（預設 3%）；振幅 = (High-Low)/昨收×100% | ✅ 數值 |
+| 2 | 同標的當下未持倉 | `check_not_in_position`（預設 true） | ✅ 開關 |
+| 3 | 今日進場次數 < 上限 | `max_daily_positions`（預設 5） | ✅ 數值 |
+| 4 | 個股漲跌幅在 ±N% 以內 | `max_change_pct`（預設 5%） | ✅ 數值 |
+| **5** | **⭐ 必要條件（二擇一）：觀察窗口內上漲 ≥ N tick，或觀察窗口買盤佔比 ≥ M%** | `tick_rise_threshold`（預設 4）、`bid_1m_pct_threshold`（預設 70%） | ✅ 數值 |
+| 6 | 個股期貨正價差（有期貨資料才判斷） | `check_futures_signal`（預設 true） | ✅ 開關 |
+| 7 | 買盤比例 >= 門檻 | `bid_pct_threshold`（預設 60%） | ✅ 數值 |
+| 8 | 今日累積量/5日均量 >= 開盤後觀察分鐘數 × 係數% | `vol_ratio_coefficient`（預設 1.3）；例：09:15進場 → 15×1.3=19.5% | ✅ 數值 |
+| 9 | 振幅（今日動能）>= 門檻 | `amplitude_min_pct`（預設 3%）；振幅 = (High-Low)/昨收×100% | ✅ 數值 |
 
-條件 3、7 可在前端「交易設定」頁面透過 checkbox 開關（勾選 = 啟用；取消 = 放行不檢查）。條件 8、10 為必要條件，門檻可調。條件 9 無需額外設定，門檻隨 `entry_start_time` 自動計算。振幅代表今日股票的動能：振幅低表示盤整沒方向，不適合當沖。
+條件 2、6 可在前端「交易設定」頁面透過 checkbox 開關（勾選 = 啟用；取消 = 放行不檢查）。條件 7、8、9 門檻皆可調。振幅代表今日股票的動能：振幅低表示盤整沒方向，不適合當沖。
 
 所有參數儲存於 PostgreSQL `trading_settings`，透過前端「交易設定」頁面修改後**立即生效**（寫入 PG + 同步 ticks.db 熱重載快取，引擎每 tick 重讀，無需重啟）。
 

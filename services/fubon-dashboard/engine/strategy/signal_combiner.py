@@ -12,32 +12,28 @@ class SignalCombiner:
     """
     進場條件：
     1. 時間窗口（entry_start_mins ~ entry_cutoff）
-    2. 大盤日漲幅 > market_rise_min（預設 1%）
-    3. 同標的當下未持倉（可關閉）
-    4. 今日進場未達上限
-    5. 個股漲跌幅在 ±max_change_pct 內（預設 5%）
-    6. ⭐ 必要條件（二擇一）：
+    2. 同標的當下未持倉（可關閉）
+    3. 今日進場未達上限
+    4. 個股漲跌幅在 ±max_change_pct 內（預設 5%）
+    5. ⭐ 必要條件（二擇一）：
        (a) tick_window_seconds 秒內上漲 >= tick_rise_threshold 個 tick，或
        (b) 觀察窗口內買盤佔比 >= bid_1m_pct_threshold（預設 70%）
-    7. 有個股期貨資料時：期貨價 > 現價（正價差，可關閉）
-    8. 已成交買盤 >= bid_pct_threshold（預設 60%，可調）
-    9. 今日累積量/5日均量 >= 開盤後觀察分鐘數 × 1.3%
-    10. 當日振幅（(High-Low)/昨收×100）>= amplitude_min_pct（預設 3%，可調）
+    6. 有個股期貨資料時：期貨價 > 現價（正價差，可關閉）
+    7. 已成交買盤 >= bid_pct_threshold（預設 60%，可調）
+    8. 今日累積量/5日均量 >= 開盤後觀察分鐘數 × vol_ratio_coefficient%
+    9. 當日振幅（(High-Low)/昨收×100）>= amplitude_min_pct（預設 3%，可調）
     """
 
     def __init__(
         self,
         max_change_pct: float = 5.0,
-        market_rise_min: float = 1.0,
     ):
         self.max_change_pct = max_change_pct
-        self.market_rise_min = market_rise_min
 
     def evaluate(
         self,
         symbol: str,
         time_ok: bool,
-        market_chg_pct: float,
         not_in_position: bool,
         positions_count: int,
         max_positions: int,
@@ -61,8 +57,6 @@ class SignalCombiner:
 
         if not time_ok:
             return no("time_not_ok")
-        if market_chg_pct <= self.market_rise_min:
-            return no(f"market_rise_low_{market_chg_pct:.2f}pct")
         if check_not_in_position and not not_in_position:
             return no("already_in_position")
         if positions_count >= max_positions:

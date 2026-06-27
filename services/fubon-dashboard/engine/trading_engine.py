@@ -260,10 +260,6 @@ class TradingEngine:
             try: return max(0.1, float(_gs("max_change_pct", "5.0")))
             except Exception: return 5.0
 
-        def _market_rise_min() -> float:
-            try: return float(_gs("market_rise_min", "1.0"))
-            except Exception: return 1.0
-
         def _entry_start_mins() -> int:
             try:
                 s = _gs("entry_start_time", "09:15")
@@ -275,9 +271,13 @@ class TradingEngine:
             try: return max(10, int(_gs("tick_window_seconds", "60")))
             except Exception: return 60
 
+        def _vol_ratio_coefficient() -> float:
+            try: return max(0.1, float(_gs("vol_ratio_coefficient", "1.3")))
+            except Exception: return 1.3
+
         def _vol_ratio_min_pct() -> float:
             mins_after_open = max(0, _entry_start_mins() - 9 * 60)
-            return round(mins_after_open * 1.3, 1)
+            return round(mins_after_open * _vol_ratio_coefficient(), 1)
 
         def _amplitude_min_pct() -> float:
             try: return max(0.0, float(_gs("amplitude_min_pct", "3.0")))
@@ -563,7 +563,6 @@ class TradingEngine:
         rm = RiskManager(om, force_exit_time=_force_exit_time())
         combiner = SignalCombiner(
             max_change_pct=_max_change_pct(),
-            market_rise_min=_market_rise_min(),
         )
         notifier = LineNotifier(dry_run=False)
 
@@ -778,7 +777,6 @@ class TradingEngine:
 
             # 熱重載可調參數
             combiner.max_change_pct = _max_change_pct()
-            combiner.market_rise_min = _market_rise_min()
             rm.force_exit_time = _force_exit_time()
             self._state["dry_run"] = _is_dry_run()  # 讓 WebSocket push 反映最新設定
 
@@ -801,7 +799,6 @@ class TradingEngine:
                 positions_count=trades_today,
                 max_positions=_max_daily_positions(),
                 not_in_position=not_in_pos,
-                market_chg_pct=market_chg,
                 tick_rise_threshold=_thr,
                 futures_signal=futures_signals.get(symbol),
                 entry_cutoff_mins=_entry_cutoff(),
@@ -826,15 +823,22 @@ class TradingEngine:
                     "name": sname(symbol),
                     "passed": result.should_enter,
                     "reason": result.reason or "ok",
+                    # 條件⑤ 動能
                     "tick_rise": round(sess.tick_rise_60s, 1),
+                    "bid_1m_pct": round(sess.bid_pct_window, 1),   # 觀察窗口外盤%（條件⑤備用路徑）
+                    # 條件⑦ 累積買盤
                     "bid_pct": round(_bp, 1),
+                    # 條件⑧ 量比
+                    "vol_ratio": round(_vr, 1),
+                    "vol_ratio_thr": round(_vol_ratio_min_pct(), 1),  # 當下門檻（隨時間變動）
+                    # 條件⑨ 振幅
+                    "amplitude_pct": round(_amp, 2),
+                    # 個股漲幅（條件④）
                     "change_pct": round(sess.change_pct, 2),
-                    "market_pct": round(market_chg, 2),
                 })
             theory = sess.evaluate_theoretical(
                 combiner=combiner,
                 current_time=now_time,
-                market_chg_pct=market_chg,
                 tick_rise_threshold=_tick_rise_threshold(),
                 futures_signal=futures_signals.get(symbol),
                 entry_cutoff_mins=_entry_cutoff(),

@@ -89,7 +89,6 @@ class SymbolSession:
         positions_count: int,
         max_positions: int,
         not_in_position: bool,
-        market_chg_pct: float,
         tick_rise_threshold: int,
         futures_signal=None,
         entry_cutoff_mins: int = 13 * 60 + 10,
@@ -110,7 +109,6 @@ class SymbolSession:
         return combiner.evaluate(
             symbol=self.symbol,
             time_ok=time_ok,
-            market_chg_pct=market_chg_pct,
             not_in_position=not_in_position,
             positions_count=positions_count,
             max_positions=max_positions,
@@ -134,7 +132,6 @@ class SymbolSession:
         self,
         combiner: SignalCombiner,
         current_time,
-        market_chg_pct: float,
         tick_rise_threshold: int,
         futures_signal=None,
         entry_cutoff_mins: int = 13 * 60 + 10,
@@ -153,7 +150,6 @@ class SymbolSession:
         return combiner.evaluate(
             symbol=self.symbol,
             time_ok=time_ok,
-            market_chg_pct=market_chg_pct,
             not_in_position=True,
             positions_count=0,
             max_positions=999,
