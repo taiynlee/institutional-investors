@@ -1520,8 +1520,8 @@ function LineLogTab() {
                     <td className={`px-3 py-2 text-center ${mono} ${muted}`}>
                       {r.monthly_seq > 0 ? `#${r.monthly_seq}` : '–'}
                     </td>
-                    <td className="px-3 py-2 text-[#dde6f0] max-w-md">
-                      <div className="whitespace-pre-wrap break-words leading-4">{r.content}</div>
+                    <td className="px-3 py-2 text-[#dde6f0] max-w-sm">
+                      <div className="truncate" title={r.content}>{r.content.replace(/\n/g, ' ｜ ')}</div>
                     </td>
                   </tr>
                 ))}
