@@ -1,0 +1,24 @@
+[Unit]
+Description=Fubon Day Trading Dashboard (institutional-investors)
+After=network-online.target docker.service institutional-investors.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+User=tommy0322
+WorkingDirectory=/home/tommy0322/institutional-investors/services/fubon-dashboard
+ExecStart=/usr/bin/python3 run.py
+Restart=on-failure
+RestartSec=15s
+StartLimitIntervalSec=300
+StartLimitBurst=5
+Environment=TZ=Asia/Taipei
+Environment=FUBON_DATA_DIR=/home/tommy0322/fubon-data
+EnvironmentFile=-/home/tommy0322/institutional-investors/services/fubon-dashboard/.env
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=fubon-dashboard
+
+[Install]
+WantedBy=multi-user.target
