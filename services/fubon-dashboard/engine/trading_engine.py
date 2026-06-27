@@ -69,6 +69,9 @@ class TradingEngine:
         # 個股期貨 symbol map 和即時快取
         self.futures_sym_map: dict[str, str] = {}   # stock_id → futures symbol
         self.futures_signals: dict = {}              # stock_id → FuturesSignal
+        # 觸價單 GUID 記錄，供外部（API）手動取消
+        self.condition_ids: dict[str, dict] = {}     # symbol → {"sl": guid, "tp": guid}
+        self.broker = None                           # FubonBroker 實例（引擎執行期間有效）
 
         _data = os.environ.get("FUBON_DATA_DIR", "/home/tommy0322/fubon-data")
         self._default_config = os.environ.get("FUBON_CONFIG", "/home/tommy0322/fubon-config/config.yaml")
@@ -168,6 +171,8 @@ class TradingEngine:
             self.sessions = {}
             self.sdk = None
             self.account = None
+            self.condition_ids = {}
+            self.broker = None
             if self._state["status"] not in ("error",):
                 with self._lock:
                     self._state["status"] = "stopped"
@@ -551,6 +556,7 @@ class TradingEngine:
         # broker 永遠 dry_run=True 作安全護欄，真實下單需明確修改此行並充分測試
         broker = FubonBroker(dry_run=True)
         broker.initialize(sdk, _account)
+        self.broker = broker
         bm = BudgetManager(max_per_entry=_max_position_capital())
         dt = DailyTracker()
         om = OrderManager(broker)
@@ -572,6 +578,7 @@ class TradingEngine:
 
         # ── 大盤資料 ─────────────────────────────────────────────────────────
         condition_ids: dict[str, dict] = {}  # symbol → {"sl": guid, "tp": guid}
+        self.condition_ids = condition_ids   # 暴露給 API 使用（同一物件引用）
 
         # TAIEX 昨收（用於計算日漲幅 gate）
         _idx_ref: float = 0.0

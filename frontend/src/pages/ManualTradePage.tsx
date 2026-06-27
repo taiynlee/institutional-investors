@@ -42,6 +42,8 @@ export function ManualTradeContent() {
   const [sellShowDropdown, setSellShowDropdown] = useState(false)
   const dropRef = useRef<HTMLDivElement>(null)
   const sellDropRef = useRef<HTMLDivElement>(null)
+  const [manualPositions, setManualPositions] = useState<any[]>([])
+  const [posAction, setPosAction] = useState<string | null>(null)
 
   const loadPool = () =>
     axios.get<PoolStock[]>('/api/pool').then(r => setPool(r.data)).catch(() => {})
@@ -53,11 +55,16 @@ export function ManualTradeContent() {
       if (r.data.take_profit_add_pct != null) setTpAddPct(r.data.take_profit_add_pct)
     }).catch(() => {})
 
+  const loadPositions = () =>
+    axios.get(`${API}/manual-trade/positions`).then(r => setManualPositions(r.data)).catch(() => {})
+
   useEffect(() => {
     loadPool()
     loadTradingParams()
-    const t = setInterval(loadTradingParams, 30_000)
-    return () => clearInterval(t)
+    loadPositions()
+    const t1 = setInterval(loadTradingParams, 30_000)
+    const t2 = setInterval(loadPositions, 5_000)
+    return () => { clearInterval(t1); clearInterval(t2) }
   }, [])
 
   useEffect(() => {
@@ -107,6 +114,42 @@ export function ManualTradeContent() {
     } finally {
       setFetchingSellPrice(false)
     }
+  }
+
+  const doCancelConditions = async (sym: string) => {
+    setPosAction(`cancel:${sym}`)
+    try {
+      await axios.post(`${API}/manual-trade/cancel-conditions/${sym}`)
+      setMsg({ ok: true, text: `✓ ${sym} 觸價單已取消，可安全從手機賣出` })
+      loadPositions()
+    } catch (e: any) {
+      setMsg({ ok: false, text: `✕ ${e?.response?.data?.detail ?? e.message}` })
+    } finally { setPosAction(null) }
+  }
+
+  const doSellPosition = async (sym: string) => {
+    if (!confirm(`確定市價賣出 ${sym}？將同時取消觸價單`)) return
+    setPosAction(`sell:${sym}`)
+    try {
+      const r = await axios.post(`${API}/manual-trade/sell/${sym}`)
+      const pnl = r.data.pnl ?? 0
+      setMsg({ ok: true, text: `✓ ${sym} 已賣出，損益 ${pnl >= 0 ? '+' : ''}${pnl.toLocaleString()}` })
+      loadPositions()
+    } catch (e: any) {
+      setMsg({ ok: false, text: `✕ ${e?.response?.data?.detail ?? e.message}` })
+    } finally { setPosAction(null) }
+  }
+
+  const doDeletePosition = async (sym: string) => {
+    if (!confirm(`從記錄移除 ${sym}（不賣股票、不取消觸價單）？`)) return
+    setPosAction(`del:${sym}`)
+    try {
+      await axios.delete(`${API}/manual-trade/position/${sym}`)
+      setMsg({ ok: true, text: `✓ ${sym} 記錄已移除` })
+      loadPositions()
+    } catch (e: any) {
+      setMsg({ ok: false, text: `✕ ${e?.response?.data?.detail ?? e.message}` })
+    } finally { setPosAction(null) }
   }
 
   const doBuy = async (forceMarket = false) => {
@@ -366,6 +409,87 @@ export function ManualTradeContent() {
           </button>
         </div>
       </div>
+
+      {/* 手動持倉管理 */}
+      {manualPositions.length > 0 && (
+        <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
+          <div className="px-4 py-2 border-b border-gray-800 text-xs text-gray-500">
+            ▸ 手動持倉 ({manualPositions.length})
+            <span className="ml-2 text-gray-600">— 手機賣出前請先按「取消觸價單」</span>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-[11px] text-gray-500 border-b border-gray-800">
+                  <th className="px-4 py-2 text-left">代號</th>
+                  <th className="px-4 py-2 text-right">張</th>
+                  <th className="px-4 py-2 text-right">成本</th>
+                  <th className="px-4 py-2 text-right">現價</th>
+                  <th className="px-4 py-2 text-right">停損</th>
+                  <th className="px-4 py-2 text-right">停利</th>
+                  <th className="px-4 py-2 text-right">未實現</th>
+                  <th className="px-4 py-2 text-center">觸價單</th>
+                  <th className="px-4 py-2 text-center">操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                {manualPositions.map(p => {
+                  const unreal = p.unrealized ?? null
+                  const uc = unreal != null ? (unreal >= 0 ? 'text-red-400' : 'text-green-400') : 'text-gray-500'
+                  const hasConditions = p.stop_guid || p.tp_guid
+                  return (
+                    <tr key={p.symbol} className="border-b border-gray-800 hover:bg-gray-800/50">
+                      <td className="px-4 py-2.5 text-blue-300 font-bold font-mono">{p.symbol}</td>
+                      <td className="px-4 py-2.5 text-right text-white">{p.lots}</td>
+                      <td className="px-4 py-2.5 text-right font-mono text-white">{p.entry_price?.toFixed(2)}</td>
+                      <td className="px-4 py-2.5 text-right font-mono text-white">{p.curr_price > 0 ? p.curr_price.toFixed(2) : '—'}</td>
+                      <td className="px-4 py-2.5 text-right font-mono text-orange-400">{p.stop_loss?.toFixed(2) ?? '—'}</td>
+                      <td className="px-4 py-2.5 text-right font-mono text-green-400">{p.take_profit?.toFixed(2) ?? '—'}</td>
+                      <td className={`px-4 py-2.5 text-right font-mono ${uc}`}>
+                        {unreal != null ? `${unreal >= 0 ? '+' : ''}${Math.round(unreal).toLocaleString()}` : '—'}
+                      </td>
+                      <td className="px-4 py-2.5 text-center">
+                        {hasConditions
+                          ? <span className="text-[10px] px-1.5 py-0.5 rounded bg-orange-900/40 text-orange-400 border border-orange-700/40">掛單中</span>
+                          : <span className="text-[10px] text-gray-600">已取消</span>
+                        }
+                      </td>
+                      <td className="px-4 py-2.5 text-center">
+                        <div className="flex gap-1 justify-center">
+                          <button
+                            onClick={() => doCancelConditions(p.symbol)}
+                            disabled={posAction !== null || !hasConditions}
+                            title="取消停損/停利觸價單（手機賣出前先按）"
+                            className="text-[10px] px-1.5 py-0.5 rounded border border-orange-600/40 text-orange-400 hover:bg-orange-900/30 disabled:opacity-30 whitespace-nowrap"
+                          >
+                            {posAction === `cancel:${p.symbol}` ? '取消中…' : '取消觸價單'}
+                          </button>
+                          <button
+                            onClick={() => doSellPosition(p.symbol)}
+                            disabled={posAction !== null}
+                            title="市價賣出並取消觸價單"
+                            className="text-[10px] px-1.5 py-0.5 rounded border border-red-600/40 text-red-400 hover:bg-red-900/30 disabled:opacity-30 whitespace-nowrap"
+                          >
+                            {posAction === `sell:${p.symbol}` ? '賣出中…' : '市價賣出'}
+                          </button>
+                          <button
+                            onClick={() => doDeletePosition(p.symbol)}
+                            disabled={posAction !== null}
+                            title="僅移除記錄（不賣股票、不取消觸價單）"
+                            className="text-[10px] px-1.5 py-0.5 rounded border border-gray-600/40 text-gray-500 hover:bg-gray-800 disabled:opacity-30"
+                          >
+                            {posAction === `del:${p.symbol}` ? '移除中…' : '刪記錄'}
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       {/* 說明（折疊式，預設收起） */}
       <details className="bg-gray-900 rounded-xl border border-gray-800 p-4">

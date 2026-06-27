@@ -165,6 +165,7 @@ function LiveTab() {
   const evsRef = useRef<EventSource | null>(null)
   const [loading, setLoading] = useState(true)
   const stream = useEngineStream()
+  const [cancellingCond, setCancellingCond] = useState<string | null>(null)
 
   // WebSocket 推送：取代 /status + /positions + /engine/status 輪詢
   useEffect(() => {
@@ -201,6 +202,18 @@ function LiveTab() {
     const tid = setInterval(fetch, 30_000)
     return () => clearInterval(tid)
   }, [list?.date])
+
+  const cancelConditions = async (symbol: string) => {
+    setCancellingCond(symbol)
+    try {
+      await axios.post(`${API}/engine/cancel-conditions/${symbol}`)
+      alert(`✓ ${symbol} 觸價單已取消，可安全從手機賣出`)
+    } catch (e: any) {
+      alert(`✕ ${e?.response?.data?.detail ?? e.message}`)
+    } finally {
+      setCancellingCond(null)
+    }
+  }
 
   const pnlColor = (v: number) => v > 0 ? 'text-red-400' : v < 0 ? 'text-green-400' : 'text-[#6b84a0]'
 
@@ -290,6 +303,7 @@ function LiveTab() {
                   <th className="px-4 py-2 text-right">停損</th>
                   <th className="px-4 py-2 text-right">停利</th>
                   <th className="px-4 py-2 text-right">未實現</th>
+                  <th className="px-4 py-2 text-center w-20"></th>
                 </tr>
               </thead>
               <tbody>
@@ -309,6 +323,16 @@ function LiveTab() {
                       <td className={`px-4 py-2 text-right ${mono} ${nearStop ? 'text-red-400 font-bold' : 'text-orange-400'}`}>{p.stop_loss?.toFixed(1) ?? '—'}</td>
                       <td className={`px-4 py-2 text-right ${mono} ${nearTp ? 'text-red-400 font-bold' : 'text-green-400'}`}>{p.take_profit?.toFixed(1) ?? '—'}</td>
                       <td className={`px-4 py-2 text-right ${mono} ${uc}`}>{unreal != null ? `${unreal >= 0 ? '+' : ''}${Math.round(unreal).toLocaleString()}` : '—'}</td>
+                      <td className="px-4 py-2 text-center">
+                        <button
+                          onClick={() => cancelConditions(p.symbol)}
+                          disabled={cancellingCond === p.symbol}
+                          title="取消停損/停利觸價單（若要從手機 App 手動賣出，請先按此）"
+                          className="text-[10px] px-1.5 py-0.5 rounded border border-orange-600/40 text-orange-400 hover:bg-orange-900/30 disabled:opacity-40 whitespace-nowrap"
+                        >
+                          {cancellingCond === p.symbol ? '取消中…' : '取消觸價單'}
+                        </button>
+                      </td>
                     </tr>
                   )
                 })}

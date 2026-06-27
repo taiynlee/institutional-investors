@@ -1746,6 +1746,34 @@ def create_app(
             return {"ok": False, "message": f"引擎目前狀態={_engine.status}，無法停止"}
         return {"ok": True, "message": "引擎停止中..."}
 
+    @app.post("/engine/cancel-conditions/{symbol}")
+    def engine_cancel_conditions(symbol: str):
+        """取消引擎為某個股掛的停損/停利觸價單（不賣股票）。
+        用途：使用者想從手機 App 手動賣出前，先在這裡取消觸價單，避免觸價後無倉可賣。"""
+        if _engine is None or _engine.status != "running":
+            raise HTTPException(status_code=503, detail="引擎未執行")
+        cids = _engine.condition_ids.pop(symbol, None)
+        if cids is None:
+            raise HTTPException(status_code=404, detail=f"{symbol} 無觸價單記錄（可能已觸發或未進場）")
+        broker = _engine.broker
+        if broker is None:
+            raise HTTPException(status_code=503, detail="broker 未初始化")
+        cancelled = []
+        errors = []
+        if cids.get("sl"):
+            try:
+                broker.cancel_conditional_order(cids["sl"])
+                cancelled.append(f"停損 {cids['sl']}")
+            except Exception as e:
+                errors.append(f"停損取消失敗: {e}")
+        if cids.get("tp"):
+            try:
+                broker.cancel_conditional_order(cids["tp"])
+                cancelled.append(f"停利 {cids['tp']}")
+            except Exception as e:
+                errors.append(f"停利取消失敗: {e}")
+        return {"ok": True, "symbol": symbol, "cancelled": cancelled, "errors": errors}
+
     # ── SSE: live tick stream ─────────────────────────────────────────────────
     _live_conn: list = [None]  # mutable cell for closure
 
