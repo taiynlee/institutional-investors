@@ -916,6 +916,7 @@ Docker daemon 就緒
 | **Docker daemon** | `systemctl enable docker`（已設定） | systemd 啟動時自動起 Docker |
 | **Docker 容器** | `restart: unless-stopped`（docker-compose.yml） | Docker daemon 啟動後容器自動恢復 |
 | **Docker Compose stack** | `institutional-investors.service`（systemd）| 確保 `docker compose up -d` 在開機時執行 |
+| **fubon-dashboard** | `fubon-dashboard.service`（systemd）| 開機自動啟動交易引擎（After=institutional-investors.service），平日 08:30 DailyScheduler 自動登入富邦 SDK |
 | **LINE bot** | `claude-line-bot.service`（systemd）| 開機自動執行 `start.sh`，含 webhook 更新 |
 | **資料庫資料** | `pgdata` Docker volume | 關機不會遺失，volume 永久掛載 |
 | **DB 備份** | `institutional-investors-db-backup.timer`（systemd） | 每日 02:00 自動 pg_dump → `backups/`，保留 7 天 |
