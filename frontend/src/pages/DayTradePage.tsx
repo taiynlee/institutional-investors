@@ -82,11 +82,12 @@ const REASON_LABEL: Record<string, string> = {
 }
 function reasonLabel(r: string): string {
   if (REASON_LABEL[r]) return REASON_LABEL[r]
-  if (r.startsWith('market_rise_low_'))  return `大盤漲幅不足(${r.split('_').pop()}%)`
-  if (r.startsWith('change_pct_exceeded_')) return `個股漲跌過大(${r.split('exceeded_')[1]}%)`
-  if (r.startsWith('tick_rise_low_'))    return `60s tick不足(${r.split('low_')[1]})`
-  if (r.startsWith('bid_pct_low_'))      return `買盤不足(${r.split('low_')[1]}%)`
-  if (r === 'futures_not_leading')       return '期貨未領漲'
+  if (r.startsWith('change_pct_exceeded_'))  return `漲跌幅超限(${r.split('exceeded_')[1]})`
+  if (r.startsWith('tick_rise_low_'))        return `tick+買盤均不足(${r.replace('tick_rise_low_', '')})`
+  if (r.startsWith('bid_pct_low_'))          return `買盤不足(${r.split('low_')[1]}%)`
+  if (r.startsWith('vol_ratio_low_'))        return `量比不足(${r.replace('vol_ratio_low_', '')})`
+  if (r.startsWith('amplitude_low_'))        return `振幅不足(${r.replace('amplitude_low_', '')})`
+  if (r === 'futures_not_leading')           return '期貨未領漲'
   return r
 }
 
@@ -121,14 +122,16 @@ function SignalLogRow({ e, windowSecs = 60 }: { e: any; windowSecs?: number }) {
   // eval
   const passed = e.passed === true
   return (
-    <div className={`flex gap-1.5 items-baseline ${passed ? 'text-green-300' : 'text-yellow-400'}`}>
+    <div className={`flex flex-wrap gap-1.5 items-baseline ${passed ? 'text-green-300' : 'text-yellow-400'}`}>
       <span className="text-[#6b84a0] shrink-0">[{e.ts}]</span>
       <span className="shrink-0">{passed ? '✅' : '⚠'}</span>
       <span className="font-bold shrink-0">{e.name} {e.symbol}</span>
-      <span className={`${mono} text-[10px]`}>{windowSecs}s▲{e.tick_rise}tick</span>
-      <span className={`${mono} text-[10px]`}>bid={e.bid_pct}%</span>
+      <span className={`${mono} text-[10px]`}>{windowSecs}s▲{e.tick_rise}t</span>
+      <span className={`${mono} text-[10px]`}>買1m={e.bid_1m_pct}%</span>
+      <span className={`${mono} text-[10px]`}>買盤={e.bid_pct}%</span>
+      <span className={`${mono} text-[10px]`}>量比={e.vol_ratio}%(≥{e.vol_ratio_thr}%)</span>
+      <span className={`${mono} text-[10px]`}>振幅={e.amplitude_pct}%</span>
       <span className={`${mono} text-[10px]`}>漲{e.change_pct}%</span>
-      <span className={`${mono} text-[10px]`}>市場{e.market_pct}%</span>
       {!passed && <span className="text-red-400 text-[10px]">✗{reasonLabel(e.reason)}</span>}
     </div>
   )
@@ -733,6 +736,23 @@ function PreSessionTab() {
 
   return (
     <div className="space-y-4">
+      {/* 日期選擇 */}
+      {dates.length > 0 && (
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <span className={`text-xs ${muted} mr-1`}>選股日期</span>
+          {dates.map(d => (
+            <button key={d.date} onClick={() => setSelDate(d.date)}
+              className={`px-3 py-1 rounded text-xs font-medium transition-colors ${
+                selDate === d.date
+                  ? 'bg-[#1e3a5f] text-[#dde6f0] ring-1 ring-[#60a5fa]'
+                  : 'bg-[#142035] border border-[#253d5c] text-[#6b84a0] hover:text-[#dde6f0]'
+              }`}>
+              {d.date} <span className={muted}>({d.count})</span>
+            </button>
+          ))}
+        </div>
+      )}
+
       {/* 篩選條件說明 */}
       <div className={`${card} px-4 py-3`}>
         <div className={`text-[10px] uppercase tracking-widest ${muted} mb-3`}>最新觀察名單產生邏輯（每日 21:05）</div>
@@ -854,33 +874,33 @@ function PreSessionTab() {
 }
 
 // ── 交易設定 ─────────────────────────────────────────────────────────────────
-interface PD { id: string; group: string; label: string; desc: string; unit: string; rtKey: string; type: 'number'|'time'|'boolean'; step?: number; min?: number; max?: number; canDisable: boolean }
+interface PD { id: string; group: string; label: string; desc: string; unit: string; rtKey: string; type: 'number'|'time'|'boolean'; step?: number; min?: number; max?: number }
 const PARAM_DEFS: PD[] = [
   // 倉位控制
-  { id:'max_position_capital', group:'倉位控制', label:'每次進場資金上限', desc:'每次進場最多動用的資金（超過就截斷）；張數 = floor(min(上限, 剩餘總資金) / (價格 × 1000))', unit:'TWD', rtKey:'max_position_capital', type:'number', step:100000, min:100000, canDisable:false },
-  { id:'max_daily_positions',  group:'倉位控制', label:'每日進場次數上限', desc:'一天最多進場幾次（同標的可重複計入）；達上限後當日不再開新倉', unit:'次', rtKey:'max_daily_positions', type:'number', step:1, min:1, canDisable:false },
+  { id:'max_position_capital', group:'倉位控制', label:'每次進場資金上限', desc:'每次進場最多動用的資金（超過就截斷）；張數 = floor(min(上限, 剩餘總資金) / (價格 × 1000))', unit:'TWD', rtKey:'max_position_capital', type:'number', step:100000, min:100000 },
+  { id:'max_daily_positions',  group:'倉位控制', label:'每日進場次數上限', desc:'一天最多進場幾次（同標的可重複計入）；達上限後當日不再開新倉', unit:'次', rtKey:'max_daily_positions', type:'number', step:1, min:1 },
   // 進場條件（由常調 → 少調排序）
-  { id:'tick_rise_threshold',      group:'進場條件', label:'tick 上漲門檻',          desc:'觀察窗口內股價上漲需 ≥ 此 tick 數才觸發進場；tick 依各價位不同計算', unit:'tick', rtKey:'tick_rise_threshold', type:'number', step:1, min:1, canDisable:false },
-  { id:'bid_1m_pct_threshold',     group:'進場條件', label:'觀察窗口買盤佔比門檻',   desc:'條件⑤的第二觸發路徑：觀察窗口（tick_window_seconds）內買盤佔總成交量 >= 此%，即使上漲 tick 數不足，也允許進場。預設 70%，與「上漲 N tick」為二擇一', unit:'%', rtKey:'bid_1m_pct_threshold', type:'number', step:5, min:50, max:100, canDisable:false },
-  { id:'bid_pct_threshold',        group:'進場條件', label:'買盤比例門檻',           desc:'已成交買盤佔總成交量須達此比例才允許進場；買盤比例 = 買方成交量 / (買+賣) × 100', unit:'%', rtKey:'bid_pct_threshold', type:'number', step:5, min:0, max:100, canDisable:false },
-  { id:'amplitude_min_pct',        group:'進場條件', label:'振幅門檻',               desc:'振幅 = (當日最高價 − 最低價) / 昨收 × 100%，反映這支股票今天的動能。振幅太低代表盤整沒方向，不適合當沖，建議設 3~5%', unit:'%', rtKey:'amplitude_min_pct', type:'number', step:0.5, min:0, max:20, canDisable:false },
-  { id:'vol_ratio_coefficient',    group:'進場條件', label:'量比係數',               desc:'條件⑧量比門檻 = (進場開始時間 − 09:00 分鐘數) × 此係數。例：09:15進場、係數1.3 → 門檻=19.5%。係數越高代表要求開盤後的交易量相對5日均量越活躍才進場。預設1.3，可調整範圍0.5~5', unit:'', rtKey:'vol_ratio_coefficient', type:'number', step:0.1, min:0.1, max:5, canDisable:false },
-  { id:'tick_window_seconds',      group:'進場條件', label:'tick 觀察窗口',          desc:'計算 tick_rise 用的滾動時間窗口（秒）；預設60秒 = 看過去1分鐘漲了幾tick', unit:'秒', rtKey:'tick_window_seconds', type:'number', step:10, min:10, max:300, canDisable:false },
-  { id:'entry_start_time',         group:'進場條件', label:'進場開始時間',           desc:'此時間之前不開新倉（例：09:15 = 開盤後觀察15分鐘再進場）', unit:'HH:MM', rtKey:'entry_start_time', type:'time', canDisable:false },
-  { id:'max_change_pct',           group:'進場條件', label:'最大漲跌幅',             desc:'個股當日漲跌幅（絕對值）超過此%不進場，避免追高或跌太多', unit:'%', rtKey:'max_change_pct', type:'number', step:0.5, min:0.5, canDisable:false },
-  { id:'check_not_in_position',    group:'進場條件', label:'同標的未持倉才可進場',   desc:'勾選（預設）：同一標的已有持倉時拒絕再進場；取消勾選：允許同標的持倉中再進一張', unit:'', rtKey:'check_not_in_position', type:'boolean', canDisable:false },
-  { id:'check_futures_signal',     group:'進場條件', label:'期貨正價差才可進場',     desc:'勾選（預設）：個股有期貨資料時，期貨價須 > 現貨才允許進場；取消勾選：忽略期貨訊號', unit:'', rtKey:'check_futures_signal', type:'boolean', canDisable:false },
+  { id:'tick_rise_threshold',      group:'進場條件', label:'tick 上漲門檻',          desc:'觀察窗口內股價上漲需 ≥ 此 tick 數才觸發進場；tick 依各價位不同計算', unit:'tick', rtKey:'tick_rise_threshold', type:'number', step:1, min:1 },
+  { id:'bid_1m_pct_threshold',     group:'進場條件', label:'觀察窗口買盤佔比門檻',   desc:'條件⑤的第二觸發路徑：觀察窗口（tick_window_seconds）內買盤佔總成交量 >= 此%，即使上漲 tick 數不足，也允許進場。預設 70%，與「上漲 N tick」為二擇一', unit:'%', rtKey:'bid_1m_pct_threshold', type:'number', step:5, min:50, max:100 },
+  { id:'bid_pct_threshold',        group:'進場條件', label:'買盤比例門檻',           desc:'已成交買盤佔總成交量須達此比例才允許進場；買盤比例 = 買方成交量 / (買+賣) × 100', unit:'%', rtKey:'bid_pct_threshold', type:'number', step:5, min:0, max:100 },
+  { id:'amplitude_min_pct',        group:'進場條件', label:'振幅門檻',               desc:'振幅 = (當日最高價 − 最低價) / 昨收 × 100%，反映這支股票今天的動能。振幅太低代表盤整沒方向，不適合當沖，建議設 3~5%', unit:'%', rtKey:'amplitude_min_pct', type:'number', step:0.5, min:0, max:20 },
+  { id:'vol_ratio_coefficient',    group:'進場條件', label:'量比係數',               desc:'條件⑧量比門檻 = (進場開始時間 − 09:00 分鐘數) × 此係數。例：09:15進場、係數1.3 → 門檻=19.5%。係數越高代表要求開盤後的交易量相對5日均量越活躍才進場。預設1.3，可調整範圍0.5~5', unit:'', rtKey:'vol_ratio_coefficient', type:'number', step:0.1, min:0.1, max:5 },
+  { id:'tick_window_seconds',      group:'進場條件', label:'tick 觀察窗口',          desc:'計算 tick_rise 用的滾動時間窗口（秒）；預設60秒 = 看過去1分鐘漲了幾tick', unit:'秒', rtKey:'tick_window_seconds', type:'number', step:10, min:10, max:300 },
+  { id:'entry_start_time',         group:'進場條件', label:'進場開始時間',           desc:'此時間之前不開新倉（例：09:15 = 開盤後觀察15分鐘再進場）', unit:'HH:MM', rtKey:'entry_start_time', type:'time' },
+  { id:'max_change_pct',           group:'進場條件', label:'最大漲跌幅',             desc:'個股當日漲跌幅（絕對值）超過此%不進場，避免追高或跌太多', unit:'%', rtKey:'max_change_pct', type:'number', step:0.5, min:0.5 },
+  { id:'check_not_in_position',    group:'進場條件', label:'同標的未持倉才可進場',   desc:'勾選（預設）：同一標的已有持倉時拒絕再進場；取消勾選：允許同標的持倉中再進一張', unit:'', rtKey:'check_not_in_position', type:'boolean' },
+  { id:'check_futures_signal',     group:'進場條件', label:'期貨正價差才可進場',     desc:'勾選（預設）：個股有期貨資料時，期貨價須 > 現貨才允許進場；取消勾選：忽略期貨訊號', unit:'', rtKey:'check_futures_signal', type:'boolean' },
   // 停損停利
-  { id:'stop_loss_ticks',      group:'停損停利', label:'停損 tick 數',    desc:'進場後向下跌超過此 tick 數觸發停損（觸價單）；停損價 = 進場價 - N × tick_size，向上捨入', unit:'tick', rtKey:'stop_loss_ticks', type:'number', step:1, min:1, canDisable:false },
-  { id:'take_profit_add_pct',  group:'停損停利', label:'停利附加漲幅',    desc:'停利觸價單 = 昨收 × (1 + (進場時漲幅 + 此%) / 100)，向下捨入 tick；例：進場漲4%、附加4% → 停利在昨收漲8%', unit:'%', rtKey:'take_profit_add_pct', type:'number', step:0.5, min:0.5, canDisable:false },
+  { id:'stop_loss_ticks',      group:'停損停利', label:'停損 tick 數',    desc:'進場後向下跌超過此 tick 數觸發停損（觸價單）；停損價 = 進場價 - N × tick_size，向上捨入', unit:'tick', rtKey:'stop_loss_ticks', type:'number', step:1, min:1 },
+  { id:'take_profit_add_pct',  group:'停損停利', label:'停利附加漲幅',    desc:'停利觸價單 = 昨收 × (1 + (進場時漲幅 + 此%) / 100)，向下捨入 tick；例：進場漲4%、附加4% → 停利在昨收漲8%', unit:'%', rtKey:'take_profit_add_pct', type:'number', step:0.5, min:0.5 },
   // 交易時間
-  { id:'force_exit_time',         group:'交易時間', label:'強制出場時間',  desc:'到達此時間所有持倉強制市價出清（不掛限價，直接市價）', unit:'HH:MM', rtKey:'force_exit_time', type:'time', canDisable:false },
-  { id:'latest_dynamic_add_time', group:'交易時間', label:'進場截止時間',  desc:'此時間後不接受新進場信號，太接近收盤避免來不及出清', unit:'HH:MM', rtKey:'latest_dynamic_add_time', type:'time', canDisable:false },
+  { id:'force_exit_time',         group:'交易時間', label:'強制出場時間',  desc:'到達此時間所有持倉強制市價出清（不掛限價，直接市價）', unit:'HH:MM', rtKey:'force_exit_time', type:'time' },
+  { id:'latest_dynamic_add_time', group:'交易時間', label:'進場截止時間',  desc:'此時間後不接受新進場信號，太接近收盤避免來不及出清', unit:'HH:MM', rtKey:'latest_dynamic_add_time', type:'time' },
   // 委託設定
-  { id:'commission_discount', group:'委託設定', label:'手續費折扣', desc:'券商手續費折讓倍率：0.28 = 付28%，72% 月底退還', unit:'折', rtKey:'commission_discount', type:'number', step:0.01, min:0.01, max:1, canDisable:false },
+  { id:'commission_discount', group:'委託設定', label:'手續費折扣', desc:'券商手續費折讓倍率：0.28 = 付28%，72% 月底退還', unit:'折', rtKey:'commission_discount', type:'number', step:0.01, min:0.01, max:1 },
   // 當沖篩選條件
-  { id:'daytrade_price_min', group:'當沖篩選', label:'股價下限', desc:'當沖候選昨收低於此值排除（太便宜流動性差）', unit:'元', rtKey:'daytrade_price_min', type:'number', step:50, min:0, canDisable:false },
-  { id:'daytrade_price_max', group:'當沖篩選', label:'股價上限', desc:'當沖候選昨收高於此值排除（太貴不利資金配置）', unit:'元', rtKey:'daytrade_price_max', type:'number', step:50, min:0, canDisable:false },
+  { id:'daytrade_price_min', group:'當沖篩選', label:'股價下限', desc:'當沖候選昨收低於此值排除（太便宜流動性差）', unit:'元', rtKey:'daytrade_price_min', type:'number', step:50, min:0 },
+  { id:'daytrade_price_max', group:'當沖篩選', label:'股價上限', desc:'當沖候選昨收高於此值排除（太貴不利資金配置）', unit:'元', rtKey:'daytrade_price_max', type:'number', step:50, min:0 },
 ]
 
 const _PARAM_GROUPS = Array.from(new Set(PARAM_DEFS.map(p => p.group)))
@@ -888,10 +908,6 @@ const _PARAM_GROUPS = Array.from(new Set(PARAM_DEFS.map(p => p.group)))
 function ParamsTab() {
   const [rtParams, setRtParams] = useState<any>(null)
   const [vals, setVals] = useState<Record<string, any>>({})
-  const [enabled, setEnabled] = useState<Record<string, boolean>>(() => {
-    try { const s = localStorage.getItem('fubon_param_enabled'); if (s) return JSON.parse(s) } catch {}
-    return Object.fromEntries(PARAM_DEFS.map(p => [p.id, true]))
-  })
   const [saving, setSaving] = useState(false)
   const [note, setNote] = useState<{ok: boolean; msg: string} | null>(null)
 
@@ -905,12 +921,6 @@ function ParamsTab() {
       setVals(v)
     }).catch(() => {})
   }, [])
-
-  const toggle = (id: string) => setEnabled(prev => {
-    const next = { ...prev, [id]: !prev[id] }
-    try { localStorage.setItem('fubon_param_enabled', JSON.stringify(next)) } catch {}
-    return next
-  })
 
   const save = async () => {
     if (!rtParams) return
@@ -972,7 +982,6 @@ function ParamsTab() {
         <table className="w-full min-w-[640px]">
           <thead className="bg-[#0d1f35] border-b border-[#253d5c]">
             <tr>
-              <th className="px-3 py-2.5 text-center text-xs text-[#6b84a0] w-10">啟用</th>
               <th className="px-3 py-2.5 text-left   text-xs text-[#6b84a0] w-40">參數</th>
               <th className="px-3 py-2.5 text-left   text-xs text-[#6b84a0]">說明</th>
               <th className="px-3 py-2.5 text-right  text-xs text-[#6b84a0] w-28">數值</th>
@@ -983,72 +992,51 @@ function ParamsTab() {
             {_PARAM_GROUPS.map(group => (
               <>
                 <tr key={`g-${group}`} className="bg-[#10243e]">
-                  <td colSpan={5} className="px-3 py-1.5">
+                  <td colSpan={4} className="px-3 py-1.5">
                     <span className="text-[11px] font-bold text-[#60a5fa] tracking-widest uppercase">{group}</span>
                   </td>
                 </tr>
-                {PARAM_DEFS.filter(p => p.group === group).map(p => {
-                  const on = enabled[p.id] ?? true
-                  return (
-                    <tr key={p.id}
-                      className={`border-b border-[#1a2d4a] transition-colors ${on ? 'hover:bg-[#162336]' : 'opacity-40'}`}>
-                      <td className="px-3 py-2.5 text-center">
-                        {p.canDisable ? (
-                          <button onClick={() => toggle(p.id)}
-                            className={`w-4 h-4 rounded border-2 inline-flex items-center justify-center transition-colors
-                              ${on ? 'bg-blue-500 border-blue-500' : 'border-[#4a6080] bg-transparent'}`}>
-                            {on && <svg className="w-2.5 h-2.5 text-white" fill="currentColor" viewBox="0 0 20 20">
-                              <path d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"/>
-                            </svg>}
-                          </button>
-                        ) : (
-                          <div className="w-4 h-4 rounded border-2 border-[#253d5c] inline-flex items-center justify-center" title="必要參數">
-                            <div className="w-1.5 h-1.5 rounded-sm bg-[#4a6080]" />
+                {PARAM_DEFS.filter(p => p.group === group).map(p => (
+                  <tr key={p.id} className="border-b border-[#1a2d4a] hover:bg-[#162336] transition-colors">
+                    <td className="px-3 py-2.5">
+                      <div className="text-xs font-semibold text-[#dde6f0]">{p.label}</div>
+                      <div className="text-[10px] mt-0.5 text-blue-400/70">⚡ 即時</div>
+                    </td>
+                    <td className={`px-3 py-2.5 text-xs ${muted} leading-relaxed`}>{p.desc}</td>
+                    <td className="px-3 py-2.5 text-right">
+                      {p.type === 'boolean' ? (
+                        <label className="inline-flex items-center gap-2 cursor-pointer select-none">
+                          <div className="relative w-9 h-5">
+                            <input type="checkbox" className="sr-only"
+                              checked={vals[p.id] !== false}
+                              onChange={e => setVals(prev => ({ ...prev, [p.id]: e.target.checked }))}
+                            />
+                            <div className={`w-9 h-5 rounded-full transition-colors ${vals[p.id] !== false ? 'bg-blue-500' : 'bg-[#3d5570]'}`} />
+                            <div className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${vals[p.id] !== false ? 'translate-x-4' : 'translate-x-0.5'}`} />
                           </div>
-                        )}
-                      </td>
-                      <td className="px-3 py-2.5">
-                        <div className={`text-xs font-semibold text-[#dde6f0] ${!on ? 'line-through' : ''}`}>{p.label}</div>
-                        <div className="text-[10px] mt-0.5 text-blue-400/70">⚡ 即時</div>
-                      </td>
-                      <td className={`px-3 py-2.5 text-xs ${muted} leading-relaxed`}>{p.desc}</td>
-                      <td className="px-3 py-2.5 text-right">
-                        {p.type === 'boolean' ? (
-                          <label className="inline-flex items-center gap-2 cursor-pointer select-none">
-                            <div className="relative w-9 h-5">
-                              <input type="checkbox" className="sr-only"
-                                checked={vals[p.id] !== false}
-                                onChange={e => setVals(prev => ({ ...prev, [p.id]: e.target.checked }))}
-                              />
-                              <div className={`w-9 h-5 rounded-full transition-colors ${vals[p.id] !== false ? 'bg-blue-500' : 'bg-[#3d5570]'}`} />
-                              <div className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${vals[p.id] !== false ? 'translate-x-4' : 'translate-x-0.5'}`} />
-                            </div>
-                            <span className={`text-xs ${vals[p.id] !== false ? 'text-blue-400' : muted}`}>
-                              {vals[p.id] !== false ? '啟用' : '停用'}
-                            </span>
-                          </label>
-                        ) : (
-                          <input
-                            type={p.type === 'time' ? 'text' : 'number'}
-                            value={vals[p.id] ?? ''}
-                            disabled={!on}
-                            step={p.step}
-                            min={p.min}
-                            max={p.max}
-                            onChange={e => setVals(prev => ({
-                              ...prev,
-                              [p.id]: p.type === 'time' ? e.target.value : Number(e.target.value)
-                            }))}
-                            className={`w-24 text-right bg-[#0c1929] border border-[#253d5c] text-[#dde6f0]
-                              px-2 py-1 text-xs ${mono} rounded focus:outline-none focus:border-[#60a5fa]
-                              disabled:opacity-40 disabled:cursor-not-allowed`}
-                          />
-                        )}
-                      </td>
-                      <td className={`px-3 py-2.5 text-xs ${muted}`}>{p.unit}</td>
-                    </tr>
-                  )
-                })}
+                          <span className={`text-xs ${vals[p.id] !== false ? 'text-blue-400' : muted}`}>
+                            {vals[p.id] !== false ? '啟用' : '停用'}
+                          </span>
+                        </label>
+                      ) : (
+                        <input
+                          type={p.type === 'time' ? 'text' : 'number'}
+                          value={vals[p.id] ?? ''}
+                          step={p.step}
+                          min={p.min}
+                          max={p.max}
+                          onChange={e => setVals(prev => ({
+                            ...prev,
+                            [p.id]: p.type === 'time' ? e.target.value : Number(e.target.value)
+                          }))}
+                          className={`w-24 text-right bg-[#0c1929] border border-[#253d5c] text-[#dde6f0]
+                            px-2 py-1 text-xs ${mono} rounded focus:outline-none focus:border-[#60a5fa]`}
+                        />
+                      )}
+                    </td>
+                    <td className={`px-3 py-2.5 text-xs ${muted}`}>{p.unit}</td>
+                  </tr>
+                ))}
               </>
             ))}
           </tbody>
@@ -1065,13 +1053,11 @@ function ConfigTab() {
   const [sysStatus, setSysStatus] = useState<any>(null)
   const [cfg, setCfg] = useState<any>(null)
   const [restarting, setRestarting] = useState(false)
-  const [connSettings, setConnSettings] = useState({
+  const connSettings = {
     apiUrl: '/fubon-api',
     dailyDb: '/fubon-data/daily.db',
     ticksDb: '/fubon-data/ticks.db',
-    refreshInterval: 1,
-  })
-  const [applied, setApplied] = useState(false)
+  }
 
   useEffect(() => {
     axios.get(`${API}/health`).then(() => setApiOk(true)).catch(() => setApiOk(false))
@@ -1151,37 +1137,23 @@ function ConfigTab() {
       {/* 連線設定 */}
       <div>
         <SectionLabel>連線設定</SectionLabel>
-        <div className={`${card} p-5 space-y-5`}>
-          <div>
-            <label className={`text-xs ${muted} block mb-1`}>FastAPI URL</label>
-            <input type="text" value={connSettings.apiUrl}
-              onChange={e => setConnSettings({ ...connSettings, apiUrl: e.target.value })}
-              className={`w-full bg-[#0c1929] border border-[#253d5c] text-[#dde6f0] rounded-lg px-3 py-2 text-sm ${mono} focus:outline-none focus:border-[#60a5fa]`}
-            />
-          </div>
-          <div>
-            <label className={`text-xs ${muted} block mb-1`}>daily.db 路徑</label>
-            <input type="text" value={connSettings.dailyDb}
-              onChange={e => setConnSettings({ ...connSettings, dailyDb: e.target.value })}
-              className={`w-full bg-[#0c1929] border border-[#253d5c] text-[#dde6f0] rounded-lg px-3 py-2 text-sm ${mono} focus:outline-none focus:border-[#60a5fa]`}
-            />
-          </div>
-          <div>
-            <label className={`text-xs ${muted} block mb-1`}>ticks.db 路徑</label>
-            <input type="text" value={connSettings.ticksDb}
-              onChange={e => setConnSettings({ ...connSettings, ticksDb: e.target.value })}
-              className={`w-full bg-[#0c1929] border border-[#253d5c] text-[#dde6f0] rounded-lg px-3 py-2 text-sm ${mono} focus:outline-none focus:border-[#60a5fa]`}
-            />
-          </div>
-          <div className={`text-xs ${muted} pt-1`}>
-            即時資料透過 WebSocket 推送，無需設定刷新間隔
+        <div className={`${card} p-5 space-y-4`}>
+          {[
+            { label: 'FastAPI URL（reverse proxy 固定）', value: connSettings.apiUrl },
+            { label: 'daily.db 路徑（後端啟動參數決定）', value: connSettings.dailyDb },
+            { label: 'ticks.db 路徑（後端啟動參數決定）', value: connSettings.ticksDb },
+          ].map(row => (
+            <div key={row.label}>
+              <div className={`text-xs ${muted} mb-1`}>{row.label}</div>
+              <div className={`bg-[#0c1929] border border-[#253d5c] text-[#6b84a0] rounded-lg px-3 py-2 text-sm ${mono} select-all`}>
+                {row.value}
+              </div>
+            </div>
+          ))}
+          <div className={`text-xs ${muted}`}>
+            連線路徑由 nginx reverse proxy 固定，資料庫路徑由後端啟動參數設定，無法在此修改。
           </div>
         </div>
-        <button onClick={() => setApplied(true)}
-          className="mt-3 px-6 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm rounded-lg">
-          套用
-        </button>
-        {applied && <span className={`ml-3 text-xs text-green-400`}>✓ 已套用</span>}
       </div>
 
       {/* 帳號 */}

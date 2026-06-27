@@ -1306,7 +1306,7 @@ def create_app(
             f"價={price:.1f}  張數={lots}\n"
             f"停損={pos.stop_loss:.2f}  停利={pos.take_profit:.2f}"
         )
-        sent = notifier.send(msg)
+        sent = notifier.send(msg, msg_type="debug")
         return {"ok": True, "sent": sent, "symbol": symbol, "entry_price": price,
                 "lots": lots, "stop_loss": pos.stop_loss, "take_profit": pos.take_profit, "message": msg}
 
@@ -1327,7 +1327,7 @@ def create_app(
             f"損益={pnl:+,.0f}  {pos['lots']}張\n"
             f"停損={pos['stop_loss']:.2f}  停利={pos.get('take_profit', 0):.2f}"
         )
-        sent = notifier.send(msg)
+        sent = notifier.send(msg, msg_type="debug")
         return {"ok": True, "sent": sent, "symbol": symbol, "exit_price": price,
                 "pnl": pnl, "reason": reason, "message": msg}
 
@@ -1518,18 +1518,6 @@ def create_app(
 
         note = "（該股不支援當沖，改用普通單）" if "fallback" in (buy_mode or "") else ""
 
-        # LINE 通知
-        try:
-            from engine.monitor.notifier import LineNotifier
-            _notifier = LineNotifier(dry_run=False)
-            _notifier.send(
-                f"🟢 手動進場 {symbol}\n"
-                f"價={price:.2f}  張={lots}{('  ' + note) if note else ''}\n"
-                f"停損={stop_loss:.2f}  停利={take_profit:.2f}"
-            )
-        except Exception:
-            pass
-
         return {
             "ok": True,
             "symbol": symbol,
@@ -1567,18 +1555,6 @@ def create_app(
         pnl = (sell_price - pos["entry_price"]) * pos["lots"] * 1000
         del _manual_positions[symbol]
 
-        # LINE 通知
-        try:
-            from engine.monitor.notifier import LineNotifier
-            _pnl_sign = "+" if pnl >= 0 else ""
-            LineNotifier(dry_run=False).send(
-                f"🔴 手動出場 {symbol}\n"
-                f"出場={sell_price:.2f}  張={pos['lots']}\n"
-                f"損益={_pnl_sign}{pnl:,.0f}"
-            )
-        except Exception:
-            pass
-
         return {"ok": True, "symbol": symbol, "exit_price": sell_price,
                 "pnl": round(pnl, 0), "lots": pos["lots"]}
 
@@ -1596,15 +1572,6 @@ def create_app(
             broker.limit_sell(symbol, lots, price)
         except RuntimeError as e:
             raise HTTPException(status_code=400, detail=str(e))
-
-        try:
-            from engine.monitor.notifier import LineNotifier
-            LineNotifier(dry_run=False).send(
-                f"🔴 手動限價賣出 {symbol}\n"
-                f"限價={price:.2f}  張={lots}"
-            )
-        except Exception:
-            pass
 
         return {"ok": True, "symbol": symbol, "price": price, "lots": lots}
 
@@ -1775,6 +1742,35 @@ def create_app(
             except Exception as e:
                 errors.append(f"停利取消失敗: {e}")
         return {"ok": True, "symbol": symbol, "cancelled": cancelled, "errors": errors}
+
+    # ── LINE 通知紀錄 ──────────────────────────────────────────────────────────
+    @app.get("/line-notifications")
+    def get_line_notifications(year_month: str = "", limit: int = 100):
+        """查詢 LINE 通知記錄。year_month 格式 YYYY-MM；空白=本月。"""
+        import datetime as _dt
+        ym = year_month or _dt.datetime.now().strftime("%Y-%m")
+        try:
+            with sqlite3.connect(f"file:{_ticks_db}?mode=ro", uri=True,
+                                 check_same_thread=False) as conn:
+                conn.row_factory = sqlite3.Row
+                rows = conn.execute(
+                    "SELECT monthly_seq, msg_type, content, sent_at, success"
+                    " FROM line_notifications WHERE year_month=?"
+                    " ORDER BY monthly_seq DESC LIMIT ?",
+                    (ym, limit),
+                ).fetchall()
+                total = conn.execute(
+                    "SELECT COUNT(*) FROM line_notifications WHERE year_month=? AND success=1",
+                    (ym,),
+                ).fetchone()[0]
+            return {
+                "year_month": ym,
+                "total_sent": total,
+                "free_remaining": max(0, 200 - total),
+                "rows": [dict(r) for r in rows],
+            }
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
 
     # ── SSE: live tick stream ─────────────────────────────────────────────────
     _live_conn: list = [None]  # mutable cell for closure

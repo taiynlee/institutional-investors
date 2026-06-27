@@ -1,36 +1,103 @@
 import json
 import logging
 import os
+import sqlite3
 import subprocess
 import urllib.error
 import urllib.request
+from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
 
 _LINE_PUSH_URL = "https://api.line.me/v2/bot/message/push"
+_TZ = ZoneInfo("Asia/Taipei")
+
+_NOTIF_DDL = """CREATE TABLE IF NOT EXISTS line_notifications (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    year_month  TEXT    NOT NULL,
+    monthly_seq INTEGER NOT NULL,
+    msg_type    TEXT    NOT NULL DEFAULT 'general',
+    content     TEXT    NOT NULL,
+    sent_at     TEXT    NOT NULL,
+    success     INTEGER NOT NULL DEFAULT 1
+)"""
 
 
 class LineNotifier:
-    """LINE 通知：優先用環境變數直打 Messaging API；無 token 則 fallback subprocess。"""
+    """LINE 通知：優先用環境變數直打 Messaging API；無 token 則 fallback subprocess。
+    每則訊息自動加上月序號 #YYYY-MM-NNN 並寫入 ticks.db/line_notifications。
+    LINE free plan: 200 push messages/month。
+    """
 
     def __init__(self, bot_dir: str = "/home/tommy0322/claude-line-bot", dry_run: bool = False):
         self.bot_dir = Path(bot_dir)
         self.dry_run = dry_run
         self._token = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
         self._target = os.environ.get("LINE_NOTIFY_TARGET", "")
+        data_dir = os.environ.get("FUBON_DATA_DIR", "/fubon-data")
+        self._db = os.path.join(data_dir, "ticks.db")
+        self._init_db()
 
-    def send(self, message: str) -> bool:
+    def _init_db(self) -> None:
+        try:
+            with sqlite3.connect(self._db) as conn:
+                conn.execute(_NOTIF_DDL)
+                conn.commit()
+        except Exception as e:
+            logger.warning("line_notifications 初始化失敗: %s", e)
+
+    def _get_next_seq(self, ym: str) -> int:
+        try:
+            with sqlite3.connect(self._db) as conn:
+                row = conn.execute(
+                    "SELECT COALESCE(MAX(monthly_seq), 0) FROM line_notifications WHERE year_month=?",
+                    (ym,),
+                ).fetchone()
+                return (row[0] if row else 0) + 1
+        except Exception as e:
+            logger.warning("取得月序號失敗: %s", e)
+            return 0
+
+    def _insert_log(self, ym: str, seq: int, msg_type: str,
+                    content: str, sent_at: datetime, success: bool) -> None:
+        try:
+            with sqlite3.connect(self._db) as conn:
+                conn.execute(
+                    "INSERT INTO line_notifications"
+                    "(year_month, monthly_seq, msg_type, content, sent_at, success)"
+                    " VALUES(?,?,?,?,?,?)",
+                    (ym, seq, msg_type, content, sent_at.isoformat(), int(success)),
+                )
+                conn.commit()
+        except Exception as e:
+            logger.warning("line_notifications 寫入失敗: %s", e)
+
+    def send(self, message: str, msg_type: str = "general") -> bool:
+        now = datetime.now(_TZ)
+        ym = now.strftime("%Y-%m")
+        seq = self._get_next_seq(ym)
+        label = f"本月第{seq}次通知" if seq > 0 else ""
+        full_msg = f"{label}\n{message}" if label else message
+
         if self.dry_run:
-            logger.info("[LINE DRY RUN] %s", message)
+            logger.info("[LINE DRY RUN] %s", full_msg)
+            if seq > 0:
+                self._insert_log(ym, seq, msg_type, full_msg, now, True)
             return True
 
         bot_url = os.environ.get("LINE_BOT_URL", "")
         if bot_url:
-            return self._send_bot_notify(bot_url, message)
-        if self._token and self._target:
-            return self._send_api(message)
-        return self._send_subprocess(message)
+            ok = self._send_bot_notify(bot_url, full_msg)
+        elif self._token and self._target:
+            ok = self._send_api(full_msg)
+        else:
+            ok = self._send_subprocess(full_msg)
+
+        if seq > 0:
+            self._insert_log(ym, seq, msg_type, full_msg, now, ok)
+        return ok
 
     def _send_bot_notify(self, bot_url: str, message: str) -> bool:
         payload = json.dumps({"message": message}).encode("utf-8")

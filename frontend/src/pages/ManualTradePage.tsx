@@ -172,6 +172,7 @@ export function ManualTradeContent() {
       const note = r.data?.note ? ` ${r.data.note}` : ''
       setMsg({ ok: true, text: `✓ ${symbol} 買進 ${lots}張 @ ${entryPrice}，停損/停利觸價單已掛出${note}` })
       setSymbol(''); setName(''); setPrice('')
+      loadPositions()
     } catch (e: any) {
       setMsg({ ok: false, text: `✕ ${e?.response?.data?.detail ?? e.message}` })
     } finally {
@@ -324,9 +325,9 @@ export function ManualTradeContent() {
               onClick={() => doBuy(true)}
               disabled={busy || !symbol}
               className="px-4 py-2.5 bg-orange-800 hover:bg-orange-700 text-white text-sm font-bold rounded-lg disabled:opacity-40"
-              title="市價 IOC"
+              title="IOC 市價單：強制以當下最佳市價成交，未成交部分取消（不需輸入價格）"
             >
-              市價
+              市價IOC
             </button>
           </div>
         </div>
@@ -335,7 +336,10 @@ export function ManualTradeContent() {
         <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 space-y-3">
           <div className="text-sm font-bold text-white border-b border-gray-800 pb-2">
             賣出
-            <span className="text-xs text-gray-500 font-normal ml-2">限價現賣 ROD</span>
+            <span className="text-xs text-gray-500 font-normal ml-2">限價現賣 ROD · 不影響觸價單</span>
+          </div>
+          <div className="text-[11px] text-orange-400/80 bg-orange-900/20 rounded px-2 py-1 border border-orange-800/30">
+            ⚠ 若已有持倉觸價單，請改用下方持倉表的「市價賣出」或先按「取消觸價單」
           </div>
 
           {/* 股票 */}

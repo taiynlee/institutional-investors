@@ -688,7 +688,8 @@ class TradingEngine:
                 notifier.send(
                     f"🔴 出場 {symbol} {sname(symbol)}\n"
                     f"原因={exit_reason}  {pos_before.entry_price:.0f}→{price:.0f}\n"
-                    f"損益={pnl:+,.0f}  {pos_before.lots}張"
+                    f"損益={pnl:+,.0f}  {pos_before.lots}張",
+                    msg_type="auto_exit",
                 )
 
             last = last_signal_eval.get(symbol)
@@ -933,7 +934,8 @@ class TradingEngine:
             notifier.send(
                 f"🟢 進場 {symbol} {sname(symbol)}\n"
                 f"價={price:.0f}  張數={lots}\n"
-                f"停損={stop_loss:.2f}  停利={take_profit:.2f}"
+                f"停損={stop_loss:.2f}  停利={take_profit:.2f}",
+                msg_type="auto_entry",
             )
 
             # 掛觸價停損/停利賣單（dry_run 時只 log）
@@ -988,7 +990,8 @@ class TradingEngine:
                     notifier.send(
                         f"⚠️ 收盤前仍有持倉\n"
                         f"{pos_summary}\n"
-                        f"距強制出場約 5 分鐘（{_force_exit_time().strftime('%H:%M')}）"
+                        f"距強制出場約 5 分鐘（{_force_exit_time().strftime('%H:%M')}）",
+                        msg_type="warning",
                     )
                     logger.warning("13:15 持倉預警：%s", pos_summary)
 
@@ -1059,7 +1062,8 @@ class TradingEngine:
                             f"⏰ 強制出場（時間到）{sym} {sname(sym)}\n"
                             f"已同時送市價IOC + 限價ROD\n"
                             f"損益估計 {pnl_est:+,.0f}\n"
-                            f"⚠️ 請至富邦確認是否成交"
+                            f"⚠️ 請至富邦確認是否成交",
+                            msg_type="force_exit",
                         )
         finally:
             feed.disconnect()
