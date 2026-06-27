@@ -225,6 +225,7 @@ def create_app(
                      "tick_window_seconds": _trading_params.get("tick_window_seconds", 60),
                      "tick_rise_threshold": _trading_params.get("tick_rise_threshold", 4),
                      "bid_pct_threshold": _trading_params.get("bid_pct_threshold", 60.0),
+                     "entry_start_time": _trading_params.get("entry_start_time", "09:15"),
                      "pnl": pnl, "positions": positions},
                     ensure_ascii=False, default=str,
                 )

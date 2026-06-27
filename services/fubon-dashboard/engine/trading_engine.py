@@ -270,6 +270,10 @@ class TradingEngine:
             try: return max(10, int(_gs("tick_window_seconds", "60")))
             except Exception: return 60
 
+        def _vol_ratio_min_pct() -> float:
+            mins_after_open = max(0, _entry_start_mins() - 9 * 60)
+            return round(mins_after_open * 1.3, 1)
+
         def _check_not_in_position() -> bool:
             return str(_gs("check_not_in_position", "True")).lower() in ("true", "1", "yes")
 
@@ -342,6 +346,7 @@ class TradingEngine:
 
         # ── 標的清單（從 PG backend 取，fallback hardcoded） ────────────────
         symbols: list[str] = ["2330"]
+        _avg_vol5: dict[str, float] = {}   # {symbol: 5日均量(張)}
         try:
             import httpx as _httpx
             _r = _httpx.get("http://localhost:8000/api/daytrade/list", timeout=8)
@@ -350,6 +355,11 @@ class TradingEngine:
                 _codes = [s["stock_id"] for s in _data.get("stocks", []) if "stock_id" in s]
                 if _codes:
                     symbols = _codes
+                    _avg_vol5 = {
+                        s["stock_id"]: float(s.get("avg_vol5") or 0)
+                        for s in _data.get("stocks", [])
+                        if "stock_id" in s
+                    }
                     logger.info("從 PG daytrade_candidate 取得 %d 檔標的（%s）", len(symbols), _data.get("date", "?"))
         except Exception as e:
             logger.warning("daytrade_list 讀取失敗，使用 config: %s", e)
@@ -583,6 +593,7 @@ class TradingEngine:
         _entry_times: dict[str, datetime] = {}
         _cum_bid: dict[str, int] = {}  # 累積外盤成交量（成交價 >= 賣一，主動買方）
         _cum_ask: dict[str, int] = {}  # 累積內盤成交量（成交價 <= 買一，主動賣方）
+        _cum_vol: dict[str, int] = {}  # 累積今日成交量（股，用於 vol_ratio 計算）
         _log_cleared_date = [None]     # 追蹤清除日期
 
         def _append_log(entry: dict):
@@ -619,6 +630,7 @@ class TradingEngine:
             except Exception:
                 pass
 
+            _cum_vol[symbol] = _cum_vol.get(symbol, 0) + size
             sess.on_tick(price, size, ts_ns, tick_window_seconds=_tick_window_seconds())
             now = now_tw()
 
@@ -752,6 +764,8 @@ class TradingEngine:
             _b = _cum_bid.get(symbol, 0)
             _a = _cum_ask.get(symbol, 0)
             _bp = _b / (_b + _a) * 100 if (_b + _a) > 0 else 50.0
+            _avg5 = _avg_vol5.get(symbol, 0)
+            _vr = (_cum_vol.get(symbol, 0) / 1000 / _avg5 * 100) if _avg5 > 0 else 100.0
             _thr = _tick_rise_threshold()
             result = sess.evaluate(
                 combiner=combiner,
@@ -768,6 +782,8 @@ class TradingEngine:
                 bid_pct_threshold=_bid_pct_threshold(),
                 check_not_in_position=_check_not_in_position(),
                 check_futures_signal=_check_futures_signal(),
+                vol_ratio=_vr,
+                vol_ratio_min_pct=_vol_ratio_min_pct(),
             )
             # 只在 60s tick 條件達標時才記 log（避免噪音）
             if sess.tick_rise_60s >= _thr:
@@ -793,6 +809,8 @@ class TradingEngine:
                 entry_start_mins=_entry_start_mins(),
                 check_futures_signal=_check_futures_signal(),
                 bid_pct_threshold=_bid_pct_threshold(),
+                vol_ratio=_vr,
+                vol_ratio_min_pct=_vol_ratio_min_pct(),
             )
 
             logger.info(

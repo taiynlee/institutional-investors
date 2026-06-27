@@ -11,14 +11,15 @@ class SignalResult:
 class SignalCombiner:
     """
     進場條件：
-    1. 時間窗口（09:15 ~ entry_cutoff）
+    1. 時間窗口（entry_start_mins ~ entry_cutoff）
     2. 大盤日漲幅 > market_rise_min（預設 1%）
-    3. 今日進場未達上限
-    4. 個股漲跌幅在 ±max_change_pct 內（預設 5%）
-    5. 60秒內上漲 >= tick_rise_threshold 個 tick（預設 4，必要條件）
-    6. 有個股期貨資料時：期貨價 > 現價（正價差，可關閉）
-    7. 已成交買盤 >= bid_pct_threshold（預設 60%，可調）
-    8. 同標的當下未持倉（可關閉）
+    3. 同標的當下未持倉（可關閉）
+    4. 今日進場未達上限
+    5. 個股漲跌幅在 ±max_change_pct 內（預設 5%）
+    6. tick_window_seconds 秒內上漲 >= tick_rise_threshold 個 tick（必要條件）
+    7. 有個股期貨資料時：期貨價 > 現價（正價差，可關閉）
+    8. 已成交買盤 >= bid_pct_threshold（預設 60%，可調）
+    9. 今日累積量/5日均量 >= 開盤後觀察分鐘數 × 1.3%
     """
 
     def __init__(
@@ -45,6 +46,8 @@ class SignalCombiner:
         bid_pct_threshold: float = 60.0,
         check_not_in_position: bool = True,
         check_futures_signal: bool = True,
+        vol_ratio: float = 100.0,
+        vol_ratio_min_pct: float = 0.0,
     ) -> SignalResult:
         def no(r):
             return SignalResult(symbol=symbol, should_enter=False, reason=r)
@@ -65,5 +68,7 @@ class SignalCombiner:
             return no("futures_not_leading")
         if bid_pct < bid_pct_threshold:
             return no(f"bid_pct_low_{bid_pct:.0f}")
+        if vol_ratio_min_pct > 0 and vol_ratio < vol_ratio_min_pct:
+            return no(f"vol_ratio_low_{vol_ratio:.1f}pct_need_{vol_ratio_min_pct:.1f}pct")
 
         return SignalResult(symbol=symbol, should_enter=True, reason="ok")
