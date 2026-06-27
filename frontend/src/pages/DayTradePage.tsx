@@ -827,7 +827,7 @@ const PARAM_DEFS: PD[] = [
   { id:'market_rise_min',          group:'進場條件', label:'大盤日漲幅門檻',         desc:'加權今日較昨收漲幅須 > 此%才允許開倉；建議 0.1（大盤必須是漲的）；0 = 不限制', unit:'%', rtKey:'market_rise_min', type:'number', step:0.1, min:0, canDisable:false },
   { id:'check_not_in_position',    group:'進場條件', label:'同標的未持倉才可進場',   desc:'勾選（預設）：同一標的已有持倉時拒絕再進場；取消勾選：允許同標的持倉中再進一張', unit:'', rtKey:'check_not_in_position', type:'boolean', canDisable:false },
   { id:'check_futures_signal',     group:'進場條件', label:'期貨正價差才可進場',     desc:'勾選（預設）：個股有期貨資料時，期貨價須 > 現貨才允許進場；取消勾選：忽略期貨訊號', unit:'', rtKey:'check_futures_signal', type:'boolean', canDisable:false },
-  { id:'check_bid_pct',            group:'進場條件', label:'買盤 > 賣盤才可進場',   desc:'勾選（預設）：累積已成交買盤須 > 50% 才允許進場；取消勾選：忽略買賣盤比例', unit:'', rtKey:'check_bid_pct', type:'boolean', canDisable:false },
+  { id:'bid_pct_threshold',        group:'進場條件', label:'買盤比例門檻',           desc:'已成交買盤佔總成交量須達此比例才允許進場；買盤比例 = 買方成交量 / (買+賣) × 100', unit:'%', rtKey:'bid_pct_threshold', type:'number', step:5, min:0, max:100, canDisable:false },
   // 停損停利
   { id:'stop_loss_ticks',      group:'停損停利', label:'停損 tick 數',    desc:'進場後向下跌超過此 tick 數觸發停損（觸價單）；停損價 = 進場價 - N × tick_size，向上捨入', unit:'tick', rtKey:'stop_loss_ticks', type:'number', step:1, min:1, canDisable:false },
   { id:'take_profit_add_pct',  group:'停損停利', label:'停利附加漲幅',    desc:'停利觸價單 = 昨收 × (1 + (進場時漲幅 + 此%) / 100)，向下捨入 tick；例：進場漲4%、附加4% → 停利在昨收漲8%', unit:'%', rtKey:'take_profit_add_pct', type:'number', step:0.5, min:0.5, canDisable:false },

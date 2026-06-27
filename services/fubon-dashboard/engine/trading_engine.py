@@ -276,8 +276,9 @@ class TradingEngine:
         def _check_futures_signal() -> bool:
             return str(_gs("check_futures_signal", "True")).lower() in ("true", "1", "yes")
 
-        def _check_bid_pct() -> bool:
-            return str(_gs("check_bid_pct", "True")).lower() in ("true", "1", "yes")
+        def _bid_pct_threshold() -> float:
+            try: return max(0.0, float(_gs("bid_pct_threshold", "60.0")))
+            except Exception: return 60.0
 
         with self._lock:
             self._state["dry_run"] = dry_run
@@ -756,9 +757,9 @@ class TradingEngine:
                 entry_cutoff_mins=_entry_cutoff(),
                 entry_start_mins=_entry_start_mins(),
                 bid_pct=_bp,
+                bid_pct_threshold=_bid_pct_threshold(),
                 check_not_in_position=_check_not_in_position(),
                 check_futures_signal=_check_futures_signal(),
-                check_bid_pct=_check_bid_pct(),
             )
             # 只在 60s tick 條件達標時才記 log（避免噪音）
             if sess.tick_rise_60s >= _thr:
@@ -783,7 +784,7 @@ class TradingEngine:
                 entry_cutoff_mins=_entry_cutoff(),
                 entry_start_mins=_entry_start_mins(),
                 check_futures_signal=_check_futures_signal(),
-                check_bid_pct=_check_bid_pct(),
+                bid_pct_threshold=_bid_pct_threshold(),
             )
 
             logger.info(

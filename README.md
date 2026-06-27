@@ -772,9 +772,9 @@ LINE Bot 連結透過 ngrok tunnel 對外，開機自動重建 webhook URL。
 | 5 | 個股漲跌幅在 ±N% 以內 | `max_change_pct`（預設 5%） | ✅ 數值 |
 | **6** | **⭐ `tick_window_seconds` 秒內上漲 ≥ N tick（必要條件）** | `tick_rise_threshold`（預設 4） | ✅ 數值 |
 | 7 | 個股期貨正價差（有期貨資料才判斷） | `check_futures_signal`（預設 true） | ✅ 開關 |
-| 8 | 買盤 > 賣盤（bid_pct > 50%） | `check_bid_pct`（預設 true） | ✅ 開關 |
+| 8 | 買盤比例 >= 門檻 | `bid_pct_threshold`（預設 60%） | ✅ 數值 |
 
-條件 3、7、8 原為硬碼邏輯，現可在前端「交易設定」頁面透過 checkbox 開關（勾選 = 啟用該條件；取消 = 放行不檢查）。
+條件 3、7 可在前端「交易設定」頁面透過 checkbox 開關（勾選 = 啟用；取消 = 放行不檢查）。條件 8 為必要條件，門檻可調（0~100%）。
 
 所有參數儲存於 PostgreSQL `trading_settings`，透過前端「交易設定」頁面修改後**立即生效**（寫入 PG + 同步 ticks.db 熱重載快取，引擎每 tick 重讀，無需重啟）。
 

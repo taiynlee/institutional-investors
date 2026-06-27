@@ -17,7 +17,7 @@ class SignalCombiner:
     4. 個股漲跌幅在 ±max_change_pct 內（預設 5%）
     5. 60秒內上漲 >= tick_rise_threshold 個 tick（預設 4，必要條件）
     6. 有個股期貨資料時：期貨價 > 現價（正價差，可關閉）
-    7. 已成交買盤 > 賣盤（bid_pct > 50%，可關閉）
+    7. 已成交買盤 >= bid_pct_threshold（預設 60%，可調）
     8. 同標的當下未持倉（可關閉）
     """
 
@@ -42,9 +42,9 @@ class SignalCombiner:
         tick_rise_threshold: int,
         futures_signal=None,
         bid_pct: float = 50.0,
+        bid_pct_threshold: float = 60.0,
         check_not_in_position: bool = True,
         check_futures_signal: bool = True,
-        check_bid_pct: bool = True,
     ) -> SignalResult:
         def no(r):
             return SignalResult(symbol=symbol, should_enter=False, reason=r)
@@ -63,7 +63,7 @@ class SignalCombiner:
             return no(f"tick_rise_low_{tick_rise:.1f}")
         if check_futures_signal and futures_signal is not None and not futures_signal.is_leading():
             return no("futures_not_leading")
-        if check_bid_pct and bid_pct <= 50.0:
+        if bid_pct < bid_pct_threshold:
             return no(f"bid_pct_low_{bid_pct:.0f}")
 
         return SignalResult(symbol=symbol, should_enter=True, reason="ok")

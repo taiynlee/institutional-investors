@@ -34,7 +34,7 @@ class TradingParamsBody(BaseModel):
     market_rise_min: float = 1.0
     check_not_in_position: bool = True
     check_futures_signal: bool = True
-    check_bid_pct: bool = True
+    bid_pct_threshold: float = 60.0
     # 停損停利
     stop_loss_ticks: int = 4
     take_profit_add_pct: float = 4.0
@@ -114,7 +114,7 @@ def create_app(
     _PARAM_KEYS = [
         "dry_run", "max_position_capital", "max_daily_positions", "commission_discount",
         "tick_rise_threshold", "tick_window_seconds", "max_change_pct", "market_rise_min",
-        "check_not_in_position", "check_futures_signal", "check_bid_pct",
+        "check_not_in_position", "check_futures_signal", "bid_pct_threshold",
         "stop_loss_ticks", "take_profit_add_pct",
         "entry_start_time", "latest_dynamic_add_time", "force_exit_time",
         "daytrade_price_min", "daytrade_price_max",
@@ -130,7 +130,7 @@ def create_app(
         "market_rise_min": 1.0,
         "check_not_in_position": True,
         "check_futures_signal": True,
-        "check_bid_pct": True,
+        "bid_pct_threshold": 60.0,
         "stop_loss_ticks": 4,
         "take_profit_add_pct": 4.0,
         "entry_start_time": "09:15",
@@ -142,13 +142,13 @@ def create_app(
 
     def _cast_param(k: str, v: str):
         """字串 → 正確型別"""
-        if k in ("dry_run", "check_not_in_position", "check_futures_signal", "check_bid_pct"):
+        if k in ("dry_run", "check_not_in_position", "check_futures_signal"):
             return str(v).lower() in ("true", "1", "yes")
         if k in ("max_position_capital", "max_daily_positions",
                  "tick_rise_threshold", "tick_window_seconds", "stop_loss_ticks"):
             return int(v)
         if k in ("commission_discount", "take_profit_add_pct", "max_change_pct",
-                 "market_rise_min", "daytrade_price_min", "daytrade_price_max"):
+                 "market_rise_min", "daytrade_price_min", "daytrade_price_max", "bid_pct_threshold"):
             return float(v)
         return str(v)  # time strings
 
@@ -1244,7 +1244,7 @@ def create_app(
         _trading_params["market_rise_min"] = body.market_rise_min
         _trading_params["check_not_in_position"] = body.check_not_in_position
         _trading_params["check_futures_signal"] = body.check_futures_signal
-        _trading_params["check_bid_pct"] = body.check_bid_pct
+        _trading_params["bid_pct_threshold"] = max(0.0, min(100.0, body.bid_pct_threshold))
         _trading_params["stop_loss_ticks"] = max(1, body.stop_loss_ticks)
         _trading_params["take_profit_add_pct"] = max(0.1, body.take_profit_add_pct)
         _trading_params["entry_start_time"] = body.entry_start_time
