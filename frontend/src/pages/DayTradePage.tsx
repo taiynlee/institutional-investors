@@ -350,6 +350,7 @@ function LiveTab() {
                   <th className="px-3 py-2 text-right" style={{minWidth:56}}>Open</th>
                   <th className="px-3 py-2 text-right" style={{minWidth:56}}>High</th>
                   <th className="px-3 py-2 text-right" style={{minWidth:56}}>Low</th>
+                  <th className="px-3 py-2 text-right" style={{minWidth:56}}>振幅%</th>
                   <th className="px-3 py-2 text-right" style={{minWidth:72}}>今日累積量/5日均量</th>
                 </tr>
               </thead>
@@ -444,6 +445,14 @@ function LiveTab() {
                       {/* Low */}
                       <td className={`px-3 py-2.5 text-right ${mono} text-xs text-green-400`}>
                         {low_v != null ? low_v.toFixed(1) : '—'}
+                      </td>
+                      {/* 振幅% = (High - Low) / 昨收 × 100 */}
+                      <td className={`px-3 py-2.5 text-right ${mono} text-xs`}>
+                        {high_v != null && low_v != null && ref ? (
+                          <span className="text-yellow-300">
+                            {((high_v - low_v) / ref * 100).toFixed(1)}%
+                          </span>
+                        ) : <span className={muted}>—</span>}
                       </td>
                       {/* 今日累積量 / 5日均量 % */}
                       <td className="px-3 py-2.5">
