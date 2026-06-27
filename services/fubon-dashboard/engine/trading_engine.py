@@ -278,6 +278,10 @@ class TradingEngine:
             try: return max(0.0, float(_gs("amplitude_min_pct", "3.0")))
             except Exception: return 3.0
 
+        def _bid_1m_pct_threshold() -> float:
+            try: return max(0.0, min(100.0, float(_gs("bid_1m_pct_threshold", "70.0"))))
+            except Exception: return 70.0
+
         def _check_not_in_position() -> bool:
             return str(_gs("check_not_in_position", "True")).lower() in ("true", "1", "yes")
 
@@ -714,6 +718,8 @@ class TradingEngine:
                     )
                 _cum_bid[symbol] = _cum_bid.get(symbol, 0) + bid_vol
                 _cum_ask[symbol] = _cum_ask.get(symbol, 0) + ask_vol
+                if sess:
+                    sess.on_bid_ask_tick(bid_vol, ask_vol, _tick_window_seconds())
             except Exception as e:
                 logger.debug("on_quote 異常: %s", e)
 
@@ -798,6 +804,8 @@ class TradingEngine:
                 vol_ratio_min_pct=_vol_ratio_min_pct(),
                 amplitude_pct=_amp,
                 amplitude_min_pct=_amplitude_min_pct(),
+                bid_1m_pct=sess.bid_pct_window,
+                bid_1m_pct_threshold=_bid_1m_pct_threshold(),
             )
             # 只在 60s tick 條件達標時才記 log（避免噪音）
             if sess.tick_rise_60s >= _thr:
@@ -827,6 +835,8 @@ class TradingEngine:
                 vol_ratio_min_pct=_vol_ratio_min_pct(),
                 amplitude_pct=_amp,
                 amplitude_min_pct=_amplitude_min_pct(),
+                bid_1m_pct=sess.bid_pct_window,
+                bid_1m_pct_threshold=_bid_1m_pct_threshold(),
             )
 
             logger.info(

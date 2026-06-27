@@ -29,6 +29,8 @@ class SymbolSession:
 
         # 60秒滾動價格歷史（用於 tick_rise_60s 計算）
         self._price_history: deque = deque()  # (datetime, price)
+        # 60秒滾動買賣盤成交量歷史（用於 bid_pct_window 計算）
+        self._quote_history: deque = deque()  # (datetime, bid_vol, ask_vol)
 
     def on_tick(self, price: float, size: int, ts_ns: int, tick_window_seconds: int = 60):
         self.curr_price = price
@@ -43,6 +45,14 @@ class SymbolSession:
     def on_quote(self, bids: list, asks: list):
         pass  # quote data no longer used
 
+    def on_bid_ask_tick(self, bid_vol: int, ask_vol: int, window_seconds: int = 60):
+        """記錄本 tick 的買賣量到滾動窗口，用於計算觀察期間買盤佔比。"""
+        dt = now_tw()
+        self._quote_history.append((dt, bid_vol, ask_vol))
+        cutoff = dt - timedelta(seconds=window_seconds)
+        while self._quote_history and self._quote_history[0][0] < cutoff:
+            self._quote_history.popleft()
+
     def _on_1min_close(self, bar: Bar):
         self.prev_1min_volume = bar.volume
         self.prev_1min_close = bar.close
@@ -52,6 +62,14 @@ class SymbolSession:
         if self.reference_price <= 0:
             return 0.0
         return (self.curr_price - self.reference_price) / self.reference_price * 100
+
+    @property
+    def bid_pct_window(self) -> float:
+        """觀察窗口內買盤佔總成交量的比例（%）。"""
+        total_bid = sum(b for _, b, _ in self._quote_history)
+        total_ask = sum(a for _, _, a in self._quote_history)
+        total = total_bid + total_ask
+        return total_bid / total * 100 if total > 0 else 50.0
 
     @property
     def tick_rise_60s(self) -> float:
@@ -84,6 +102,8 @@ class SymbolSession:
         vol_ratio_min_pct: float = 0.0,
         amplitude_pct: float = 0.0,
         amplitude_min_pct: float = 3.0,
+        bid_1m_pct: float = 50.0,
+        bid_1m_pct_threshold: float = 70.0,
     ) -> SignalResult:
         current_mins = current_time.hour * 60 + current_time.minute
         time_ok = current_mins >= entry_start_mins and current_mins < entry_cutoff_mins
@@ -106,6 +126,8 @@ class SymbolSession:
             vol_ratio_min_pct=vol_ratio_min_pct,
             amplitude_pct=amplitude_pct,
             amplitude_min_pct=amplitude_min_pct,
+            bid_1m_pct=bid_1m_pct,
+            bid_1m_pct_threshold=bid_1m_pct_threshold,
         )
 
     def evaluate_theoretical(
@@ -123,6 +145,8 @@ class SymbolSession:
         vol_ratio_min_pct: float = 0.0,
         amplitude_pct: float = 0.0,
         amplitude_min_pct: float = 3.0,
+        bid_1m_pct: float = 50.0,
+        bid_1m_pct_threshold: float = 70.0,
     ) -> SignalResult:
         current_mins = current_time.hour * 60 + current_time.minute
         time_ok = current_mins >= entry_start_mins and current_mins < entry_cutoff_mins
@@ -144,4 +168,6 @@ class SymbolSession:
             vol_ratio_min_pct=vol_ratio_min_pct,
             amplitude_pct=amplitude_pct,
             amplitude_min_pct=amplitude_min_pct,
+            bid_1m_pct=bid_1m_pct,
+            bid_1m_pct_threshold=bid_1m_pct_threshold,
         )

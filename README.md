@@ -770,7 +770,7 @@ LINE Bot 連結透過 ngrok tunnel 對外，開機自動重建 webhook URL。
 | 3 | 同標的當下未持倉 | `check_not_in_position`（預設 true） | ✅ 開關 |
 | 4 | 今日進場次數 < 上限 | `max_daily_positions`（預設 5） | ✅ 數值 |
 | 5 | 個股漲跌幅在 ±N% 以內 | `max_change_pct`（預設 5%） | ✅ 數值 |
-| **6** | **⭐ `tick_window_seconds` 秒內上漲 ≥ N tick（必要條件）** | `tick_rise_threshold`（預設 4） | ✅ 數值 |
+| **6** | **⭐ 必要條件（二擇一）：觀察窗口內上漲 ≥ N tick，或觀察窗口買盤佔比 ≥ M%** | `tick_rise_threshold`（預設 4）、`bid_1m_pct_threshold`（預設 70%） | ✅ 數值 |
 | 7 | 個股期貨正價差（有期貨資料才判斷） | `check_futures_signal`（預設 true） | ✅ 開關 |
 | 8 | 買盤比例 >= 門檻 | `bid_pct_threshold`（預設 60%） | ✅ 數值 |
 | 9 | 今日累積量/5日均量 >= 開盤後觀察分鐘數×1.3% | 由 `entry_start_time` 衍生（09:15→19.5%） | 自動計算 |

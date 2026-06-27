@@ -16,7 +16,9 @@ class SignalCombiner:
     3. 同標的當下未持倉（可關閉）
     4. 今日進場未達上限
     5. 個股漲跌幅在 ±max_change_pct 內（預設 5%）
-    6. tick_window_seconds 秒內上漲 >= tick_rise_threshold 個 tick（必要條件）
+    6. ⭐ 必要條件（二擇一）：
+       (a) tick_window_seconds 秒內上漲 >= tick_rise_threshold 個 tick，或
+       (b) 觀察窗口內買盤佔比 >= bid_1m_pct_threshold（預設 70%）
     7. 有個股期貨資料時：期貨價 > 現價（正價差，可關閉）
     8. 已成交買盤 >= bid_pct_threshold（預設 60%，可調）
     9. 今日累積量/5日均量 >= 開盤後觀察分鐘數 × 1.3%
@@ -51,6 +53,8 @@ class SignalCombiner:
         vol_ratio_min_pct: float = 0.0,
         amplitude_pct: float = 0.0,
         amplitude_min_pct: float = 3.0,
+        bid_1m_pct: float = 50.0,
+        bid_1m_pct_threshold: float = 70.0,
     ) -> SignalResult:
         def no(r):
             return SignalResult(symbol=symbol, should_enter=False, reason=r)
@@ -65,8 +69,8 @@ class SignalCombiner:
             return no("max_daily_trades_reached")
         if abs(change_pct) > self.max_change_pct:
             return no(f"change_pct_exceeded_{change_pct:.2f}pct")
-        if tick_rise < tick_rise_threshold:
-            return no(f"tick_rise_low_{tick_rise:.1f}")
+        if tick_rise < tick_rise_threshold and bid_1m_pct < bid_1m_pct_threshold:
+            return no(f"tick_rise_low_{tick_rise:.1f}_bid1m_{bid_1m_pct:.0f}pct")
         if check_futures_signal and futures_signal is not None and not futures_signal.is_leading():
             return no("futures_not_leading")
         if bid_pct < bid_pct_threshold:
