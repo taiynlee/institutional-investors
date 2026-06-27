@@ -8,20 +8,348 @@
 
 ---
 
+## 截圖
+
+![dashboard](docs/screenshots/2026-06-27-130447.png)
+
+![dashboard](docs/screenshots/2026-06-27-130520.png)
+
+---
+
+## 快速啟動
+
+```bash
+# 1. 啟動 Docker stack（DB + 後端 + 前端）
+docker compose up -d
+
+# 前端： http://localhost:6174
+# 後端： http://localhost:8000
+# API：  http://localhost:8000/health
+
+# 2. 啟動台股當沖交易引擎（WSL 另開終端）
+cd /home/tommy0322/institutional-investors/services/fubon-dashboard
+python run.py
+# → 平日 08:30 自動登入富邦 SDK，13:36 自動停止
+```
+
+> 第一次啟動會自動回填 90 日歷史資料，需要一段時間。
+> TWSE 資料限交易時段（09:00~20:00），非交易時間啟動可能有部分資料缺漏。
+
+---
+
 ## 系統目標
 
 1. **每日自動爬取**台股上市上櫃電子類股的價量與籌碼資料
 2. **量化篩選**符合「主力洗盤、準備再創新高」條件的個股
 3. **視覺化儀表板**呈現篩選結果與各項指標
-4. **提供投資建議**並標示潛在風險警示
+4. **台股當沖自動化**：富邦 SDK 整合，60s tick 動量進出場，LINE 即時通知
 
 ---
 
-## UI
+## 系統架構
 
-![dashboard](docs/screenshots/2026-06-27-130447.png)
+```
+institutional-investors/
+├── backend/                  # FastAPI 後端
+│   ├── app/
+│   │   ├── main.py           # FastAPI 進入點（lifespan + CORS + DB migration）
+│   │   ├── config.py         # 環境變數設定
+│   │   ├── api/
+│   │   │   ├── deps.py       # DB session 依賴
+│   │   │   └── routes.py     # REST endpoints（含 /api/server-time, /api/taifex-futures, /api/us-stocks）
+│   │   ├── services/
+│   │   │   ├── fetcher/
+│   │   │   │   ├── twse.py       # TWSE 三大法人 + 日成交 + 融資借券（TWT93U）
+│   │   │   │   ├── tdcc.py       # TDCC 集保戶股權分散表 bulk CSV（千張大戶）
+│   │   │   │   ├── finmind.py    # FinMind 股本 + 季報EPS + 產業鏈
+│   │   │   │   ├── market.py     # yfinance 大盤指數（RS 基準）
+│   │   │   │   ├── price.py      # 歷史價格補抓
+│   │   │   │   └── stock_list.py # 電子股清單（FinMind）
+│   │   │   ├── screener.py       # BB 計算 + A/B/C 篩選邏輯 + 評分
+│   │   │   └── scheduler.py      # asyncio 排程迴圈（7 Jobs + 非交易日 fallback）
+│   │   └── db/
+│   │       ├── base.py       # SQLAlchemy engine + session
+│   │       └── models.py     # ORM 資料模型
+│   ├── pyproject.toml        # uv 套件管理
+│   └── uv.lock
+├── frontend/                 # React 前端儀表板
+│   ├── src/
+│   │   ├── components/
+│   │   │   ├── BBGauge.tsx        # 布林位階進度條
+│   │   │   ├── ChipBar.tsx        # 法人籌碼欄位
+│   │   │   ├── PriceSparkline.tsx # 近2月走勢小圖
+│   │   │   ├── StockCard.tsx      # 個股卡片（含hover動態解讀、大戶週增減）
+│   │   │   ├── MarketHeader.tsx   # 頂部大盤指數 + 台指期 + server-synced 時鐘
+│   │   │   └── Tooltip.tsx        # 通用 tooltip 元件
+│   │   ├── pages/
+│   │   │   ├── Dashboard.tsx      # 篩選結果（含AI精選狀態列 + job badges）
+│   │   │   ├── DayTradePage.tsx   # 台股當沖（7子頁：今日交易/手動買賣/交易紀錄/盤前狀況/交易設定/系統設定/當沖健診）
+│   │   │   ├── ManualTradePage.tsx # 手動買賣（含 ManualTradeContent，嵌入 DayTradePage 手動買賣子頁）
+│   │   │   ├── Result.tsx         # 篩選績效頁（昨日結果 vs 次日收盤）
+│   │   │   ├── ExitAlertsPage.tsx # 退場止損（完整 list，技術/籌碼觸發）
+│   │   │   ├── Holders.tsx        # 千張大戶占比排行頁（週增減%排序）
+│   │   │   ├── UsStocksPage.tsx   # 美股追蹤（收盤+盤後，每 5 分鐘自動更新）
+│   │   │   ├── ScoreA.tsx         # 策略A最新分頁
+│   │   │   ├── ScoreB.tsx         # 策略B近3日≥60分頁
+│   │   │   ├── ScoreC.tsx         # 策略C基本面加速頁
+│   │   │   ├── WatchlistAPage.tsx # A追蹤清單頁
+│   │   │   ├── SectorFlow.tsx     # 類股資金流向頁
+│   │   │   ├── IcChain.tsx        # 產業鏈頁
+│   │   │   └── StockPool.tsx      # 股票池頁
+│   │   ├── hooks/
+│   │   │   ├── useScreener.ts     # API 資料 hook
+│   │   │   └── useServerTime.ts   # 全域 server-synced 時間 hook（clock + msUntilNextTaiwanTime）
+│   │   ├── types/
+│   │   │   └── index.ts           # TypeScript 型別定義
+│   │   └── App.tsx                # Tab 路由（13 個 tab）
+│   ├── package.json
+│   └── vite.config.ts
+├── services/
+│   └── fubon-dashboard/      # 台股當沖自動交易（WSL 直接執行，非 Docker）
+│       ├── run.py            # 一鍵啟動（python run.py）
+│       ├── start.sh          # systemd ExecStart（exec python3 run.py）
+│       ├── main.py           # FastAPI + WebSocket app（含 DailyScheduler）
+│       ├── engine/           # 交易引擎（60s tick 動量、觸價單、broker.py）
+│       │   ├── trading_engine.py     # 主引擎（進場/出場邏輯，呼叫 broker.buy/sell）
+│       │   └── execution/broker.py   # FubonBroker（OrderType.Stock，dry_run guard）
+│       ├── monitor/dashboard/app.py  # REST + /ws/stream WebSocket 即時推送
+│       │                             # 含 futures-snapshot（30s cache，tickers API）
+│       │                             # 含 manual-trade/buy|sell（LINE 通知）
+│       ├── requirements.txt
+│       └── .env              # LINE token（不進 git）
+├── scripts/
+│   ├── backup-db.sh          # PostgreSQL pg_dump 備份腳本（保留最近 7 份）
+│   ├── db-backup.service     # systemd service unit（手動安裝用）
+│   └── db-backup.timer       # systemd timer unit（每日 02:00）
+├── config/
+└── README.md
+```
 
-![dashboard](docs/screenshots/2026-06-27-130520.png)
+### Docker Compose 架構
+
+```yaml
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: stock_force
+      POSTGRES_USER: stock
+      POSTGRES_PASSWORD: secret        # ⚠️ 僅限本地開發，生產環境改用 .env
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  backend:
+    build: ./backend
+    depends_on: [db]
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql+asyncpg://stock:secret@db:5432/stock_force
+      FINMIND_TOKEN: ""                # 選填：有 token 可解除 FinMind 限速
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "6174:80"
+    depends_on: [backend]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # nginx proxy_pass 指向 WSL host
+
+volumes:
+  pgdata:
+```
+
+> ⚠️ **安全提醒**：`POSTGRES_PASSWORD: secret` 僅供本地開發。生產環境請改用 `.env` 搭配 `env_file` 或 Docker Secrets，並確保 `.env` 已加入 `.gitignore`。
+> `config.yaml`（含富邦帳密）透過 volume mount 注入容器，**不可提交至 git**。
+
+---
+
+## 台股當沖（Fubon 整合）
+
+### 架構說明
+
+`services/fubon-dashboard/` 是完整交易引擎，**直接在 WSL 執行**（非 Docker）。一個指令啟動所有元件：
+富邦 SDK → tick streaming → 60s tick 動量評估 → 觸價單 → WebSocket 推送 → 前端即時顯示。
+
+```
+WSL 直接執行（非 Docker）
+  python run.py
+    ├─ DailyScheduler：平日 08:30 自動登入富邦 SDK，09:00 前 WebSocket 就緒
+    ├─ 交易引擎啟動時：
+    │    ├─ GET localhost:8000/api/daytrade/list  → 取 PG daytrade_candidate 當日標的
+    │    └─ GET localhost:8000/api/pool          → 取 PG stock_pool 股票名稱
+    ├─ 交易引擎（60s tick 動量）：每 10 秒評估進場信號，自動下停損/停利觸價單
+    ├─ FastAPI :8090（REST + /ws/stream）
+    │    └─ /ws/stream 每秒推送引擎狀態給前端
+    └─ 13:36 自動停止（收盤後強制平倉確認）
+
+Docker Compose（frontend nginx）
+  nginx → /fubon-api/ws/* → host.docker.internal:8090/ws/*  （WebSocket，長連線）
+  nginx → /fubon-api/*    → host.docker.internal:8090/*      （REST fallback）
+```
+
+### 前端 Tab：台股當沖（7 個子頁）
+
+| 子頁 | 資料來源 | 說明 |
+|-----|---------|------|
+| 今日交易 | WebSocket `/fubon-api/ws/stream` | 即時持倉 + 盤中損益（WS 串流，每秒更新）。觀察名單欄位：代碼/名稱、昨收、現價、漲跌、漲跌%、已成交買賣盤（外盤%）、期貨價/差價、Open/High/Low、振幅%（(High−Low)/昨收×100）、今日累積量/5日均量% |
+| 手動買賣 | `/fubon-api/manual-trade/*` | 買進：市價IOC + 自動掛OCO停損/停利觸價單；賣出：ROD限價現賣，不綁持倉紀錄 |
+| 交易紀錄 | `/fubon-api/trades` | 今日成交記錄（ticks.db） |
+| 盤前狀況 | `/fubon-api/pre-session/logs` | 盤前跑批紀錄（PG），含日期切換 |
+| 交易設定 | `/fubon-api/trading-params` + PG `trading_settings` | 所有引擎參數（即時生效：寫入 PG 持久化 + ticks.db 熱重載，引擎無需重啟） |
+| 系統設定 | `/fubon-api/config` | 讀取 config.yaml（帳密/憑證，只讀，密碼遮蔽） |
+| 當沖健診 | `/fubon-api/health-check/results` + `/fubon-api/logs/today` | 引擎狀態、config、LINE 設定、tick 資料流（盤前引擎未啟動時顯示告警而非錯誤） |
+
+### 台股 Tick 跳動規則
+
+| 股價區間 | 最小跳動（tick） |
+|---------|--------------|
+| < 10 元 | 0.01 |
+| 10 ~ 50 元 | 0.05 |
+| 50 ~ 100 元 | 0.1 |
+| 100 ~ 500 元 | 0.5 |
+| 500 ~ 1000 元 | 1.0 |
+| ≥ 1000 元 | 5.0 |
+
+停損向上捨入（round_up_tick），停利向下捨入（round_down_tick），確保觸價條件不超出預設範圍。
+
+### 進場條件
+
+**全部條件同日成立（短路順序）：**
+
+| # | 條件 | 相關參數 | 可設定 |
+|---|------|----------|--------|
+| 1 | 時間窗口 | `entry_start_time` / `latest_dynamic_add_time` | ✅ 數值 |
+| 2 | 同標的當下未持倉 | `check_not_in_position`（預設 true） | ✅ 開關 |
+| 3 | 今日進場次數 < 上限 | `max_daily_positions`（預設 5） | ✅ 數值 |
+| 4 | 個股漲跌幅在 ±N% 以內 | `max_change_pct`（預設 5%） | ✅ 數值 |
+| **5** | **⭐ 必要條件（二擇一）：觀察窗口內上漲 ≥ N tick，或觀察窗口買盤佔比 ≥ M%** | `tick_rise_threshold`（預設 4）、`bid_1m_pct_threshold`（預設 70%） | ✅ 數值 |
+| 6 | 個股期貨正價差（有期貨資料才判斷） | `check_futures_signal`（預設 true） | ✅ 開關 |
+| 7 | 買盤比例 >= 門檻 | `bid_pct_threshold`（預設 60%） | ✅ 數值 |
+| 8 | 今日累積量/5日均量 >= 開盤後觀察分鐘數 × 係數% | `vol_ratio_coefficient`（預設 1.3）；例：09:15進場 → 15×1.3=19.5% | ✅ 數值 |
+| 9 | 振幅（今日動能）>= 門檻 | `amplitude_min_pct`（預設 3%）；振幅 = (High-Low)/昨收×100% | ✅ 數值 |
+
+條件 2、6 可在前端「交易設定」頁面透過 checkbox 開關（勾選 = 啟用；取消 = 放行不檢查）。條件 7、8、9 門檻皆可調。
+
+所有參數儲存於 PostgreSQL `trading_settings`，透過前端「交易設定」頁面修改後**立即生效**（寫入 PG + 同步 ticks.db 熱重載快取，引擎每 tick 重讀，無需重啟）。
+
+### 出場策略
+
+**進場同時掛出觸價單：**
+- 停損：進場價 - `stop_loss_ticks`（預設 4）tick（向上捨入）→ LessThanOrEqual 條件單
+- 停利：昨收 × (1 + (進場時漲幅 + `take_profit_add_pct`（預設 4%）) / 100)（向下捨入）→ GreaterThanOrEqual 條件單
+
+**強制出場機制（三層保護）：**
+
+| 層次 | 觸發方式 | 動作 | 時間 |
+|------|---------|------|------|
+| **① OCO 觸價單（伺服器端）** | Fubon 伺服器偵測到成交價 ≤ 停損 或 ≥ 停利 | 自動市價賣出（由 Fubon 執行，不依賴引擎連線） | 即時 |
+| **② RiskManager（tick 路徑）** | WebSocket on_tick 收到 tick，且時間 ≥ `force_exit_time`（預設 13:20） | 取消觸價單 + 市價 IOC 賣出 | 13:20 後下一個 tick |
+| **③ 主迴圈時間兜底（tick-independent）** | 主迴圈每秒比對系統時間，不依賴 WebSocket | 取消觸價單 → 市價 IOC + 備援 ROD 限價賣 → LINE 通知「請確認成交」 | 13:20（每秒檢查） |
+
+> **層次 ③ 的必要性：** 跌停板時可能長時間無成交 tick（on_tick 不回調），或 WebSocket 斷線期間，層次 ② 完全失效。主迴圈與 WebSocket 並行運行，確保時間到必定執行。
+> **備援 ROD 說明：** IOC（Immediate or Cancel）在跌停無買方時會立即取消；備援 ROD 限價賣以當時報價送出，若跌停仍無人承接則掛單至收盤。如 IOC 已成交，券商因無庫存會拒絕 ROD，不會裸空。
+
+**13:15 預警：** 若 13:15 仍持倉，自動送 LINE 通知列出標的、張數、進場價，提醒距強制出場剩餘時間。
+
+### 下單類別
+
+所有股票買賣使用 `OrderType.Stock`（現買/現賣），不使用 `OrderType.DayTrade`（會觸發「沒有交易類別」錯誤）。手動買賣及引擎自動下單均採用此設定。
+
+### LINE 通知
+
+通知走 `claude-line-bot` 服務（`http://host.docker.internal:8001/notify`）：
+- `LineNotifier` 優先呼叫 `LINE_BOT_URL/notify`（bot 已初始化 token，fubon-dashboard 無需另設 LINE 憑證）
+- 每則通知附帶「本月第 N 次通知」序號，並寫入 `ticks.db/line_notifications`
+- 觸發時機：引擎自動進場（含 dry_run 模式）、自動出場、強制出場、13:15 預警
+- ⚠️ LINE Messaging API free plan 每月 200 則上限；滿額後推播失敗，月初重置
+
+### 安全注意
+
+- `config.yaml`（含富邦帳密）已加入 `.gitignore`，放 `/home/tommy0322/fubon-config/`，不進 git
+- `.env`（LINE token）已加入 `.gitignore`
+- `vendor/`（富邦 SDK wheel binary）已加入 `.gitignore`
+- `log/`、`logs/`（執行期日誌）已加入 `.gitignore`
+- `/fubon-api/` 只能從本機 6174 port 存取，不對外暴露
+
+---
+
+## UI 功能說明
+
+### 頂部 MarketHeader
+
+| 元件 | 說明 |
+|------|------|
+| **大盤指數** | 台灣加權、S&P 500、Nasdaq、恆生、日經225、韓國綜合；每 5 分鐘自動更新 |
+| **增減點數** | 每個指數顯示「收盤值 ＋增減點 ＋漲跌%」三項 |
+| **台指期** | TAIFEX 官方 API（mis.taifex.com.tw）取近月大台指期漲跌點 + 漲跌%；每 5 分鐘更新 |
+| **時鐘** | 右下角顯示 server-synced 台灣時間（每秒跳動）；前端初始化時從 `/api/server-time` 取得偏移量，後續純 client tick |
+
+### 篩選儀表板（主頁）
+
+| 元件 | 說明 |
+|------|------|
+| **AI 精選** | 狀態列左側：job4 後由 Claude AI 精選最值得關注個股，點擊複製精選理由 |
+| **Job 狀態列** | 7 個排程執行狀態（✓ 時間 / 等待中 / ✗ 失敗）排列於狀態列 |
+| **個股卡片** | 顯示代號、名稱、篩選日、評分、資加/戶加、千張大戶週增減（1w/2w/3w diff） |
+| **策略 badge** | A=綠色、B=黃色、C=藍色（BB+squeeze 時顯示青色 B+） |
+| **BBGauge** | 布林位階進度條，位階>5=綠、0~5=黃、0~-3=橘、<-3=紅 |
+| **ChipBar** | 台股顏色慣例：正數=紅色、負數=綠色 |
+| **趨勢小圖** | 近 2 個月收盤走勢，漲=紅、跌=綠；右下標示「最新收盤 MM-DD」 |
+| **hover 解讀** | 滑鼠移到卡片顯示詳細文字解讀，可選取文字或點「點擊複製全文」 |
+
+### 退場止損頁
+
+| 功能 | 說明 |
+|------|------|
+| **來源** | 曾通過篩選、現已落榜的個股（不限峰值 BB 條件，全部顯示） |
+| **過濾條件** | `days_off < 5`（落榜超過 5 個篩選日自動移除，保持清單簡潔） |
+| **顯示欄位** | 代號、名稱、現BB、籌碼3d%、最後上榜日、已消失篩選日數、訊號 badges |
+| **天數顏色** | 今日剛落榜=黃色、≤2日=橘色、更早=灰色 |
+| **籌碼訊號** | 近3日外資+投信賣超≤-1.5% 且12日仍持續流出 → 顯示「籌碼出場」badge |
+
+### 美股追蹤頁
+
+| 功能 | 說明 |
+|------|------|
+| **標的** | TSM、NVDA、LITE、AAOI、MRVL、MU、WDC、TSLA、GOOGL、MSFT、AMZN、AAPL、SPCX（SpaceX，2026/6/12 IPO） |
+| **資料** | yfinance 抓收盤價 + 盤後價（`postMarketPrice`） |
+| **自動更新** | 頁面開啟後每 5 分鐘自動更新（setInterval 3×5min，共 15 分鐘；重整頁面可手動觸發） |
+| **盤後時間** | 台灣時間 08:55 ≈ 前日 19:55 ET（美股盤後 16:00-20:00 ET 內），盤後資料可取 |
+| **欄位** | 代號、名稱、收盤價、收盤漲跌%、盤後價、盤後漲跌%、盤後-收盤（差值，最右） |
+| **Highlight** | 收盤上漲且盤後又漲 >3% → 琥珀色底色 |
+
+### 千張大戶頁
+
+| 功能 | 說明 |
+|------|------|
+| **占比排行** | 全市場電子股千張以上大戶持股占比（`pct_1000_lot`），依週增減% 由高到低排序 |
+| **週增減** | 本週 vs 上週持股人數差（+紅/-綠）與占比變化% |
+| **搜尋** | 可依代碼、名稱、類股即時篩選 |
+| **資料頻率** | TDCC 集保每週更新一次（週日 18:30 後） |
+
+### 篩選績效頁
+
+| 功能 | 說明 |
+|------|------|
+| **日期下拉選單** | 最多列出過去 10 個有篩選結果且已有後續收盤的交易日（隔日～十日均漲幅） |
+| **漲幅基準** | 以資料庫中最新有收盤的交易日作為基準（非固定次日），能跨假日比對 |
+| **列顏色** | AI精選+總分第一=紫色、僅AI精選=藍色、僅總分第一=黃色、其他=灰 |
+| **均漲幅** | 該日篩選股當下均漲幅，依所選基準日計算 |
+
+### 網站資料狀態顯示規則
+
+網站依當前時間自動顯示資料完整度狀態，提醒使用者建議是否可信：
+
+| 時段 | 資料狀態 | 網站顯示 |
+|------|---------|---------|
+| 非交易日（週六、日、假日） | 無新資料 | 「休市中，顯示最後交易日建議」 |
+| 交易日 00:00 ~ 16:00 | 昨日資料 | 「⏳ 今日資料尚未更新，顯示昨日建議」 |
+| 交易日 16:00 ~ 18:30 | 部分資料 | 「⚠️ 法人資料已更新，融資／分點尚未完整」 |
+| 交易日 18:30 ~ 21:00 | 大部分資料 | 「⚠️ 資料陸續更新中，建議尚未完整」 |
+| 交易日 21:00 後 | 完整資料 | 「✅ 今日資料完整，建議結果可參考」 |
 
 ---
 
@@ -167,8 +495,6 @@
 | 2 ~ 5 | 月線上方洗盤中 | 中分 |
 | > 5 | 拉回不足（A 策略突破日正常） | 視情況 |
 
----
-
 #### 2. 拉回窒息量
 
 近 5 日均量 ÷ 前 5 日均量（`vol_ratio`）。
@@ -180,8 +506,6 @@ vol_ratio = mean(volume[-5:]) / mean(volume[-10:-5])
 
 > 量縮是鑑別「主力洗盤」vs「大戶出貨」的關鍵：拉回時 BB 壓縮但每天放量下跌 = 出貨；BB 壓縮 + 量縮 = 主力壓盤洗散戶。窒息量加計 10 分。
 
----
-
 #### 3. 籌碼指標
 
 | 指標 | 公式 | 來源 | 頻率 |
@@ -189,9 +513,6 @@ vol_ratio = mean(volume[-5:]) / mean(volume[-10:-5])
 | 法人買超比率（6 日） | (外資 + 投信 6 日淨買超) / 股本 ≥ 1% | TWSE T86 | 日 |
 | 法人買超比率（12 日） | (外資 + 投信 12 日淨買超) / 股本 ≥ 1% | TWSE T86 | 日 |
 | 大股東持股比例 | 持有 1,000 張以上股東持股比 | TDCC 集保戶股權分散表（Level 15） | 週（週日 18:30 後） |
-
-> 法人買超比率兩個窗口都需 ≥ 1% 才算「籌碼好」（B 策略必要條件）。
-> 用股本正規化（而非成交量）：不同規模股票才能橫向比較。
 
 ---
 
@@ -239,90 +560,66 @@ vol_ratio = mean(volume[-5:]) / mean(volume[-10:-5])
 
 > **資加**（最多 +5）代表下跌日法人逢低承接，**戶加**（可正可負）代表千張大戶本週 vs 上週持股人數差值（單位：人，正=增加，負=減少）。兩者為輔助參考，不計入基礎分三級判斷。
 
----
+### 退場機制
 
-## 系統架構
+儀表板頂部「退場止損」欄位，自動掃描**過去 10 個交易日篩選過的股票**（不含當日仍在推薦清單的股票），依下列條件發出退場警示：
 
-```
-institutional-investors/
-├── backend/                  # FastAPI 後端
-│   ├── app/
-│   │   ├── main.py           # FastAPI 進入點（lifespan + CORS + DB migration）
-│   │   ├── config.py         # 環境變數設定
-│   │   ├── api/
-│   │   │   ├── deps.py       # DB session 依賴
-│   │   │   └── routes.py     # REST endpoints（含 /api/server-time, /api/taifex-futures, /api/us-stocks）
-│   │   ├── services/
-│   │   │   ├── fetcher/
-│   │   │   │   ├── twse.py       # TWSE 三大法人 + 日成交 + 融資借券（TWT93U）
-│   │   │   │   ├── tdcc.py       # TDCC 集保戶股權分散表 bulk CSV（千張大戶）
-│   │   │   │   ├── finmind.py    # FinMind 股本 + 季報EPS + 產業鏈
-│   │   │   │   ├── market.py     # yfinance 大盤指數（RS 基準）
-│   │   │   │   ├── price.py      # 歷史價格補抓
-│   │   │   │   └── stock_list.py # 電子股清單（FinMind）
-│   │   │   ├── screener.py       # BB 計算 + A/B/C 篩選邏輯 + 評分
-│   │   │   └── scheduler.py      # asyncio 排程迴圈（7 Jobs + 非交易日 fallback）
-│   │   └── db/
-│   │       ├── base.py       # SQLAlchemy engine + session
-│   │       └── models.py     # ORM 資料模型
-│   ├── pyproject.toml        # uv 套件管理
-│   └── uv.lock
-├── frontend/                 # React 前端儀表板
-│   ├── src/
-│   │   ├── components/
-│   │   │   ├── BBGauge.tsx        # 布林位階進度條
-│   │   │   ├── ChipBar.tsx        # 法人籌碼欄位
-│   │   │   ├── PriceSparkline.tsx # 近2月走勢小圖
-│   │   │   ├── StockCard.tsx      # 個股卡片（含hover動態解讀、大戶週增減）
-│   │   │   ├── MarketHeader.tsx   # 頂部大盤指數 + 台指期 + server-synced 時鐘
-│   │   │   └── Tooltip.tsx        # 通用 tooltip 元件
-│   │   ├── pages/
-│   │   │   ├── Dashboard.tsx      # 篩選結果（含AI精選狀態列 + job badges）
-│   │   │   ├── DayTradePage.tsx   # 台股當沖（7子頁：今日交易/手動買賣/交易紀錄/盤前狀況/交易設定/系統設定/當沖健診）
-│   │   │   ├── ManualTradePage.tsx # 手動買賣（含 ManualTradeContent，嵌入 DayTradePage 手動買賣子頁）
-│   │   │   ├── Result.tsx         # 篩選績效頁（昨日結果 vs 次日收盤）
-│   │   │   ├── ExitAlertsPage.tsx # 退場止損（完整 list，技術/籌碼觸發）
-│   │   │   ├── Holders.tsx        # 千張大戶占比排行頁（週增減%排序）
-│   │   │   ├── UsStocksPage.tsx   # 美股追蹤（收盤+盤後，每 5 分鐘自動更新）
-│   │   │   ├── ScoreA.tsx         # 策略A最新分頁
-│   │   │   ├── ScoreB.tsx         # 策略B近3日≥60分頁
-│   │   │   ├── ScoreC.tsx         # 策略C基本面加速頁
-│   │   │   ├── WatchlistAPage.tsx # A追蹤清單頁
-│   │   │   ├── SectorFlow.tsx     # 類股資金流向頁
-│   │   │   ├── IcChain.tsx        # 產業鏈頁
-│   │   │   └── StockPool.tsx      # 股票池頁
-│   │   ├── hooks/
-│   │   │   ├── useScreener.ts     # API 資料 hook
-│   │   │   └── useServerTime.ts   # 全域 server-synced 時間 hook（clock + msUntilNextTaiwanTime）
-│   │   ├── types/
-│   │   │   └── index.ts           # TypeScript 型別定義
-│   │   └── App.tsx                # Tab 路由（13 個 tab）
-│   ├── package.json
-│   └── vite.config.ts
-├── services/
-│   └── fubon-dashboard/      # 台股當沖自動交易（WSL 直接執行，非 Docker）
-│       ├── run.py            # 一鍵啟動（python run.py）
-│       ├── start.sh          # systemd ExecStart（exec python3 run.py）
-│       ├── main.py           # FastAPI + WebSocket app（含 DailyScheduler）
-│       ├── engine/           # 交易引擎（60s tick 動量、觸價單、broker.py）
-│       │   ├── trading_engine.py     # 主引擎（進場/出場邏輯，呼叫 broker.buy/sell）
-│       │   └── execution/broker.py   # FubonBroker（OrderType.Stock，dry_run guard）
-│       ├── monitor/dashboard/app.py  # REST + /ws/stream WebSocket 即時推送
-│       │                             # 含 futures-snapshot（30s cache，tickers API）
-│       │                             # 含 manual-trade/buy|sell（LINE 通知）
-│       ├── requirements.txt
-│       └── .env              # LINE token（不進 git）
-├── scripts/
-│   ├── backup-db.sh          # PostgreSQL pg_dump 備份腳本（保留最近 7 份）
-│   ├── db-backup.service     # systemd service unit（手動安裝用）
-│   └── db-backup.timer       # systemd timer unit（每日 02:00）
-├── config/
-└── README.md
-```
+| 退場條件 | 觸發邏輯 | 執行方式 | 適用策略 |
+|---------|---------|---------|---------|
+| **技術移動點** | 今日收盤 BB 位階 < 0（跌破月線） | 當日收盤前或隔日開盤 | A、B 均適用 |
+| **籌碼強制出場** | 近 3 日（外資 + 投信）累計賣超 ÷ 股本 ≥ 0.5% | 明日開盤市價出場 | A、B 均適用 |
+
+**設計原則：**
+- BB 位階從 DailyPrice 即時重算（同 screener 公式），非使用篩選當時的快照
+- 若某股當日仍通過篩選條件（位於推薦清單），不顯示退場警示，避免矛盾
 
 ---
 
-## 資料更新時間表
+## 資料來源與排程
+
+### 資料範圍
+
+> **重要：本系統只處理台股上市（TWSE）和上櫃（TPEx）的電子類股。**
+
+- `stock_list` 只收錄 TWSE 上市 + TPEx 上櫃的電子類股（約 1118 檔），涵蓋產業：電子工業、電子零組件業、其他電子業、光電業、電腦及週邊設備業、電子通路業、半導體業、通信網路業
+- 每日爬取 TWSE T86（全市場）/ TWT93U（融資）等 API 回傳的全市場資料時，**插入前過濾**，只寫入 `stock_list` 中存在的代號
+- 非電子股、興櫃、創新板、ETF 等一律不寫入，不佔 DB 空間
+
+### 資料來源
+
+> 經實測去重後，每種資料只選一個最穩定的來源，避免重複爬取。
+
+#### v1 採用來源（已驗證）
+
+| 資料類型 | 來源 | Endpoint / 方式 | 實測結果 |
+|---------|------|----------------|---------|
+| 上市電子股清單 | TWSE | `BWIBBU_d?selectType=ALL` | ✅ 1074 筆 |
+| 上櫃電子股清單 | TPEx | `otc_quotes_no1430` | ✅ 交易日驗證 |
+| 三大法人買賣超（當日） | TWSE | `T86?selectType=ALLBUT0999` | ✅ 1311 筆 |
+| 三大法人買賣超（上櫃當日） | TPEx | `3itrade_hedge_result` | ✅ 交易日驗證 |
+| 三大法人買賣超（歷史） | FinMind | `TaiwanStockInstitutionalInvestorsBuySell` | ✅ 253 筆 |
+| 日 K 線量價（歷史） | FinMind | `TaiwanStockPrice` | ✅ 253 筆，空 token 可用 |
+| 融資融券餘額 | TWSE | `TWT93U` | ✅ 1275 筆 |
+| 借券賣出餘額 | TWSE | `TWT93U`（欄 8-12） | ✅ 與融資合併於同一表（TWT38U 已廢棄） |
+| 大盤加權指數（RS 計算） | yfinance | `^TWII` | ✅ 備援個股量價 |
+
+#### v2 預計新增
+
+| 資料類型 | 來源 | 狀況 | 說明 |
+|---------|------|------|------|
+| 八大官股行庫買賣超 | WantGoo | ❌ API 需 session + CSRF | 獨家資料，待研究正確呼叫方式 |
+| 分點前 5 大買超 / 賣超 | CMoney 籌碼 K 線 | ❌ URL 需修正 | 分點資料，補強籌碼集中度精準度 |
+
+#### 去重決策
+
+| 重疊情形 | 選擇 | 原因 |
+|---------|------|------|
+| 日 K 線：TWSE vs FinMind vs yfinance | **FinMind**（yfinance 備援） | FinMind 格式標準、歷史完整 |
+| 三大法人：TWSE vs FinMind | **TWSE 當日 + FinMind 歷史** | TWSE 最即時，FinMind 補歷史 |
+| 融資融券：TWSE vs FinMind vs TPEx | **TWSE TWT93U** | 官方直接，1275 筆實測通過 |
+| 上市 vs 上櫃 | **兩者都要** | 電子股橫跨上市上櫃，缺一不可 |
+
+### 資料發布時間表
 
 > ⚠️ 台股各資料來源有固定發布時間，程式必須在對應時間後才能抓到當日完整資料。
 > **建議每日排程執行時間：21:00 後**（確保所有來源均已更新完畢）
@@ -360,13 +657,15 @@ institutional-investors/
   補抓完每一天後立刻補算 job4 篩選結果（假日 0 rows 除外，不觸發 job4）
 ```
 
-> **排程引擎：** APScheduler（`AsyncIOScheduler`，timezone=Asia/Taipei），搭配 `job_watchdog`（每 30 分鐘檢查當日 job1/2/4/8 是否成功，失敗則補跑）與 `startup_gap_backfill`（開機時補歷史缺口）。
+> **排程引擎：** asyncio 自製 `_scheduler_loop`（每分鐘比對台北時間觸發 7 個排程 Job），搭配 `job_watchdog`（每 30 分鐘檢查當日 job1/2/4/8 是否成功，失敗則補跑）與 `startup_gap_backfill`（開機時補歷史缺口）。
 
 > **Job 4 資料完整性防護：** Job 4 執行前查詢 DB 確認當日 `institutional` 資料已入庫；若無資料則跳過篩選並記錄警告，避免用舊資料計算 chip_ratio_6d。
 
+儀表板頂部狀態列顯示 7 個排程的執行狀態，完成後顯示台北時間更新時刻（如 `✓ 18:02`），尚未執行顯示「等待中」。Job5/6/7 使用動態 log key（如 `job5_202605`、`job6_q2_2026`、`job7_2026H1`）以支援多期紀錄。
+
 ### 資料保留策略（DB 清理）
 
-每週日 02:30 自動執行 `job_cleanup_db`，刪除超過保留期的舊資料，防止長期運作後磁碟膨脹。清理結果記錄至 `fetch_log`（job_name = `job_cleanup`）。
+每週日 02:30 自動執行 `job_cleanup_db`，刪除超過保留期的舊資料。
 
 | 資料表 | 保留期 | 原因 |
 |--------|--------|------|
@@ -390,153 +689,6 @@ institutional-investors/
 |--------|--------|----------|
 | `ticks` / `index_ticks` | **30 曆日** | 每日 20:00 自動清理 + VACUUM |
 | `intraday_trades` / `intraday_positions` | **60 曆日** | 引擎每次啟動時清理 |
-
-儀表板頂部狀態列顯示 7 個排程的執行狀態，完成後顯示台北時間更新時刻（如 `✓ 18:02`），尚未執行顯示「等待中」。Job5/6/7 使用動態 log key（如 `job5_202605`、`job6_q2_2026`、`job7_2026H1`）以支援多期紀錄。
-
-> **注意：** yfinance 台股歷史資料通常當日晚間更新，若需當日收盤價建議優先用 TWSE API，yfinance 僅作備援。
-
-### 網站資料狀態顯示規則
-
-網站依當前時間自動顯示資料完整度狀態，提醒使用者建議是否可信：
-
-| 時段 | 資料狀態 | 網站顯示 |
-|------|---------|---------|
-| 非交易日（週六、日、假日） | 無新資料 | 「休市中，顯示最後交易日建議」 |
-| 交易日 00:00 ~ 16:00 | 昨日資料 | 「⏳ 今日資料尚未更新，顯示昨日建議」 |
-| 交易日 16:00 ~ 18:30 | 部分資料 | 「⚠️ 法人資料已更新，融資／分點尚未完整」 |
-| 交易日 18:30 ~ 21:00 | 大部分資料 | 「⚠️ 資料陸續更新中，建議尚未完整」 |
-| 交易日 21:00 後 | 完整資料 | 「✅ 今日資料完整，建議結果可參考」 |
-
-> 儀表板標頭須顯示「資料截止時間」與「資料完整度」，避免使用者在下午看到未更新完的建議而誤判。
-
----
-
-## 資料範圍限制
-
-> **重要：本系統只處理台股上市（TWSE）和上櫃（TPEx）的電子類股。**
-
-- `stock_list` 只收錄 TWSE 上市 + TPEx 上櫃的電子類股（約 1118 檔），涵蓋產業：電子工業、電子零組件業、其他電子業、光電業、電腦及週邊設備業、電子通路業、半導體業、**通信網路業**
-- 每日爬取 TWSE T86（全市場）/ TWT93U（融資）等 API 回傳的全市場資料時，**插入前過濾**，只寫入 `stock_list` 中存在的代號
-- 非電子股、興櫃、創新板、ETF 等一律不寫入，不佔 DB 空間
-
----
-
-## 資料來源
-
-> 經實測去重後，每種資料只選一個最穩定的來源，避免重複爬取。
-
-### v1 採用來源（已驗證可抓到資料）
-
-| 資料類型 | 來源 | Endpoint / 方式 | 實測結果 |
-|---------|------|----------------|---------|
-| 上市電子股清單 | TWSE | `BWIBBU_d?selectType=ALL` | ✅ 1074 筆 |
-| 上櫃電子股清單 | TPEx | `otc_quotes_no1430` | ✅ 交易日驗證 |
-| 三大法人買賣超（當日） | TWSE | `T86?selectType=ALLBUT0999` | ✅ 1311 筆 |
-| 三大法人買賣超（上櫃當日） | TPEx | `3itrade_hedge_result` | ✅ 交易日驗證 |
-| 三大法人買賣超（歷史） | FinMind | `TaiwanStockInstitutionalInvestorsBuySell` | ✅ 253 筆 |
-| 日 K 線量價（歷史） | FinMind | `TaiwanStockPrice` | ✅ 253 筆，空 token 可用 |
-| 融資融券餘額 | TWSE | `TWT93U` | ✅ 1275 筆 |
-| 借券賣出餘額 | TWSE | `TWT93U`（欄 8-12） | ✅ 與融資合併於同一表（TWT38U 已廢棄） |
-| 大盤加權指數（RS 計算） | yfinance | `^TWII` | ✅ 備援個股量價 |
-
-### v2 預計新增（技術難度較高，v1 暫不實作）
-
-| 資料類型 | 來源 | 狀況 | 說明 |
-|---------|------|------|------|
-| 八大官股行庫買賣超 | WantGoo | ❌ API 需 session + CSRF | 獨家資料，待研究正確呼叫方式 |
-| 分點前 5 大買超 / 賣超 | CMoney 籌碼 K 線 | ❌ URL 需修正 | 分點資料，補強籌碼集中度精準度 |
-
-### 去重決策說明
-
-| 重疊情形 | 選擇 | 原因 |
-|---------|------|------|
-| 日 K 線：TWSE vs FinMind vs yfinance | **FinMind**（yfinance 備援） | FinMind 格式標準、歷史完整 |
-| 三大法人：TWSE vs FinMind | **TWSE 當日 + FinMind 歷史** | TWSE 最即時，FinMind 補歷史 |
-| 融資融券：TWSE vs FinMind vs TPEx | **TWSE TWT93U** | 官方直接，1275 筆實測通過 |
-| 上市 vs 上櫃 | **兩者都要** | 電子股橫跨上市上櫃，缺一不可 |
-
----
-
-## 技術棧
-
-### 後端
-
-| 技術 | 版本 | 用途 |
-|------|------|------|
-| Python | 3.12+ | 主語言 |
-| uv | latest | 套件與環境管理 |
-| FastAPI | latest | REST API 框架 |
-| SQLAlchemy 2.0 (async) | latest | ORM |
-| asyncpg | latest | PostgreSQL async driver |
-| httpx | latest | async HTTP（TWSE、TDCC、TAIFEX API） |
-| yfinance | latest | 大盤指數（^TWII）+ 美股收盤/盤後價 |
-| pandas / numpy | latest | 資料處理、布林帶計算 |
-| anthropic | latest | Claude API（AI 精選，job4 後呼叫） |
-| asyncio（內建） | — | 自製 `_scheduler_loop`，每分鐘比對台北時間觸發 7 個排程 Job（取代 APScheduler） |
-| alembic | — | 未使用；migration 透過 main.py `ALTER TABLE ADD COLUMN IF NOT EXISTS` 執行 |
-
-### 前端
-
-| 技術 | 用途 |
-|------|------|
-| React 18 + TypeScript | UI 框架 |
-| Vite | 建置工具 |
-| Recharts | 圖表（布林帶、籌碼、量價） |
-| Tailwind CSS | 樣式 |
-| React Query | API 狀態管理 |
-
-### 基礎設施
-
-| 技術 | 用途 |
-|------|------|
-| Docker + docker-compose | 容器化部署 |
-| PostgreSQL 16 | 主資料庫 |
-
----
-
-## Docker Compose 架構
-
-```yaml
-services:
-  db:
-    image: postgres:16-alpine
-    environment:
-      POSTGRES_DB: stock_force
-      POSTGRES_USER: stock
-      POSTGRES_PASSWORD: secret        # ⚠️ 僅限本地開發，生產環境改用 .env
-    ports:
-      - "5432:5432"
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-
-  backend:
-    build: ./backend
-    depends_on: [db]
-    ports:
-      - "8000:8000"
-    environment:
-      DATABASE_URL: postgresql+asyncpg://stock:secret@db:5432/stock_force
-      FINMIND_TOKEN: ""                # 選填：有 token 可解除 FinMind 限速
-
-  frontend:
-    build: ./frontend
-    ports:
-      - "6174:80"
-    depends_on: [backend]
-    extra_hosts:
-      - "host.docker.internal:host-gateway"   # nginx proxy_pass 指向 WSL host
-
-volumes:
-  pgdata:
-```
-
-> ⚠️ **安全提醒**：`POSTGRES_PASSWORD: secret` 僅供本地開發。生產環境請改用 `.env` 搭配 `env_file` 或 Docker Secrets，並確保 `.env` 已加入 `.gitignore`。
-> `config.yaml`（含富邦帳密）透過 volume mount 注入容器，**不可提交至 git**。
-
-```bash
-docker compose up -d db      # 開發時只啟動 DB
-docker compose up            # 全起（DB + 後端 + 前端）
-```
 
 ---
 
@@ -669,214 +821,53 @@ fetch_log (job_name, fetch_date PK)  ← 獨立，不關聯其他表
 
 ---
 
-## 儀表板設計（參考附圖風格）
+## 技術棧
 
-### 主頁面佈局
+### 後端
 
-**台股主力未撤回檔篩選儀表板　　　　　　　　　　更新時間：今日 18:30**
+| 技術 | 版本 | 用途 |
+|------|------|------|
+| Python | 3.12+ | 主語言 |
+| uv | latest | 套件與環境管理 |
+| FastAPI | latest | REST API 框架 |
+| SQLAlchemy 2.0 (async) | latest | ORM |
+| asyncpg | latest | PostgreSQL async driver |
+| httpx | latest | async HTTP（TWSE、TDCC、TAIFEX API） |
+| yfinance | latest | 大盤指數（^TWII）+ 美股收盤/盤後價 |
+| pandas / numpy | latest | 資料處理、布林帶計算 |
+| anthropic | latest | Claude API（AI 精選，job4 後呼叫） |
+| asyncio（內建） | — | 自製 `_scheduler_loop`，每分鐘比對台北時間觸發 7 個排程 Job |
+| alembic | — | 未使用；migration 透過 main.py `ALTER TABLE ADD COLUMN IF NOT EXISTS` 執行 |
 
-| 篩出個股數 | 平均回檔幅度 | 強烈建議買進 | 中性 | 觀望 |
-|:---:|:---:|:---:|:---:|:---:|
-| N 檔 | -14.3% | 🟢 N | 🟡 N | 🔴 N |
+### 前端
 
-**個股清單（卡片式）**
-
-| 2330 台積 | 2454 聯發 | 2382 廣達 |
-|:---:|:---:|:---:|
-| 回檔 15% | 回檔 12% | 回檔 18% |
-| 籌碼 ✅ | 籌碼 ✅ | 籌碼 ⚠️ |
-| 建議：買進 | 建議：觀察 | 建議：等待 |
-
-**圖表區**
-
-| 回檔幅度分佈圖 | 三大法人趨勢圖 | 籌碼集中度走勢 |
-|:---:|:---:|:---:|
-
-### 個股詳頁（規劃中）
-
-- 布林位階走勢（BBGauge）
-- 法人籌碼欄位（ChipBar）
-- 融資餘額變化
-- 綜合評分
-
----
-
-## 投資建議邏輯
-
-投資建議由「投資建議分類」表格決定（詳見篩選邏輯章節），根據**基礎分數**（不含資加/戶加）分三級，所有通過入場條件的個股均顯示：
-
-| 分類 | 評分條件 | 建議 |
-|------|---------|------|
-| 🟢 強烈建議 | 通過入場條件（A 或 B）+ 基礎分 ≥ 80 | 積極布局 |
-| 🟡 觀察等待 | 通過入場條件（A 或 B）+ 基礎分 60 ~ 79 | 等止跌 K 棒確認再進場 |
-| 🔴 列入觀察 | 通過入場條件（A 或 B）+ 基礎分 < 60 | 條件成立但評分不足，可搭配資加/戶加判斷 |
-
-> **免責聲明**：本系統提供之分析僅供參考，不構成投資建議。投資人須自行判斷並承擔相關風險。
-
----
-
-## 退場機制
-
-儀表板頂部「退場止損」欄位，自動掃描**過去 10 個交易日篩選過的股票**（不含當日仍在推薦清單的股票），依下列條件發出退場警示：
-
-| 退場條件 | 觸發邏輯 | 執行方式 | 適用策略 |
-|---------|---------|---------|---------|
-| **技術移動點** | 今日收盤 BB 位階 < 0（跌破月線） | 當日收盤前或隔日開盤 | A、B 均適用 |
-| **籌碼強制出場** | 近 3 日（外資 + 投信）累計賣超 ÷ 股本 ≥ 0.5% | 明日開盤市價出場 | A、B 均適用 |
-
-**設計原則：**
-- BB 位階從 DailyPrice 即時重算（同 screener 公式），非使用篩選當時的快照
-- 若某股當日仍通過篩選條件（位於推薦清單），不顯示退場警示，避免矛盾
-- 策略 B 入場條件同步加入 BB ≥ 0 的硬門檻，確保「推薦進場」與「退場警示」邏輯一致
-
----
-
-## Line Bot 指令
-
-LINE Bot 連結透過 ngrok tunnel 對外，開機自動重建 webhook URL。
-
-| 指令 | 說明 |
+| 技術 | 用途 |
 |------|------|
-| `/stocks` | 傳回當日篩選結果 |
-| `/result` | 傳回最新篩選績效 |
-| `/reset` | 清除對話記憶（保留 function context） |
-| `/重啟保留` | 重啟 Claude session，保留記憶 |
-| `/重啟清除` | 重啟 Claude session，清除記憶 |
-| 其他 `/` 開頭 | 轉發給 Claude AI 處理（一般問答） |
+| React 18 + TypeScript | UI 框架 |
+| Vite | 建置工具 |
+| Recharts | 圖表（布林帶、籌碼、量價） |
+| Tailwind CSS | 樣式 |
+| React Query | API 狀態管理 |
+
+### 基礎設施
+
+| 技術 | 用途 |
+|------|------|
+| Docker + docker-compose | 容器化部署 |
+| PostgreSQL 16 | 主資料庫 |
+| SQLite (ticks.db) | fubon-dashboard 本地快取（tick 資料、交易記錄、LINE 通知 log） |
 
 ---
 
-## 台股當沖（Fubon 整合）
+## 運維
 
-### 台股 Tick 跳動規則
-
-| 股價區間 | 最小跳動（tick） |
-|---------|--------------|
-| < 10 元 | 0.01 |
-| 10 ~ 50 元 | 0.05 |
-| 50 ~ 100 元 | 0.1 |
-| 100 ~ 500 元 | 0.5 |
-| 500 ~ 1000 元 | 1.0 |
-| ≥ 1000 元 | 5.0 |
-
-停損向上捨入（round_up_tick），停利向下捨入（round_down_tick），確保觸價條件不超出預設範圍。
-
-### 進場/出場策略
-
-**進場條件（全部滿足，短路順序）：**
-
-| # | 條件 | 相關參數 | 可設定 |
-|---|------|----------|--------|
-| 1 | 時間窗口 | `entry_start_time` / `latest_dynamic_add_time` | ✅ 數值 |
-| 2 | 同標的當下未持倉 | `check_not_in_position`（預設 true） | ✅ 開關 |
-| 3 | 今日進場次數 < 上限 | `max_daily_positions`（預設 5） | ✅ 數值 |
-| 4 | 個股漲跌幅在 ±N% 以內 | `max_change_pct`（預設 5%） | ✅ 數值 |
-| **5** | **⭐ 必要條件（二擇一）：觀察窗口內上漲 ≥ N tick，或觀察窗口買盤佔比 ≥ M%** | `tick_rise_threshold`（預設 4）、`bid_1m_pct_threshold`（預設 70%） | ✅ 數值 |
-| 6 | 個股期貨正價差（有期貨資料才判斷） | `check_futures_signal`（預設 true） | ✅ 開關 |
-| 7 | 買盤比例 >= 門檻 | `bid_pct_threshold`（預設 60%） | ✅ 數值 |
-| 8 | 今日累積量/5日均量 >= 開盤後觀察分鐘數 × 係數% | `vol_ratio_coefficient`（預設 1.3）；例：09:15進場 → 15×1.3=19.5% | ✅ 數值 |
-| 9 | 振幅（今日動能）>= 門檻 | `amplitude_min_pct`（預設 3%）；振幅 = (High-Low)/昨收×100% | ✅ 數值 |
-
-條件 2、6 可在前端「交易設定」頁面透過 checkbox 開關（勾選 = 啟用；取消 = 放行不檢查）。條件 7、8、9 門檻皆可調。振幅代表今日股票的動能：振幅低表示盤整沒方向，不適合當沖。
-
-所有參數儲存於 PostgreSQL `trading_settings`，透過前端「交易設定」頁面修改後**立即生效**（寫入 PG + 同步 ticks.db 熱重載快取，引擎每 tick 重讀，無需重啟）。
-
-**進場同時掛出觸價單：**
-- 停損：進場價 - `stop_loss_ticks`（預設 4）tick（向上捨入）→ LessThanOrEqual 條件單
-- 停利：昨收 × (1 + (進場時漲幅 + `take_profit_add_pct`（預設 4%）) / 100)（向下捨入）→ GreaterThanOrEqual 條件單
-
-**強制出場機制（三層保護）：**
-
-| 層次 | 觸發方式 | 動作 | 時間 |
-|------|---------|------|------|
-| **① OCO 觸價單（伺服器端）** | Fubon 伺服器偵測到成交價 ≤ 停損 或 ≥ 停利 | 自動市價賣出（由 Fubon 執行，不依賴引擎連線） | 即時 |
-| **② RiskManager（tick 路徑）** | WebSocket on_tick 收到 tick，且時間 ≥ `force_exit_time`（預設 13:20） | 取消觸價單 + 市價 IOC 賣出 | 13:20 後下一個 tick |
-| **③ 主迴圈時間兜底（tick-independent）** | 主迴圈每秒比對系統時間，不依賴 WebSocket | 取消觸價單 → 市價 IOC + 備援 ROD 限價賣 → LINE 通知「請確認成交」 | 13:20（每秒檢查） |
-
-**層次 ③ 的必要性：** 跌停板時可能長時間無成交 tick（on_tick 不回調），或 WebSocket 斷線期間，層次 ② 完全失效。主迴圈與 WebSocket 並行運行，確保時間到必定執行。
-
-**備援 ROD 說明：** IOC（Immediate or Cancel）在跌停無買方時會立即取消；備援 ROD 限價賣以當時報價送出，若跌停仍無人承接則掛單至收盤。如 IOC 已成交，券商因無庫存會拒絕 ROD，不會裸空。
-
-**13:15 預警：** 若 13:15 仍持倉，自動送 LINE 通知列出標的、張數、進場價，提醒距強制出場剩餘時間。
-
-### 架構說明
-
-`services/fubon-dashboard/` 是完整交易引擎，**直接在 WSL 執行**（非 Docker）。一個指令啟動所有元件：
-富邦 SDK → tick streaming → 60s tick 動量評估 → 觸價單 → WebSocket 推送 → 前端即時顯示。
-
-```
-WSL 直接執行（非 Docker）
-  cd services/fubon-dashboard && python run.py
-    ├─ DailyScheduler：平日 08:30 自動登入富邦 SDK，09:00 前 WebSocket 就緒
-    ├─ 交易引擎啟動時：
-    │    ├─ GET localhost:8000/api/daytrade/list  → 取 PG daytrade_candidate 當日標的
-    │    └─ GET localhost:8000/api/pool          → 取 PG stock_pool 股票名稱
-    ├─ 交易引擎（60s tick 動量）：每 10 秒評估進場信號，自動下停損/停利觸價單
-    ├─ FastAPI :8090（REST + /ws/stream）
-    │    └─ /ws/stream 每秒推送引擎狀態給前端
-    └─ 13:36 自動停止（收盤後強制平倉確認）
-
-Docker Compose（frontend nginx）
-  nginx → /fubon-api/ws/* → host.docker.internal:8090/ws/*  （WebSocket，長連線）
-  nginx → /fubon-api/*    → host.docker.internal:8090/*      （REST fallback）
-```
-
-**啟動流程：**
-```bash
-# 1. 先啟動 Docker stack（DB + 後端 + 前端）
-docker compose up -d
-
-# 2. WSL 另開終端，啟動交易引擎
-cd /home/tommy0322/institutional-investors/services/fubon-dashboard
-python run.py
-# → 前端自動透過 WebSocket 接收即時資料，數字實時跳動
-```
-
-### 前端 Tab：台股當沖
-
-位於篩選總覽之後，包含 7 個子頁面：
-
-| 子頁 | 資料來源 | 說明 |
-|-----|---------|------|
-| 今日交易 | WebSocket `/fubon-api/ws/stream` | 即時持倉 + 盤中損益（WS 串流，每秒更新）。觀察名單欄位：代碼/名稱、昨收、現價、漲跌、漲跌%、已成交買賣盤（外盤%）、期貨價/差價、Open/High/Low、**振幅%**（(High−Low)/昨收×100）、今日累積量/5日均量% |
-| 手動買賣 | `/fubon-api/manual-trade/*` | 買進：市價IOC + 自動掛OCO停損/停利觸價單；賣出：ROD限價現賣，不綁持倉紀錄 |
-| 交易紀錄 | `/fubon-api/trades` | 今日成交記錄（ticks.db） |
-| 盤前狀況 | `/fubon-api/pre-session/logs` | 盤前跑批紀錄（PG） |
-| 交易設定 | `/fubon-api/trading-params` + PG `trading_settings` | 所有引擎參數（即時生效：寫入 PG 持久化 + ticks.db 熱重載，引擎無需重啟） |
-| 系統設定 | `/fubon-api/config` | 讀取 config.yaml（帳密/憑證，只讀，密碼遮蔽） |
-| 當沖健診 | `/fubon-api/health-check/results` + `/fubon-api/logs/today` | 引擎狀態、config、LINE 設定、tick 資料流（盤前引擎未啟動時顯示告警而非錯誤） |
-
-### 下單類別
-
-所有股票買賣使用 `OrderType.Stock`（現買/現賣），不使用 `OrderType.DayTrade`（會觸發「沒有交易類別」錯誤）。手動買賣（`/manual-trade/buy`、`/manual-trade/limit-sell`）及引擎自動下單均採用此設定。
-
-### LINE 通知
-
-通知走 `claude-line-bot` 服務（`http://host.docker.internal:8001/notify`）：
-- `LineNotifier` 優先呼叫 `LINE_BOT_URL/notify`（bot 已初始化 token，fubon-dashboard 無需另設 LINE 憑證）
-- 觸發時機：手動買入、手動賣出、引擎進場（dry_run=False 時）
-- ⚠️ LINE Messaging API free plan 每月 200 則上限；滿額後推播失敗，月初重置
-
-### 安全注意
-
-- `config.yaml`（含富邦帳密）已加入 `.gitignore`，放 `/home/tommy0322/fubon-config/`，不進 git
-- `.env`（LINE token）已加入 `.gitignore`
-- `vendor/`（富邦 SDK wheel binary）已加入 `.gitignore`
-- `log/`、`logs/`（執行期日誌）已加入 `.gitignore`
-- `/fubon-api/` 只能從本機 6174 port 存取，不對外暴露
-
----
-
-## PostgreSQL 備份
-
-### 備份腳本
+### PostgreSQL 備份
 
 ```bash
-scripts/backup-db.sh        # 執行 pg_dump → /home/tommy0322/institutional-investors/backups/
-                            # 自動保留最近 7 份，舊的自動刪除
+scripts/backup-db.sh        # 執行 pg_dump → backups/（自動保留最近 7 份）
 ```
 
-### 安裝 systemd 自動備份（每日 02:00）
+**安裝 systemd 自動備份（每日 02:00）：**
 
 ```bash
 # 在 WSL Ubuntu 中執行（需 sudo）：
@@ -885,12 +876,9 @@ sudo cp scripts/db-backup.timer   /etc/systemd/system/institutional-investors-db
 sudo systemctl daemon-reload
 sudo systemctl enable institutional-investors-db-backup.timer
 sudo systemctl start  institutional-investors-db-backup.timer
-
-# 確認 timer 狀態
-systemctl status institutional-investors-db-backup.timer
 ```
 
-### 手動備份 / 還原
+**手動備份 / 還原：**
 
 ```bash
 # 手動備份
@@ -901,9 +889,52 @@ gunzip -c backups/stock_force_20260614_020001.sql.gz \
   | docker exec -i institutional-investors-db-1 psql -U stock -d stock_force
 ```
 
----
+### 開機自動恢復機制
 
-## 程式碼快速恢復
+電腦不預警關機後重開，系統會自動完整恢復，**不需人工介入**。
+
+```
+Windows 登入
+  ↓ Task Scheduler 觸發 wsl.exe -d Ubuntu
+WSL2 Ubuntu 啟動（systemd 接管）
+  ↓ systemd 啟動 docker.service（已 enable）
+Docker daemon 就緒
+  ↓ institutional-investors.service 執行 docker compose up -d
+  ├─ db（PostgreSQL）— pgdata volume 保有所有歷史資料
+  ├─ backend（FastAPI + Scheduler）— 排程自動恢復
+  └─ frontend（React）— 儀表板可存取
+  ↓ claude-line-bot.service 執行 start.sh（KEEP_MEMORY=1）
+  ├─ uvicorn 重新啟動（PORT 8001）
+  ├─ ngrok 重新建立 tunnel（URL 會變）
+  └─ 自動更新 LINE webhook → 新 ngrok URL
+系統恢復完畢，排程、儀表板、LINE bot 全數上線
+```
+
+| 元件 | 機制 | 說明 |
+|------|------|------|
+| **WSL2 自動啟動** | Windows Task Scheduler `WSL-Ubuntu-Autostart` | 使用者登入時觸發，喚醒 WSL/systemd |
+| **Docker daemon** | `systemctl enable docker`（已設定） | systemd 啟動時自動起 Docker |
+| **Docker 容器** | `restart: unless-stopped`（docker-compose.yml） | Docker daemon 啟動後容器自動恢復 |
+| **Docker Compose stack** | `institutional-investors.service`（systemd）| 確保 `docker compose up -d` 在開機時執行 |
+| **LINE bot** | `claude-line-bot.service`（systemd）| 開機自動執行 `start.sh`，含 webhook 更新 |
+| **資料庫資料** | `pgdata` Docker volume | 關機不會遺失，volume 永久掛載 |
+| **DB 備份** | `institutional-investors-db-backup.timer`（systemd） | 每日 02:00 自動 pg_dump → `backups/`，保留 7 天 |
+
+**驗證方式：**
+
+```bash
+systemctl status institutional-investors.service
+systemctl status claude-line-bot.service
+docker compose ps -a
+Get-ScheduledTask -TaskName "WSL-Ubuntu-Autostart"   # Windows PowerShell
+```
+
+**注意事項：**
+- **ngrok URL 每次重啟會改變**，但 `start.sh` 會自動更新 LINE webhook，LINE bot 功能不受影響
+- **歷史缺口自動補抓**：重啟時 `startup_gap_backfill` 自動掃最近 14 曆日，找到缺漏的交易日後補抓 job1/job2/job4，無需人工介入
+- **pgdata volume 保護**：`docker compose down -v` 會刪除 volume（所有資料），正常維護請只用 `docker compose stop` 或 `docker compose down`（不加 `-v`）
+
+### 程式碼快速恢復
 
 ```bash
 # 確認目前 git 狀態
@@ -924,141 +955,18 @@ docker compose build --no-cache && docker compose up -d
 
 ---
 
-## 開機自動恢復機制
+## Line Bot 指令
 
-電腦不預警關機後重開，系統會自動完整恢復，**不需人工介入**。
+LINE Bot 連結透過 ngrok tunnel 對外，開機自動重建 webhook URL。
 
-### 恢復流程（按順序自動執行）
-
-```
-Windows 登入
-  ↓ Task Scheduler 觸發 wsl.exe -d Ubuntu
-WSL2 Ubuntu 啟動（systemd 接管）
-  ↓ systemd 啟動 docker.service（已 enable）
-Docker daemon 就緒
-  ↓ institutional-investors.service 執行 docker compose up -d
-  ├─ db（PostgreSQL）— pgdata volume 保有所有歷史資料
-  ├─ backend（FastAPI + APScheduler）— 排程自動恢復
-  └─ frontend（React）— 儀表板可存取
-  ↓ claude-line-bot.service 執行 start.sh（KEEP_MEMORY=1）
-  ├─ uvicorn 重新啟動（PORT 8001）
-  ├─ ngrok 重新建立 tunnel（URL 會變）
-  └─ 自動更新 LINE webhook → 新 ngrok URL
-系統恢復完畢，排程、儀表板、LINE bot 全數上線
-```
-
-### 已建立的機制
-
-| 元件 | 機制 | 說明 |
-|------|------|------|
-| **WSL2 自動啟動** | Windows Task Scheduler `WSL-Ubuntu-Autostart` | 使用者登入時觸發，喚醒 WSL/systemd |
-| **Docker daemon** | `systemctl enable docker`（已設定） | systemd 啟動時自動起 Docker |
-| **Docker 容器** | `restart: unless-stopped`（docker-compose.yml） | Docker daemon 啟動後容器自動恢復 |
-| **Docker Compose stack** | `institutional-investors.service`（systemd）| 確保 `docker compose up -d` 在開機時執行 |
-| **LINE bot** | `claude-line-bot.service`（systemd）| 開機自動執行 `start.sh`，含 webhook 更新 |
-| **資料庫資料** | `pgdata` Docker volume | 關機不會遺失，volume 永久掛載 |
-| **DB 備份** | `institutional-investors-db-backup.timer`（systemd） | 每日 02:00 自動 pg_dump → `backups/`，保留 7 天 |
-
-### 驗證方式
-
-```bash
-# 在 WSL 中確認 systemd 服務狀態
-systemctl status institutional-investors.service
-systemctl status claude-line-bot.service
-
-# 確認 Docker 容器正在運行
-docker compose ps -a
-
-# Windows 確認 Task Scheduler
-Get-ScheduledTask -TaskName "WSL-Ubuntu-Autostart"
-```
-
-### 注意事項
-
-- **ngrok URL 每次重啟會改變**，但 `start.sh` 會自動更新 LINE webhook，LINE bot 功能不受影響
-- **歷史缺口自動補抓**：重啟時 `startup_gap_backfill` 自動掃最近 14 曆日，找到缺漏的交易日後補抓 job1/job2/job4，無需人工介入（假日 0 rows 視為正常，不重複觸發）
-- **pgdata volume 保護**：`docker compose down -v` 會刪除 volume（所有資料），正常維護請只用 `docker compose stop` 或 `docker compose down`（不加 `-v`）
-
----
-
-## 快速啟動
-
-```bash
-# 全套 Docker 啟動（推薦）
-docker compose up -d
-
-# 前端： http://localhost:6174
-# 後端： http://localhost:8000
-# API：  http://localhost:8000/health
-```
-
-> 第一次啟動會自動回填 90 日歷史資料，需要一段時間。
-> TWSE 資料限交易時段（09:00~20:00），非交易時間啟動可能有部分資料缺漏。
-
----
-
-## UI 功能說明
-
-### 頂部 MarketHeader
-
-| 元件 | 說明 |
+| 指令 | 說明 |
 |------|------|
-| **大盤指數** | 台灣加權、S&P 500、Nasdaq、恆生、日經225、韓國綜合；每 5 分鐘自動更新 |
-| **增減點數** | 每個指數顯示「收盤值 ＋增減點 ＋漲跌%」三項 |
-| **台指期** | TAIFEX 官方 API（mis.taifex.com.tw）取近月大台指期漲跌點 + 漲跌%；每 5 分鐘更新 |
-| **時鐘** | 右下角顯示 server-synced 台灣時間（每秒跳動）；前端初始化時從 `/api/server-time` 取得偏移量，後續純 client tick |
-
-### 篩選儀表板（主頁）
-
-| 元件 | 說明 |
-|------|------|
-| **AI 精選** | 狀態列左側：job4 後由 Claude AI 精選最值得關注個股，點擊複製精選理由 |
-| **Job 狀態列** | 7 個排程執行狀態（✓ 時間 / 等待中 / ✗ 失敗）排列於狀態列 |
-| **個股卡片** | 顯示代號、名稱、篩選日、評分、資加/戶加、千張大戶週增減（1w/2w/3w diff） |
-| **策略 badge** | A=綠色、B=黃色、C=藍色（BB+squeeze 時顯示青色 B+） |
-| **BBGauge** | 布林位階進度條，位階>5=綠、0~5=黃、0~-3=橘、<-3=紅 |
-| **ChipBar** | 台股顏色慣例：正數=紅色、負數=綠色 |
-| **趨勢小圖** | 近 2 個月收盤走勢，漲=紅、跌=綠；右下標示「最新收盤 MM-DD」 |
-| **hover 解讀** | 滑鼠移到卡片顯示詳細文字解讀，可選取文字或點「點擊複製全文」 |
-
-### 退場止損頁
-
-| 功能 | 說明 |
-|------|------|
-| **來源** | 曾通過篩選、現已落榜的個股（不限峰值 BB 條件，全部顯示） |
-| **過濾條件** | `days_off < 5`（落榜超過 5 個篩選日自動移除，保持清單簡潔） |
-| **顯示欄位** | 代號、名稱、現BB、籌碼3d%、最後上榜日、已消失篩選日數、訊號 badges |
-| **天數顏色** | 今日剛落榜=黃色、≤2日=橘色、更早=灰色 |
-| **籌碼訊號** | 近3日外資+投信賣超≤-1.5% 且12日仍持續流出 → 顯示「籌碼出場」badge |
-
-### 美股追蹤頁
-
-| 功能 | 說明 |
-|------|------|
-| **標的** | TSM、NVDA、LITE、AAOI、MRVL、MU、WDC、TSLA、GOOGL、MSFT、AMZN、AAPL、SPCX（SpaceX，2026/6/12 IPO） |
-| **資料** | yfinance 抓收盤價 + 盤後價（`postMarketPrice`） |
-| **自動更新** | 頁面開啟後每 5 分鐘自動更新（setInterval 3×5min，共 15 分鐘；重整頁面可手動觸發） |
-| **盤後時間** | 台灣時間 08:55 ≈ 前日 19:55 ET（美股盤後 16:00-20:00 ET 內），盤後資料可取 |
-| **欄位** | 代號、名稱、收盤價、收盤漲跌%、盤後價、盤後漲跌%、盤後-收盤（差值，最右） |
-| **Highlight** | 收盤上漲且盤後又漲 >3% → 琥珀色底色 |
-
-### 千張大戶頁
-
-| 功能 | 說明 |
-|------|------|
-| **占比排行** | 全市場電子股千張以上大戶持股占比（`pct_1000_lot`），依週增減% 由高到低排序 |
-| **週增減** | 本週 vs 上週持股人數差（+紅/-綠）與占比變化% |
-| **搜尋** | 可依代碼、名稱、類股即時篩選 |
-| **資料頻率** | TDCC 集保每週更新一次（週日 18:30 後） |
-
-### 篩選績效頁
-
-| 功能 | 說明 |
-|------|------|
-| **日期下拉選單** | 最多列出過去 10 個有篩選結果且已有後續收盤的交易日（隔日～十日均漲幅） |
-| **漲幅基準** | 以資料庫中最新有收盤的交易日作為基準（非固定次日），能跨假日比對 |
-| **列顏色** | AI精選+總分第一=紫色、僅AI精選=藍色、僅總分第一=黃色、其他=灰 |
-| **均漲幅** | 該日篩選股當下均漲幅，依所選基準日計算 |
+| `/stocks` | 傳回當日篩選結果 |
+| `/result` | 傳回最新篩選績效 |
+| `/reset` | 清除對話記憶（保留 function context） |
+| `/重啟保留` | 重啟 Claude session，保留記憶 |
+| `/重啟清除` | 重啟 Claude session，清除記憶 |
+| 其他 `/` 開頭 | 轉發給 Claude AI 處理（一般問答） |
 
 ---
 
