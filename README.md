@@ -19,7 +19,9 @@
 
 ## UI
 
-![dashboard](docs/screenshots/dashboard3.jpg)
+![dashboard](docs/screenshots/2026-06-27 130447.png)
+
+![dashboard](docs/screenshots/2026-06-27 130520.png)
 
 ---
 

@@ -192,7 +192,9 @@ PG stock_pool + daytrade_candidate（由 job8 每日 21:05 更新）
 - [ ] v2：券商分點前5大買超（CMoney，URL 需修正）
 - [x] 策略A追蹤清單退出機制：tracking 超過10個交易日未觸發 BB≤5 → 自動刪除，等下次重新突破再加入
 - [x] 篩選器歷史缺口補抓：`startup_gap_backfill` 啟動時自動補最近 14 天
-- [x] 篩選條件放寬：策略B bb_now ≤5→≤15，突破位階門檻 >8→>5，策略A MA20斜率 0.5~1.5%→0.3~2.0%
+- [x] 篩選條件放寬：突破位階門檻 >8→>5，策略A MA20斜率 0.5~1.5%→0.3~2.0%
+- [x] 策略A修正：require_first_day=True（只抓第一天突破，不追第二天）
+- [x] 策略B修正：bb_now ≤15→≤8（位階15不是拉回，8才是回到上軌附近）；w1 ≥-0.5→≥0（大戶人數不能減少才算「主力未出場」）
 - [x] 退場止損頁：移除「落榜N天」動能信號，籌碼/技術 badge 新增 tooltip 說明
 - [x] 手動買賣：ManualTradePage 拆 ManualTradeContent，移入 DayTradePage 第 2 子頁（今日交易↔交易紀錄之間），頂層 Tab 移除「測試買賣」
 - [x] 當沖健診：items 02/03/08/19 engine 未啟動時（no such table）改顯示告警⚠而非錯誤✘
