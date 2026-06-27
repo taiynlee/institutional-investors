@@ -232,7 +232,7 @@ function LiveTab() {
         {/* 今日已交易 / 持倉 */}
         <div
           className={`${card} px-3 py-3 flex flex-col justify-center cursor-help`}
-          title={`進場八條件：\n① 時間窗口（進場開始 ~ 進場截止）\n② 大盤日漲幅 > market_rise_min\n③ 同標的當下未持倉\n④ 今日進場次數 < max_daily_positions\n⑤ 個股漲跌幅在 ±max_change_pct 內\n⑥ ${stream?.tick_window_seconds ?? 60}秒內上漲 ≥ ${stream?.tick_rise_threshold ?? 4} 個 tick\n⑦ 若有個股期貨：期貨價 > 現價（正價差）\n⑧ 已成交買盤 > 賣盤（bid_pct > 50%）`}
+          title={`進場八條件：\n① 時間窗口（進場開始 ~ 進場截止）\n② 大盤日漲幅 > market_rise_min\n③ 同標的當下未持倉（可關閉）\n④ 今日進場次數 < max_daily_positions\n⑤ 個股漲跌幅在 ±max_change_pct 內\n⑥ ${stream?.tick_window_seconds ?? 60}秒內上漲 ≥ ${stream?.tick_rise_threshold ?? 4} 個 tick（必要）\n⑦ 若有個股期貨：期貨價 > 現價（正價差，可關閉）\n⑧ 已成交買盤 ≥ ${stream?.bid_pct_threshold ?? 60}%（可調）`}
         >
           <span className="text-[10px] text-[#6b84a0] mb-0.5">今日已交易</span>
           <span className="text-base font-bold text-[#60a5fa]">
