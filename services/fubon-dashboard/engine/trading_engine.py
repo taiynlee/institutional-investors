@@ -694,19 +694,26 @@ class TradingEngine:
             sess = sessions.get(symbol)
             if sess:
                 sess.on_quote(bids, asks)
+            # 計算買賣量（不應拋例外）
+            bid_vol = 0
+            ask_vol = 0
+            if bids:
+                if isinstance(bids[0], (list, tuple)):
+                    bid_vol = sum(int(b[1] if len(b) > 1 else 1) for b in bids)
+                else:
+                    bid_vol = sum(int(b.get("size", 1) if isinstance(b, dict) else 1) for b in bids)
+            if asks:
+                if isinstance(asks[0], (list, tuple)):
+                    ask_vol = sum(int(a[1] if len(a) > 1 else 1) for a in asks)
+                else:
+                    ask_vol = sum(int(a.get("size", 1) if isinstance(a, dict) else 1) for a in asks)
+            # in-memory 更新必須先做，不受 SQLite 例外影響
+            _cum_bid[symbol] = _cum_bid.get(symbol, 0) + bid_vol
+            _cum_ask[symbol] = _cum_ask.get(symbol, 0) + ask_vol
+            if sess:
+                sess.on_bid_ask_tick(bid_vol, ask_vol, _tick_window_seconds())
+            # SQLite 持久化（best-effort）
             try:
-                bid_vol = 0
-                ask_vol = 0
-                if bids:
-                    if isinstance(bids[0], (list, tuple)):
-                        bid_vol = sum(int(b[1] if len(b) > 1 else 1) for b in bids)
-                    else:
-                        bid_vol = sum(int(b.get("size", 1) if isinstance(b, dict) else 1) for b in bids)
-                if asks:
-                    if isinstance(asks[0], (list, tuple)):
-                        ask_vol = sum(int(a[1] if len(a) > 1 else 1) for a in asks)
-                    else:
-                        ask_vol = sum(int(a.get("size", 1) if isinstance(a, dict) else 1) for a in asks)
                 with sqlite3.connect(ticks_db) as _tdb:
                     _tdb.execute(
                         "INSERT INTO quotes(symbol,bid_vol,ask_vol,updated_at) VALUES(?,?,?,?)"
@@ -716,12 +723,8 @@ class TradingEngine:
                         "  updated_at=excluded.updated_at",
                         (symbol, bid_vol, ask_vol, now_tw().strftime("%H:%M:%S")),
                     )
-                _cum_bid[symbol] = _cum_bid.get(symbol, 0) + bid_vol
-                _cum_ask[symbol] = _cum_ask.get(symbol, 0) + ask_vol
-                if sess:
-                    sess.on_bid_ask_tick(bid_vol, ask_vol, _tick_window_seconds())
             except Exception as e:
-                logger.debug("on_quote 異常: %s", e)
+                logger.debug("on_quote SQLite 異常: %s", e)
 
         def on_index_tick(price: float, ts_ns: int):
             now = now_tw()
