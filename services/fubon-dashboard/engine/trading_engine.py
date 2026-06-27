@@ -287,6 +287,14 @@ class TradingEngine:
         logger.info("=== 引擎啟動 | dry_run=%s | %s ===", dry_run, today_str)
         log_event("engine_start", dry_run=dry_run, today=today_str)
 
+        # 每日清空 quotes 累積表，確保外盤/內盤比例只統計今日成交
+        try:
+            with sqlite3.connect(ticks_db) as _tdb:
+                _tdb.execute("DELETE FROM quotes")
+            logger.info("quotes 表已清空（新交易日）")
+        except Exception:
+            pass
+
         # ── SDK 登入（帶 timeout 避免非交易時間 hang 住 FastAPI）────────────────
         from fubon_neo.sdk import FubonSDK, Mode
         from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
