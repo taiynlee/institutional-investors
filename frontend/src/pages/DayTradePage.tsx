@@ -1436,6 +1436,8 @@ function HealthTab() {
 const MSG_TYPE_LABEL: Record<string, string> = {
   auto_entry:  '自動進場',
   auto_exit:   '自動出場',
+  dry_entry:   'DRY進場',
+  dry_exit:    'DRY出場',
   warning:     '預警',
   force_exit:  '強制出場',
   debug:       '模擬測試',
@@ -1491,7 +1493,7 @@ function LineLogTab() {
       </div>
 
       {/* 記錄表格 */}
-      <div className={card}>
+      <div id="line-log-table" className={card}>
         <div className={`px-4 py-2 border-b border-[#253d5c] text-xs ${muted}`}>
           近 5 天通知記錄（共 {rows.length} 筆）
         </div>

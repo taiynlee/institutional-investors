@@ -1283,10 +1283,16 @@ def create_app(
     def simulate_buy(symbol: str = "2382", price: float = 0.0, lots: int = 1,
                      ref_price: float = 0.0, stop_loss_ticks: int = 4, take_profit_add_pct: float = 4.0):
         """模擬買入：建立暫存持倉，送 LINE 通知（dry_run=False 真實發送）。"""
+        import urllib.request as _ur
         from engine.risk.position import Position
         from engine.execution.broker import tw_tick_size, round_up_tick, round_down_tick
         from engine.monitor.notifier import LineNotifier
         notifier = LineNotifier(dry_run=False)
+        try:
+            _pool = json.loads(_ur.urlopen("http://localhost:8000/api/pool", timeout=2).read())
+            _sname = next((s.get("name","") for s in _pool if s.get("code")==symbol), "")
+        except Exception:
+            _sname = ""
         if price <= 0:
             price = 250.0
         if ref_price <= 0:
@@ -1300,9 +1306,10 @@ def create_app(
         _sim_positions[symbol] = {
             "entry_price": price, "lots": lots,
             "stop_loss": pos.stop_loss, "take_profit": pos.take_profit,
+            "name": _sname,
         }
         msg = (
-            f"🟢【模擬進場】{symbol}\n"
+            f"🟢【模擬進場】{symbol} {_sname}\n"
             f"價={price:.1f}  張數={lots}\n"
             f"停損={pos.stop_loss:.2f}  停利={pos.take_profit:.2f}"
         )
@@ -1321,8 +1328,9 @@ def create_app(
         if price <= 0:
             price = pos["stop_loss"]
         pnl = (price - pos["entry_price"]) * pos["lots"] * 1000
+        _sname = pos.get("name", "")
         msg = (
-            f"🔴【模擬出場】{symbol}\n"
+            f"🔴【模擬出場】{symbol} {_sname}\n"
             f"原因={reason}  {pos['entry_price']:.1f}→{price:.1f}\n"
             f"損益={pnl:+,.0f}  {pos['lots']}張\n"
             f"停損={pos['stop_loss']:.2f}  停利={pos.get('take_profit', 0):.2f}"

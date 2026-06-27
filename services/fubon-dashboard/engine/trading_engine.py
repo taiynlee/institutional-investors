@@ -689,7 +689,7 @@ class TradingEngine:
                     f"🔴 出場 {symbol} {sname(symbol)}\n"
                     f"原因={exit_reason}  {pos_before.entry_price:.0f}→{price:.0f}\n"
                     f"損益={pnl:+,.0f}  {pos_before.lots}張",
-                    msg_type="auto_exit",
+                    msg_type="dry_exit" if dry_run else "auto_exit",
                 )
 
             last = last_signal_eval.get(symbol)
@@ -935,7 +935,7 @@ class TradingEngine:
                 f"🟢 進場 {symbol} {sname(symbol)}\n"
                 f"價={price:.0f}  張數={lots}\n"
                 f"停損={stop_loss:.2f}  停利={take_profit:.2f}",
-                msg_type="auto_entry",
+                msg_type="dry_entry" if broker.dry_run else "auto_entry",
             )
 
             # 掛觸價停損/停利賣單（dry_run 時只 log）
@@ -984,7 +984,7 @@ class TradingEngine:
                 if not _warned_1315 and now_loop.time() >= time(13, 15) and om.positions:
                     _warned_1315 = True
                     pos_summary = "、".join(
-                        f"{s}×{p.lots}張({p.entry_price:.0f}元)"
+                        f"{s}{sname(s)}×{p.lots}張({p.entry_price:.0f}元)"
                         for s, p in list(om.positions.items())
                     )
                     notifier.send(
