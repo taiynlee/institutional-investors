@@ -859,17 +859,17 @@ const PARAM_DEFS: PD[] = [
   // 倉位控制
   { id:'max_position_capital', group:'倉位控制', label:'每次進場資金上限', desc:'每次進場最多動用的資金（超過就截斷）；張數 = floor(min(上限, 剩餘總資金) / (價格 × 1000))', unit:'TWD', rtKey:'max_position_capital', type:'number', step:100000, min:100000, canDisable:false },
   { id:'max_daily_positions',  group:'倉位控制', label:'每日進場次數上限', desc:'一天最多進場幾次（同標的可重複計入）；達上限後當日不再開新倉', unit:'次', rtKey:'max_daily_positions', type:'number', step:1, min:1, canDisable:false },
-  // 進場條件
-  { id:'entry_start_time',     group:'進場條件', label:'進場開始時間',         desc:'此時間之前不開新倉（例：09:15 = 開盤後觀察15分鐘再進場）', unit:'HH:MM', rtKey:'entry_start_time', type:'time', canDisable:false },
-  { id:'tick_window_seconds',  group:'進場條件', label:'tick 觀察窗口',        desc:'計算 tick_rise 用的滾動時間窗口（秒）；預設60秒 = 看過去1分鐘漲了幾tick', unit:'秒', rtKey:'tick_window_seconds', type:'number', step:10, min:10, max:300, canDisable:false },
-  { id:'tick_rise_threshold',  group:'進場條件', label:'tick 上漲門檻',        desc:'觀察窗口內股價上漲需 ≥ 此 tick 數才觸發進場；tick 依各價位不同計算', unit:'tick', rtKey:'tick_rise_threshold', type:'number', step:1, min:1, canDisable:false },
+  // 進場條件（由常調 → 少調排序）
+  { id:'tick_rise_threshold',      group:'進場條件', label:'tick 上漲門檻',          desc:'觀察窗口內股價上漲需 ≥ 此 tick 數才觸發進場；tick 依各價位不同計算', unit:'tick', rtKey:'tick_rise_threshold', type:'number', step:1, min:1, canDisable:false },
+  { id:'bid_1m_pct_threshold',     group:'進場條件', label:'觀察窗口買盤佔比門檻',   desc:'條件⑤的第二觸發路徑：觀察窗口（tick_window_seconds）內買盤佔總成交量 >= 此%，即使上漲 tick 數不足，也允許進場。預設 70%，與「上漲 N tick」為二擇一', unit:'%', rtKey:'bid_1m_pct_threshold', type:'number', step:5, min:50, max:100, canDisable:false },
+  { id:'bid_pct_threshold',        group:'進場條件', label:'買盤比例門檻',           desc:'已成交買盤佔總成交量須達此比例才允許進場；買盤比例 = 買方成交量 / (買+賣) × 100', unit:'%', rtKey:'bid_pct_threshold', type:'number', step:5, min:0, max:100, canDisable:false },
+  { id:'amplitude_min_pct',        group:'進場條件', label:'振幅門檻',               desc:'振幅 = (當日最高價 − 最低價) / 昨收 × 100%，反映這支股票今天的動能。振幅太低代表盤整沒方向，不適合當沖，建議設 3~5%', unit:'%', rtKey:'amplitude_min_pct', type:'number', step:0.5, min:0, max:20, canDisable:false },
+  { id:'vol_ratio_coefficient',    group:'進場條件', label:'量比係數',               desc:'條件⑧量比門檻 = (進場開始時間 − 09:00 分鐘數) × 此係數。例：09:15進場、係數1.3 → 門檻=19.5%。係數越高代表要求開盤後的交易量相對5日均量越活躍才進場。預設1.3，可調整範圍0.5~5', unit:'', rtKey:'vol_ratio_coefficient', type:'number', step:0.1, min:0.1, max:5, canDisable:false },
+  { id:'tick_window_seconds',      group:'進場條件', label:'tick 觀察窗口',          desc:'計算 tick_rise 用的滾動時間窗口（秒）；預設60秒 = 看過去1分鐘漲了幾tick', unit:'秒', rtKey:'tick_window_seconds', type:'number', step:10, min:10, max:300, canDisable:false },
+  { id:'entry_start_time',         group:'進場條件', label:'進場開始時間',           desc:'此時間之前不開新倉（例：09:15 = 開盤後觀察15分鐘再進場）', unit:'HH:MM', rtKey:'entry_start_time', type:'time', canDisable:false },
   { id:'max_change_pct',           group:'進場條件', label:'最大漲跌幅',             desc:'個股當日漲跌幅（絕對值）超過此%不進場，避免追高或跌太多', unit:'%', rtKey:'max_change_pct', type:'number', step:0.5, min:0.5, canDisable:false },
   { id:'check_not_in_position',    group:'進場條件', label:'同標的未持倉才可進場',   desc:'勾選（預設）：同一標的已有持倉時拒絕再進場；取消勾選：允許同標的持倉中再進一張', unit:'', rtKey:'check_not_in_position', type:'boolean', canDisable:false },
   { id:'check_futures_signal',     group:'進場條件', label:'期貨正價差才可進場',     desc:'勾選（預設）：個股有期貨資料時，期貨價須 > 現貨才允許進場；取消勾選：忽略期貨訊號', unit:'', rtKey:'check_futures_signal', type:'boolean', canDisable:false },
-  { id:'bid_pct_threshold',        group:'進場條件', label:'買盤比例門檻',           desc:'已成交買盤佔總成交量須達此比例才允許進場；買盤比例 = 買方成交量 / (買+賣) × 100', unit:'%', rtKey:'bid_pct_threshold', type:'number', step:5, min:0, max:100, canDisable:false },
-  { id:'vol_ratio_coefficient',    group:'進場條件', label:'量比係數',               desc:'條件⑧量比門檻 = (進場開始時間 − 09:00 分鐘數) × 此係數。例：09:15進場、係數1.3 → 門檻=19.5%。係數越高代表要求開盤後的交易量相對5日均量越活躍才進場。預設1.3，可調整範圍0.5~5', unit:'', rtKey:'vol_ratio_coefficient', type:'number', step:0.1, min:0.1, max:5, canDisable:false },
-  { id:'amplitude_min_pct',        group:'進場條件', label:'振幅門檻',               desc:'振幅 = (當日最高價 − 最低價) / 昨收 × 100%，反映這支股票今天的動能。振幅太低代表盤整沒方向，不適合當沖，建議設 3~5%', unit:'%', rtKey:'amplitude_min_pct', type:'number', step:0.5, min:0, max:20, canDisable:false },
-  { id:'bid_1m_pct_threshold',     group:'進場條件', label:'觀察窗口買盤佔比門檻',   desc:'條件⑤的第二觸發路徑：觀察窗口（tick_window_seconds）內買盤佔總成交量 >= 此%，即使上漲 tick 數不足，也允許進場。預設 70%，與「上漲 N tick」為二擇一', unit:'%', rtKey:'bid_1m_pct_threshold', type:'number', step:5, min:50, max:100, canDisable:false },
   // 停損停利
   { id:'stop_loss_ticks',      group:'停損停利', label:'停損 tick 數',    desc:'進場後向下跌超過此 tick 數觸發停損（觸價單）；停損價 = 進場價 - N × tick_size，向上捨入', unit:'tick', rtKey:'stop_loss_ticks', type:'number', step:1, min:1, canDisable:false },
   { id:'take_profit_add_pct',  group:'停損停利', label:'停利附加漲幅',    desc:'停利觸價單 = 昨收 × (1 + (進場時漲幅 + 此%) / 100)，向下捨入 tick；例：進場漲4%、附加4% → 停利在昨收漲8%', unit:'%', rtKey:'take_profit_add_pct', type:'number', step:0.5, min:0.5, canDisable:false },
