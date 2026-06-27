@@ -205,9 +205,7 @@ class FubonFeed:
             if price is not None:
                 self._on_index_tick(float(price), data.get("time", 0))
             return
-        if self._on_quote is None:
-            return
-        self._on_quote(symbol, data.get("bids", []), data.get("asks", []))
+        # quote channel 是委買委賣掛單（未成交），不計入外盤/內盤統計
 
     def _on_error(self, err):
         err_str = str(err)

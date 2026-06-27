@@ -573,8 +573,8 @@ class TradingEngine:
         tick_count = [0]
         last_signal_eval: dict[str, datetime] = {}
         _entry_times: dict[str, datetime] = {}
-        _cum_bid: dict[str, int] = {}  # 累積已成交主買量
-        _cum_ask: dict[str, int] = {}  # 累積已成交主賣量
+        _cum_bid: dict[str, int] = {}  # 累積外盤成交量（成交價 >= 賣一，主動買方）
+        _cum_ask: dict[str, int] = {}  # 累積內盤成交量（成交價 <= 買一，主動賣方）
         _log_cleared_date = [None]     # 追蹤清除日期
 
         def _append_log(entry: dict):
