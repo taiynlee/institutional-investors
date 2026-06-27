@@ -29,7 +29,7 @@ function useEngineStream() {
 
 const API = '/fubon-api'
 
-type SubTab = 'live' | 'manual' | 'trades' | 'pre-session' | 'params' | 'config' | 'health'
+type SubTab = 'live' | 'manual' | 'trades' | 'pre-session' | 'params' | 'config' | 'health' | 'line-log'
 
 const SUB_TABS: { id: SubTab; label: string }[] = [
   { id: 'live',        label: '今日交易' },
@@ -39,6 +39,7 @@ const SUB_TABS: { id: SubTab; label: string }[] = [
   { id: 'params',      label: '交易設定' },
   { id: 'config',      label: '後台設定' },
   { id: 'health',      label: '當沖健診' },
+  { id: 'line-log',    label: '訊息 Log' },
 ]
 
 // ── Shared styles ─────────────────────────────────────────────────────────────
@@ -1431,6 +1432,108 @@ function HealthTab() {
   )
 }
 
+// ── 訊息 Log Tab ──────────────────────────────────────────────────────────────
+const MSG_TYPE_LABEL: Record<string, string> = {
+  auto_entry:  '自動進場',
+  auto_exit:   '自動出場',
+  warning:     '預警',
+  force_exit:  '強制出場',
+  debug:       '模擬測試',
+  general:     '通知',
+}
+
+function LineLogTab() {
+  const [data, setData] = useState<any>(null)
+  const [loading, setLoading] = useState(true)
+
+  const load = () => {
+    setLoading(true)
+    axios.get(`${API}/line-notifications?days=5&limit=200`)
+      .then(r => setData(r.data))
+      .catch(() => setData(null))
+      .finally(() => setLoading(false))
+  }
+
+  useEffect(() => { load() }, [])
+
+  const rows: any[] = data?.rows ?? []
+
+  const fmtTime = (s: string) => {
+    try {
+      const d = new Date(s)
+      return d.toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', hour12: false,
+        month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' })
+    } catch { return s }
+  }
+
+  const typeColor = (t: string) =>
+    t === 'auto_entry'  ? 'text-green-400' :
+    t === 'auto_exit'   ? 'text-blue-400' :
+    t === 'force_exit'  ? 'text-red-400' :
+    t === 'warning'     ? 'text-yellow-400' :
+    t === 'debug'       ? 'text-purple-400' : muted
+
+  return (
+    <div className="space-y-4">
+      {/* 額度摘要 */}
+      <div className={`${card} px-4 py-3 flex flex-wrap items-center gap-x-6 gap-y-1 text-sm`}>
+        <span className={muted}>本月已送</span>
+        <span className={`${mono} font-bold text-[#dde6f0]`}>{data?.total_sent ?? '–'} 則</span>
+        <span className={`border-l border-[#253d5c] pl-4 ${muted}`}>剩餘額度</span>
+        <span className={`${mono} font-bold ${(data?.free_remaining ?? 200) <= 20 ? 'text-red-400' : 'text-green-400'}`}>
+          {data?.free_remaining ?? '–'} / 200
+        </span>
+        <span className={`${muted} text-xs`}>(LINE free plan 每月 200 則)</span>
+        <button onClick={load} disabled={loading}
+          className={`ml-auto px-3 py-1 rounded text-xs border border-[#253d5c] ${muted} hover:text-[#dde6f0] disabled:opacity-40`}>
+          {loading ? '載入中...' : '重新整理'}
+        </button>
+      </div>
+
+      {/* 記錄表格 */}
+      <div className={card}>
+        <div className={`px-4 py-2 border-b border-[#253d5c] text-xs ${muted}`}>
+          近 5 天通知記錄（共 {rows.length} 筆）
+        </div>
+        {loading && rows.length === 0 ? (
+          <div className={`text-center py-10 text-sm ${muted}`}>載入中...</div>
+        ) : rows.length === 0 ? (
+          <div className={`text-center py-10 text-sm ${muted}`}>近 5 天無通知記錄</div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className={`${muted} border-b border-[#253d5c]`}>
+                  <th className="px-3 py-2 text-left whitespace-nowrap">時間</th>
+                  <th className="px-3 py-2 text-left whitespace-nowrap">類型</th>
+                  <th className="px-3 py-2 text-center whitespace-nowrap">第 N 次</th>
+                  <th className="px-3 py-2 text-left">訊息內容</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r: any, i: number) => (
+                  <tr key={i} className="border-b border-[#1a2d4a] hover:bg-[#1a2d4a]/40">
+                    <td className={`px-3 py-2 ${mono} whitespace-nowrap ${muted}`}>{fmtTime(r.sent_at)}</td>
+                    <td className={`px-3 py-2 font-semibold whitespace-nowrap ${typeColor(r.msg_type)}`}>
+                      {MSG_TYPE_LABEL[r.msg_type] ?? r.msg_type}
+                    </td>
+                    <td className={`px-3 py-2 text-center ${mono} ${muted}`}>
+                      {r.monthly_seq > 0 ? `#${r.monthly_seq}` : '–'}
+                    </td>
+                    <td className="px-3 py-2 text-[#dde6f0] max-w-md">
+                      <div className="whitespace-pre-wrap break-words leading-4">{r.content}</div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 // ── Main page ────────────────────────────────────────────────────────────────
 export function DayTradePage() {
   const [sub, setSub] = useState<SubTab>('live')
@@ -1467,6 +1570,7 @@ export function DayTradePage() {
         {sub === 'params'      && <ParamsTab />}
         {sub === 'config'      && <ConfigTab />}
         {sub === 'health'      && <HealthTab />}
+        {sub === 'line-log'    && <LineLogTab />}
       </div>
     </div>
   )

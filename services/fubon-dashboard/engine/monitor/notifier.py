@@ -44,6 +44,9 @@ class LineNotifier:
         try:
             with sqlite3.connect(self._db) as conn:
                 conn.execute(_NOTIF_DDL)
+                conn.execute(
+                    "DELETE FROM line_notifications WHERE sent_at < datetime('now','-5 days','localtime')"
+                )
                 conn.commit()
         except Exception as e:
             logger.warning("line_notifications 初始化失敗: %s", e)

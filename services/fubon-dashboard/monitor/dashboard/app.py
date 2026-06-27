@@ -1745,22 +1745,23 @@ def create_app(
 
     # ── LINE 通知紀錄 ──────────────────────────────────────────────────────────
     @app.get("/line-notifications")
-    def get_line_notifications(year_month: str = "", limit: int = 100):
-        """查詢 LINE 通知記錄。year_month 格式 YYYY-MM；空白=本月。"""
+    def get_line_notifications(days: int = 5, limit: int = 200):
+        """查詢 LINE 通知記錄，預設近 5 天。"""
         import datetime as _dt
-        ym = year_month or _dt.datetime.now().strftime("%Y-%m")
+        ym = _dt.datetime.now().strftime("%Y-%m")
         try:
             with sqlite3.connect(f"file:{_ticks_db}?mode=ro", uri=True,
                                  check_same_thread=False) as conn:
                 conn.row_factory = sqlite3.Row
                 rows = conn.execute(
                     "SELECT monthly_seq, msg_type, content, sent_at, success"
-                    " FROM line_notifications WHERE year_month=?"
-                    " ORDER BY monthly_seq DESC LIMIT ?",
-                    (ym, limit),
+                    " FROM line_notifications"
+                    " WHERE sent_at >= datetime('now',?,'localtime')"
+                    " ORDER BY id DESC LIMIT ?",
+                    (f"-{days} days", limit),
                 ).fetchall()
                 total = conn.execute(
-                    "SELECT COUNT(*) FROM line_notifications WHERE year_month=? AND success=1",
+                    "SELECT COUNT(*) FROM line_notifications WHERE year_month=?",
                     (ym,),
                 ).fetchone()[0]
             return {
