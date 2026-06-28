@@ -1,5 +1,5 @@
 [Unit]
-Description=盤後 dry run 分析 — 每交易日 14:00 自動執行
+Description=盤後 dry run 分析 — 每交易日 21:30 自動執行（含外資投信融資券）
 After=network.target
 
 [Service]
