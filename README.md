@@ -119,8 +119,11 @@ institutional-investors/
 │       └── .env              # LINE token（不進 git）
 ├── scripts/
 │   ├── backup-db.sh          # PostgreSQL pg_dump 備份腳本（保留最近 7 份）
-│   ├── db-backup.service     # systemd service unit（手動安裝用）
-│   └── db-backup.timer       # systemd timer unit（每日 02:00）
+│   ├── db-backup.service     # systemd service unit（每日 02:00 PG 備份）
+│   ├── db-backup.timer       # systemd timer unit（每日 02:00）
+│   ├── analyze_session.py    # 盤後深度分析：逐筆進出場審計 + 外資投信融資券 + 參數評估
+│   ├── session-analysis.service  # systemd oneshot service（分析腳本）
+│   └── session-analysis.timer    # systemd timer（週一～五 21:30 自動觸發）
 ├── config/
 └── README.md
 ```
@@ -874,6 +877,46 @@ fetch_log (job_name, fetch_date PK)  ← 獨立，不關聯其他表
 ---
 
 ## 運維
+
+### 盤後自動分析（dry run 參數調整）
+
+每個交易日 **21:30**（法人資料公布後）由 systemd timer 自動執行 `scripts/analyze_session.py`。
+
+**分析內容（逐筆）：**
+- 進場時間帶：`extreme_open`（09:10 前）/ `opening`（09:30 前）/ `morning` / `afternoon`
+- tick 路徑：MFE（最大順向）、MAE（最大逆向）、出場後 30 分鐘走勢
+- entry_start_time gate：哪些單在當前設定下不會發生
+- 出場原因分析：`tick_stop` / `take_profit` / `force_exit`
+- 當日外資買超、投信買超、三大法人、融資增減、融券餘額
+
+**參數逐一評估：**
+| 參數 | 評估邏輯 |
+|------|---------|
+| `tick_rise_threshold` | 觸發倍率 × 開盤時段 → 假突破風險判定 |
+| `stop_loss_ticks` | 停損是否觸發、停損後是否繼續下跌（停損有效性） |
+| `take_profit_add_pct` | 目標價 vs 日高，是否根本不可能達到 |
+| `entry_start_time` | 進場是否在 gate 前（→ 此單是否會被當前設定擋掉） |
+
+**報告位置：** `/home/tommy0322/fubon-data/analysis/YYYY-MM-DD.json`
+
+**安裝 systemd timer（WSL user service）：**
+
+```bash
+cp scripts/session-analysis.service ~/.config/systemd/user/
+cp scripts/session-analysis.timer   ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now session-analysis.timer
+systemctl --user list-timers session-analysis.timer
+```
+
+**手動執行（指定日期）：**
+
+```bash
+python3 scripts/analyze_session.py 2026-06-25
+# 輸出至 /home/tommy0322/fubon-data/analysis/2026-06-25.json
+```
+
+---
 
 ### PostgreSQL 備份
 
