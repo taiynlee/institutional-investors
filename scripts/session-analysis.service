@@ -1,0 +1,11 @@
+[Unit]
+Description=盤後 dry run 分析 — 每交易日 14:00 自動執行
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=python3 /home/tommy0322/institutional-investors/scripts/analyze_session.py
+WorkingDirectory=/home/tommy0322/institutional-investors
+Environment=FUBON_DATA_DIR=/home/tommy0322/fubon-data
+StandardOutput=journal
+StandardError=journal

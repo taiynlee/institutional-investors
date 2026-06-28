@@ -1,0 +1,9 @@
+[Unit]
+Description=盤後分析 timer — 交易日 14:00
+
+[Timer]
+OnCalendar=Mon-Fri 14:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
