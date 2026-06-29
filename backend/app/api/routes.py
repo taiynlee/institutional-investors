@@ -195,7 +195,7 @@ async def get_score_a(
 async def get_score_b(
     db: AsyncSession = Depends(get_db),
 ):
-    """策略B：籌碼拉回評分，近3日 + score_b >= 60"""
+    """策略B：籌碼拉回評分，近3日，passes=True"""
     recent_dates = (await db.execute(
         select(ScreeningResult.calc_date)
         .distinct()
@@ -213,7 +213,6 @@ async def get_score_b(
             ScreeningResult.calc_date.in_(recent_dates),
             ScreeningResult.passes == True,
             ScreeningResult.tags.contains("B"),
-            ScreeningResult.score_b >= 60,
         ))
         .order_by(ScreeningResult.calc_date.desc(), ScreeningResult.score_b.desc())
     )).scalars().all()
