@@ -1456,7 +1456,11 @@ function LineLogTab() {
       .finally(() => setLoading(false))
   }
 
-  useEffect(() => { load() }, [])
+  useEffect(() => {
+    load()
+    const t = setInterval(load, 15_000)
+    return () => clearInterval(t)
+  }, [])
 
   const rows: any[] = data?.rows ?? []
 
@@ -1494,8 +1498,9 @@ function LineLogTab() {
 
       {/* 記錄表格 */}
       <div id="line-log-table" className={card}>
-        <div className={`px-4 py-2 border-b border-[#253d5c] text-xs ${muted}`}>
-          近 5 天通知記錄（共 {rows.length} 筆）
+        <div className={`px-4 py-2 border-b border-[#253d5c] text-xs ${muted} flex items-center gap-3`}>
+          <span>近 5 天通知記錄（共 {rows.length} 筆）</span>
+          <span className="text-[#4a9f6e]">● 每 15 秒自動更新</span>
         </div>
         {loading && rows.length === 0 ? (
           <div className={`text-center py-10 text-sm ${muted}`}>載入中...</div>
