@@ -1832,7 +1832,7 @@ def create_app(
             ).fetchall():
                 out.setdefault(sym, {}).update(
                     open=op, high=hi, low=lo,
-                    vol_lots=int((vol or 0) // 1000),
+                    vol_lots=int(vol or 0),
                 )
 
             # Level 2 quotes

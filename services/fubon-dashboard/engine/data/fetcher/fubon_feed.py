@@ -59,6 +59,7 @@ class FubonFeed:
         self._relogin_fn = relogin_fn
         self._fsym_to_stock: dict[str, str] = {v: k for k, v in self._futures_sym_map.items()}
 
+        self._last_price: dict[str, float] = {}
         self._ws = None
         self._ws_futopt = None
         self._connected = threading.Event()
@@ -177,20 +178,32 @@ class FubonFeed:
             return
 
         size = data.get("size")
-        if self._on_quote is not None:
+        if self._on_quote is not None and price is not None:
             bid = data.get("bid")
             ask = data.get("ask")
             _sz = int(size or 0)
-            if bid is not None and ask is not None and price is not None and _sz > 0:
-                fp, fb, fa = float(price), float(bid), float(ask)
-                if fp >= fa:
-                    bids_q = [[fb, _sz]]; asks_q = []
-                elif fp <= fb:
-                    bids_q = []; asks_q = [[fa, _sz]]
+            if _sz > 0:
+                fp = float(price)
+                if bid is not None and ask is not None:
+                    fb, fa = float(bid), float(ask)
+                    if fp >= fa:
+                        bids_q = [[fb, _sz]]; asks_q = []
+                    elif fp <= fb:
+                        bids_q = []; asks_q = [[fa, _sz]]
+                    else:
+                        half = max(_sz // 2, 1)
+                        bids_q = [[fb, half]]; asks_q = [[fa, _sz - half]]
                 else:
-                    half = max(_sz // 2, 1)
-                    bids_q = [[fb, half]]; asks_q = [[fa, _sz - half]]
+                    prev = self._last_price.get(symbol)
+                    if prev is None or fp > prev:
+                        bids_q = [[fp, _sz]]; asks_q = []
+                    elif fp < prev:
+                        bids_q = []; asks_q = [[fp, _sz]]
+                    else:
+                        half = max(_sz // 2, 1)
+                        bids_q = [[fp, half]]; asks_q = [[fp, _sz - half]]
                 self._on_quote(symbol, bids_q, asks_q)
+                self._last_price[symbol] = fp
 
         if self._on_tick is None:
             return

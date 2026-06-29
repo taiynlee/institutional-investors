@@ -788,7 +788,7 @@ class TradingEngine:
             _a = _cum_ask.get(symbol, 0)
             _bp = _b / (_b + _a) * 100 if (_b + _a) > 0 else 50.0
             _avg5 = _avg_vol5.get(symbol, 0)
-            _vr = (_cum_vol.get(symbol, 0) / 1000 / _avg5 * 100) if _avg5 > 0 else 100.0
+            _vr = (_cum_vol.get(symbol, 0) / _avg5 * 100) if _avg5 > 0 else 100.0
             _ref_price = sess.reference_price
             _h = _daily_high.get(symbol, 0)
             _l = _daily_low.get(symbol, _h)
