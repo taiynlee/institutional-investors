@@ -195,12 +195,13 @@ class FubonFeed:
                         bids_q = [[fb, half]]; asks_q = [[fa, _sz - half]]
                 else:
                     prev = self._last_price.get(symbol)
-                    if prev is None or fp > prev:
+                    half = max(_sz // 2, 1)
+                    if prev is not None and fp > prev:
                         bids_q = [[fp, _sz]]; asks_q = []
-                    elif fp < prev:
+                    elif prev is not None and fp < prev:
                         bids_q = []; asks_q = [[fp, _sz]]
                     else:
-                        half = max(_sz // 2, 1)
+                        # unknown direction (first tick or unchanged) → neutral
                         bids_q = [[fp, half]]; asks_q = [[fp, _sz - half]]
                 self._on_quote(symbol, bids_q, asks_q)
                 self._last_price[symbol] = fp

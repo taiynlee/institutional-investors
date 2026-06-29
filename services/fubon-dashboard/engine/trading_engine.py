@@ -304,11 +304,21 @@ class TradingEngine:
         logger.info("=== 引擎啟動 | dry_run=%s | %s ===", dry_run, today_str)
         log_event("engine_start", dry_run=dry_run, today=today_str)
 
-        # 每日清空 quotes 累積表，確保外盤/內盤比例只統計今日成交
+        # 只在新交易日清空 quotes（重啟不清空，避免盤中重啟後 bar 消失）
         try:
             with sqlite3.connect(ticks_db) as _tdb:
-                _tdb.execute("DELETE FROM quotes")
-            logger.info("quotes 表已清空（新交易日）")
+                row = _tdb.execute(
+                    "SELECT value FROM settings WHERE key='quotes_last_clear'"
+                ).fetchone()
+                if not row or row[0] != today_str:
+                    _tdb.execute("DELETE FROM quotes")
+                    _tdb.execute(
+                        "INSERT OR REPLACE INTO settings(key,value) VALUES('quotes_last_clear',?)",
+                        (today_str,),
+                    )
+                    logger.info("quotes 表已清空（新交易日 %s）", today_str)
+                else:
+                    logger.info("quotes 表保留（同交易日 %s 重啟）", today_str)
         except Exception:
             pass
 
@@ -455,7 +465,6 @@ class TradingEngine:
                 ask_vol    INTEGER NOT NULL DEFAULT 0,
                 updated_at TEXT NOT NULL
             )""")
-            _tdb.execute("DELETE FROM quotes")
             _tdb.execute("""CREATE TABLE IF NOT EXISTS index_ticks (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
                 ts          TEXT NOT NULL,
