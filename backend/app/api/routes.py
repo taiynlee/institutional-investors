@@ -194,49 +194,57 @@ async def get_score_a(
 @router.get("/api/score-b")
 async def get_score_b(
     db: AsyncSession = Depends(get_db),
+    calc_date: Optional[date] = Query(None),
 ):
-    """策略B：籌碼拉回評分，近3日，passes=True"""
-    recent_dates = (await db.execute(
-        select(ScreeningResult.calc_date)
-        .distinct()
-        .where(and_(ScreeningResult.passes == True, ScreeningResult.tags.contains("B")))
-        .order_by(ScreeningResult.calc_date.desc())
-        .limit(3)
-    )).scalars().all()
-
-    if not recent_dates:
-        return []
-
+    """策略B：籌碼拉回評分，與主頁/score-a 一致：單一最新日期 + passes=True"""
+    target_date = calc_date or date.today()
     results = (await db.execute(
         select(ScreeningResult)
         .where(and_(
-            ScreeningResult.calc_date.in_(recent_dates),
+            ScreeningResult.calc_date == target_date,
             ScreeningResult.passes == True,
             ScreeningResult.tags.contains("B"),
         ))
-        .order_by(ScreeningResult.calc_date.desc(), ScreeningResult.score_b.desc())
+        .order_by(ScreeningResult.score_b.desc())
     )).scalars().all()
 
-    target_date = recent_dates[0]
+    if not results and calc_date is None:
+        latest = (await db.execute(
+            select(ScreeningResult.calc_date)
+            .where(and_(ScreeningResult.passes == True, ScreeningResult.tags.contains("B")))
+            .order_by(ScreeningResult.calc_date.desc())
+            .limit(1)
+        )).scalar_one_or_none()
+        if latest:
+            target_date = latest
+            results = (await db.execute(
+                select(ScreeningResult)
+                .where(and_(
+                    ScreeningResult.calc_date == latest,
+                    ScreeningResult.passes == True,
+                    ScreeningResult.tags.contains("B"),
+                ))
+                .order_by(ScreeningResult.score_b.desc())
+            )).scalars().all()
+
     codes = [r.code for r in results]
     stats = await _appearance_stats(codes, target_date, db) if codes else {}
 
-    vol_map: dict[tuple, int] = {}
+    vol_map: dict[str, int] = {}
     if codes:
         vol_rows = (await db.execute(
-            select(DailyPrice.code, DailyPrice.trade_date, DailyPrice.volume)
+            select(DailyPrice.code, DailyPrice.volume)
             .where(and_(
                 DailyPrice.code.in_(codes),
-                DailyPrice.trade_date.in_(recent_dates),
+                DailyPrice.trade_date == target_date,
             ))
         )).all()
-        for code, td, vol in vol_rows:
-            vol_map[(code, td)] = vol
+        vol_map = dict(vol_rows)
 
     out = []
     for r in results:
         d = _format_result(r, stats.get(r.code))
-        d["volume"] = vol_map.get((r.code, r.calc_date), 0)
+        d["volume"] = vol_map.get(r.code, 0)
         d["rs_vs_market"] = r.rs_vs_market or 0
         out.append(d)
     return out
