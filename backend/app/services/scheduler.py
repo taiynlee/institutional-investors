@@ -224,6 +224,10 @@ async def job4_screener(force: bool = False, target_date: date | None = None):
             return
         target_date = inst_today
         if not force and await _already_fetched("job4", target_date):
+            # 資料已算過（例如週五），但今天是非交易日（週日）→ 補一筆 today 的 log
+            # 讓 /api/status 找得到今天的紀錄，不顯示「等待中」
+            if today != target_date:
+                await _log_fetch("job4", today, "success", 0)
             return
     else:
         # 補算模式：用指定日期的最近法人資料
@@ -338,6 +342,8 @@ async def job4_screener(force: bool = False, target_date: date | None = None):
                 db.add(r)
             await db.commit()
         await _log_fetch("job4", target_date, "success", len(results))
+        if today != target_date:
+            await _log_fetch("job4", today, "success", len(results))
         logger.info(f"Screener found {len(results)} stocks")
         if results:
             asyncio.create_task(_run_ai_pick(target_date, results))

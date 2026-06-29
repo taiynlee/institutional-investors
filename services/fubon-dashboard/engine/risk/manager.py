@@ -19,19 +19,14 @@ class RiskManager:
         now: datetime,
         **_kwargs,
     ) -> Optional[str]:
+        """
+        純偵測器：只判斷是否應出場，返回原因。
+        實際下單由 trading_engine 執行（含追價/成交確認邏輯）。
+        時間強制出場由主迴圈負責，此處不處理。
+        """
         pos = self.om.positions.get(symbol)
         if pos is None:
             return None
 
-        # 強制出場（最高優先）
-        if now.time() >= self.force_exit_time:
-            self.om.place_sell(symbol, reason="force_exit")
-            return "force_exit"
-
-        # 模擬觸價單（dry_run 時真實條件單不生效，改用 tick 檢查）
-        reason = pos.check_price(price)
-        if reason:
-            self.om.place_sell(symbol, reason=reason)
-            return reason
-
-        return None
+        # 停損/停利 tick 觸發（dry_run 時真實條件單不生效，由 tick 檢查代替）
+        return pos.check_price(price)

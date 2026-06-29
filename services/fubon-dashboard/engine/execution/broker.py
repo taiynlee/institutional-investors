@@ -44,12 +44,42 @@ class FubonBroker:
         self._sdk = sdk
         self._account = account
 
-    def buy(self, symbol: str, lots: int, price: float, order_type_override: str = "stock"):
-        """買進限價單。order_type_override: 'stock'=現買(預設), 'margin'=資買, 'daytrade'=當沖專用。"""
-        price = round_down_tick(price)
+    def _extract_order_no(self, result) -> Optional[str]:
+        if result is None:
+            return None
+        for attr in ("order_no", "ordno", "seq_no", "order_id"):
+            v = getattr(result, attr, None)
+            if v:
+                return str(v)
+        data = getattr(result, "data", None)
+        if isinstance(data, dict):
+            for k in ("order_no", "ordno", "seq_no", "id"):
+                if data.get(k):
+                    return str(data[k])
+        return None
+
+    def cancel_order(self, order_no: str):
+        """取消未成交委託（市場單/限價單）。"""
+        if not order_no:
+            return
         if self.dry_run:
-            logger.info("[DRY RUN] BUY %s x%d張 @ %.2f", symbol, lots, price)
-            return "stock"
+            logger.info("[DRY RUN] CANCEL ORDER %s", order_no)
+            return
+        if self._sdk is None or self._account is None:
+            return
+        try:
+            self._sdk.stock.cancel_order(account=self._account, order_no=order_no)
+            logger.info("取消委託 order_no=%s", order_no)
+        except Exception as e:
+            logger.warning("取消委託失敗 order_no=%s: %s", order_no, e)
+
+    def buy(self, symbol: str, lots: int, price: float, order_type_override: str = "stock", user_def: str = "") -> Optional[str]:
+        """買進限價單。返回 order_no（dry_run 時返回 None）。"""
+        price = round_down_tick(price)
+        _udef = user_def or f"auto_buy_{symbol}"
+        if self.dry_run:
+            logger.info("[DRY RUN] BUY %s x%d張 @ %.2f user_def=%s", symbol, lots, price, _udef)
+            return None
         if self._sdk is None:
             raise RuntimeError("SDK not initialized")
         from fubon_neo.sdk import Order
@@ -67,38 +97,63 @@ class FubonBroker:
                 time_in_force=TimeInForce.ROD,
                 order_type=ot,
                 price=str(price),
+                user_def=_udef,
             )
             result = self._sdk.stock.place_order(self._account, o)
-            logger.info("BUY %s (%s) result: %s", symbol, order_type_override, result)
-            return order_type_override
+            order_no = self._extract_order_no(result)
+            logger.info("BUY %s (%s) order_no=%s result: %s", symbol, order_type_override, order_no, result)
+            return order_no
         except Exception as e:
             raise RuntimeError(f"下單失敗: {e}") from e
 
-    def sell(self, symbol: str, lots: int, price: float, reason: str = ""):
+    def sell(self, symbol: str, lots: int, price: float, reason: str = "", user_def: str = "") -> Optional[str]:
+        """賣出。price>0 → 限價ROD（可追價）；price<=0 → 市價IOC（強制出場）。返回 order_no。"""
+        _udef = user_def or f"auto_sell_{symbol}"
+        _market = (price <= 0)
+        if not _market:
+            price = round_up_tick(price)
         if self.dry_run:
-            logger.info("[DRY RUN] SELL %s x%d張 @ %.2f | 原因:%s", symbol, lots, price, reason)
-            return
+            _mode = "市價IOC" if _market else f"限價ROD@{price:.2f}"
+            logger.info("[DRY RUN] SELL %s x%d張 %s | 原因:%s user_def=%s", symbol, lots, _mode, reason, _udef)
+            return None
         if self._sdk is None:
             raise RuntimeError("SDK not initialized")
         from fubon_neo.sdk import Order
         from fubon_neo.constant import BSAction, MarketType, PriceType, TimeInForce, OrderType
-        order = Order(
-            buy_sell=BSAction.Sell,
-            symbol=symbol,
-            quantity=lots * 1000,
-            market_type=MarketType.Common,
-            price_type=PriceType.Market,
-            time_in_force=TimeInForce.IOC,
-            order_type=OrderType.Stock,  # 現賣
-        )
+        if _market:
+            order = Order(
+                buy_sell=BSAction.Sell,
+                symbol=symbol,
+                quantity=lots * 1000,
+                market_type=MarketType.Common,
+                price_type=PriceType.Market,
+                time_in_force=TimeInForce.IOC,
+                order_type=OrderType.Stock,
+                user_def=_udef,
+            )
+        else:
+            order = Order(
+                buy_sell=BSAction.Sell,
+                symbol=symbol,
+                quantity=lots * 1000,
+                market_type=MarketType.Common,
+                price_type=PriceType.Limit,
+                time_in_force=TimeInForce.ROD,
+                order_type=OrderType.Stock,
+                price=str(price),
+                user_def=_udef,
+            )
         result = self._sdk.stock.place_order(self._account, order)
-        logger.info("SELL %s reason=%s result: %s", symbol, reason, result)
+        order_no = self._extract_order_no(result)
+        logger.info("SELL %s reason=%s order_no=%s result: %s", symbol, reason, order_no, result)
+        return order_no
 
-    def limit_sell(self, symbol: str, lots: int, price: float):
+    def limit_sell(self, symbol: str, lots: int, price: float, user_def: str = ""):
         """限價現賣 ROD。"""
         price = round_up_tick(price)
+        _udef = user_def or f"auto_lsell_{symbol}"
         if self.dry_run:
-            logger.info("[DRY RUN] LIMIT SELL %s x%d張 @ %.2f", symbol, lots, price)
+            logger.info("[DRY RUN] LIMIT SELL %s x%d張 @ %.2f user_def=%s", symbol, lots, price, _udef)
             return
         if self._sdk is None:
             raise RuntimeError("SDK not initialized")
@@ -113,6 +168,7 @@ class FubonBroker:
             time_in_force=TimeInForce.ROD,
             order_type=OrderType.Stock,
             price=str(price),
+            user_def=_udef,
         )
         try:
             result = self._sdk.stock.place_order(self._account, order)

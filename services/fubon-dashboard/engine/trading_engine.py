@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Optional
 
 from engine.utils.tz import TZ_TW, now_tw, today_tw, from_ts_ns
-from engine.utils.market import is_market_hours, is_pre_session_time
+from engine.utils.market import is_market_hours, is_pre_session_time, seconds_to_open
 from engine.data.fetcher.fubon_feed import FubonFeed
 from engine.data.session_state import SymbolSession
 from engine.data.state_store import (
@@ -406,7 +406,9 @@ class TradingEngine:
         except Exception as _e:
             logger.warning("全額交割清單取得失敗（略過）: %s", _e)
 
-        # 2. 處置股票（TWT85U 分盤集合競價欄位含 '**'）→ 不可當沖
+        # 2. 處置股票（TWT85U 出現即為分批競價，無論是否含 '**'）→ 不可當沖
+        # 原本只抓 '**' 標記的最嚴格處置股；但分批競價股 SDK 回傳累計量導致 vol_ratio 爆表
+        # 現在改成：只要出現在 TWT85U 清單中就排除
         try:
             _req2 = _ureq.Request(
                 "https://www.twse.com.tw/exchangeReport/TWT85U?response=json",
@@ -417,7 +419,7 @@ class TradingEngine:
             _disposal = {
                 row[0].strip()
                 for row in _twtdata.get("data", [])
-                if "**" in (row[2] if len(row) > 2 else "")
+                if row and row[0].strip()
             }
             _restricted |= _disposal
             logger.info("處置股票（分盤）%d 檔: %s", len(_disposal), list(_disposal))
@@ -500,6 +502,36 @@ class TradingEngine:
             sessions[sym] = SymbolSession(sym, float(ref), float(limitup))
 
         self.sessions = sessions
+
+        # ── 8:55 處置股二次確認（TWSE 有時 8:30 才更新 TWT85U）─────────────────
+        # 開盤前 5 分鐘重拉，把當日新列入的處置股從 sessions 踢除，防止 8:30 漏網
+        def _refresh_restricted_preopen():
+            import urllib.request as _ur2, json as _j2
+            try:
+                _req2 = _ur2.Request(
+                    "https://www.twse.com.tw/exchangeReport/TWT85U?response=json",
+                    headers={"User-Agent": "Mozilla/5.0", "Referer": "https://www.twse.com.tw/"},
+                )
+                with _ur2.urlopen(_req2, timeout=10) as _r2:
+                    _d2 = _j2.loads(_r2.read().decode("utf-8"))
+                _new_disp = {row[0].strip() for row in _d2.get("data", []) if row and row[0].strip()}
+                _newly = _new_disp - _restricted
+                if _newly:
+                    logger.warning("8:55 處置股補查：新增 %d 檔 %s → 從 sessions 移除", len(_newly), sorted(_newly))
+                    _restricted.update(_newly)
+                    for _s in _newly:
+                        sessions.pop(_s, None)
+                        self.sessions.pop(_s, None)
+                    with self._lock:
+                        self._state["symbols"] = list(sessions.keys())
+                else:
+                    logger.info("8:55 處置股補查：無新增（TWT85U %d 檔）", len(_new_disp))
+            except Exception as _e2:
+                logger.warning("8:55 處置股補查失敗（略過）: %s", _e2)
+
+        _secs_to_855 = max(10, seconds_to_open() - 5 * 60)
+        threading.Timer(_secs_to_855, _refresh_restricted_preopen).start()
+        logger.info("已排程 8:55 處置股補查（%.0f 秒後觸發）", _secs_to_855)
 
         # ── 個股期貨訊號 ──────────────────────────────────────────────────────
         futures_signals: dict[str, FuturesSignal] = {sym: FuturesSignal() for sym in symbols}
@@ -588,6 +620,15 @@ class TradingEngine:
         condition_ids: dict[str, dict] = {}  # symbol → {"sl": guid, "tp": guid}
         self.condition_ids = condition_ids   # 暴露給 API 使用（同一物件引用）
 
+        # {symbol: {lots, price, sent_at, reason}} — 已送出賣單但尚未收到成交確認
+        _pending_sells: dict[str, dict] = {}
+        # {symbol: {lots, price, sent_at, order_type}} — 已送出買單但尚未收到成交確認
+        _pending_buys: dict[str, dict] = {}
+        # {symbol: {lots, order_price, ref_price, order_no, chased}} — 追價買（確認前不記持倉）
+        _chase_buys: dict[str, dict] = {}
+        # {symbol: {lots, order_price, order_no, chase_count, reason}} — 追價賣（持續追到成交）
+        _chase_sells: dict[str, dict] = {}
+
         # TAIEX 昨收（用於計算日漲幅 gate）
         _idx_ref: float = 0.0
         try:
@@ -616,9 +657,9 @@ class TradingEngine:
         _entry_times: dict[str, datetime] = {}
         _cum_bid: dict[str, int] = {}     # 累積外盤成交量（成交價 >= 賣一，主動買方）
         _cum_ask: dict[str, int] = {}     # 累積內盤成交量（成交價 <= 買一，主動賣方）
-        _cum_vol: dict[str, int] = {}     # 累積今日成交量（股，用於 vol_ratio 計算）
-        _daily_high: dict[str, float] = {}  # 今日最高成交價
-        _daily_low:  dict[str, float] = {}  # 今日最低成交價
+        _cum_vol: dict[str, int] = {}     # 今日累積成交量（SDK trades.volume，單位：股）
+        _daily_high: dict[str, float] = {}  # 今日最高成交價（09:00 後）
+        _daily_low:  dict[str, float] = {}  # 今日最低成交價（09:00 後）
         _log_cleared_date = [None]     # 追蹤清除日期
 
         def _append_log(entry: dict):
@@ -636,7 +677,35 @@ class TradingEngine:
                 if len(log) > 200:
                     self._state["signal_log"] = log[:200]
 
-        def on_tick(symbol: str, price: float, size: int, ts_ns: int):
+        # ── ticks 非同步寫入（避免 SQLite IO 阻塞 tick 處理）────────────────
+        import queue as _queue
+        _tick_wq: _queue.Queue = _queue.Queue(maxsize=5000)
+
+        def _tick_writer():
+            _wconn = sqlite3.connect(ticks_db, check_same_thread=False)
+            _wconn.execute("PRAGMA journal_mode=WAL")
+            _wconn.execute("PRAGMA synchronous=NORMAL")
+            while True:
+                try:
+                    row = _tick_wq.get(timeout=2)
+                    if row is None:
+                        break
+                    _wconn.execute(
+                        "INSERT INTO ticks(symbol,ts,price,volume) VALUES(?,?,?,?)", row
+                    )
+                    _wconn.commit()
+                except _queue.Empty:
+                    pass
+                except Exception:
+                    pass
+            _wconn.close()
+
+        _writer_thread = __import__("threading").Thread(
+            target=_tick_writer, daemon=True, name="tick-writer"
+        )
+        _writer_thread.start()
+
+        def on_tick(symbol: str, price: float, size: int, ts_ns: int, cum_vol: int = 0):
             tick_count[0] += 1
             with self._lock:
                 self._state["tick_count"] = tick_count[0]
@@ -644,22 +713,73 @@ class TradingEngine:
             if sess is None:
                 return
 
-            # ts 格式：完整 datetime（讓 app.py LIKE "date%" 查詢可用）
+            # 非同步寫入 ticks.db（交易邏輯不等 SQLite）
             ts_str = now_tw().strftime("%Y-%m-%d %H:%M:%S.%f")[:23]
             try:
-                with sqlite3.connect(ticks_db) as _tdb:
-                    _tdb.execute(
-                        "INSERT INTO ticks(symbol,ts,price,volume) VALUES(?,?,?,?)",
-                        (symbol, ts_str, price, size),
-                    )
+                _tick_wq.put_nowait((symbol, ts_str, price, cum_vol))
             except Exception:
                 pass
 
-            _cum_vol[symbol] = _cum_vol.get(symbol, 0) + size
-            _daily_high[symbol] = max(_daily_high.get(symbol, price), price)
-            _daily_low[symbol]  = min(_daily_low.get(symbol, price), price)
+            # cum_vol = SDK 今日累積成交量（直接設，單位：股）
+            if cum_vol > 0:
+                _cum_vol[symbol] = cum_vol
+            # H/L 只計 09:00 後真實成交（濾除試撮/暫停撮合的模擬價）
+            _hr = int(ts_str[11:13])
+            if _hr >= 9:
+                _daily_high[symbol] = max(_daily_high.get(symbol, price), price)
+                _daily_low[symbol]  = min(_daily_low.get(symbol, price), price)
             sess.on_tick(price, size, ts_ns, tick_window_seconds=_tick_window_seconds())
             now = now_tw()
+
+            # ── 追價：買進（最多追一次，再追不到放棄）────────────────────────────
+            tick_sz = tw_tick_size(price)
+            if symbol in _chase_buys and symbol not in om.positions:
+                cb = _chase_buys[symbol]
+                if price - cb["order_price"] >= 2 * tick_sz:
+                    if not cb.get("chased"):
+                        chase_px = round_up_tick(price + tick_sz)
+                        logger.warning("追價買進 %s: 原%.2f 現%.2f → 追%.2f（最後機會）",
+                                       symbol, cb["order_price"], price, chase_px)
+                        if cb.get("order_no"):
+                            broker.cancel_order(cb["order_no"])
+                        try:
+                            new_no = broker.buy(symbol, cb["lots"], chase_px,
+                                                order_type_override=cb.get("order_type", "stock"),
+                                                user_def=f"auto_buy_{symbol}")
+                            cb["order_price"] = chase_px
+                            cb["order_no"] = new_no
+                            cb["chased"] = True
+                        except Exception as _cbe:
+                            logger.error("追價買進送單失敗 %s: %s", symbol, _cbe)
+                    else:
+                        logger.warning("追價買進 %s 再次未成，放棄委託", symbol)
+                        if cb.get("order_no"):
+                            broker.cancel_order(cb["order_no"])
+                        _chase_buys.pop(symbol, None)
+                        _pending_buys.pop(symbol, None)
+
+            # ── 追價：賣出（持續追到成交為止）────────────────────────────────────
+            if symbol in _chase_sells:
+                cs = _chase_sells[symbol]
+                if cs["order_price"] - price >= 2 * tick_sz:
+                    chase_px = round_down_tick(price - tick_sz)
+                    cs["chase_count"] = cs.get("chase_count", 0) + 1
+                    logger.warning("追價賣出 %s: 原%.2f 現%.2f → 追%.2f（第%d次）",
+                                   symbol, cs["order_price"], price, chase_px, cs["chase_count"])
+                    if cs.get("order_no"):
+                        broker.cancel_order(cs["order_no"])
+                    try:
+                        new_no = broker.sell(symbol, cs["lots"], chase_px,
+                                             reason=cs.get("reason", "chase_sell"),
+                                             user_def=f"auto_sell_{symbol}")
+                        cs["order_price"] = chase_px
+                        cs["order_no"] = new_no
+                        _pending_sells[symbol] = {
+                            "lots": cs["lots"], "price": chase_px,
+                            "sent_at": now.isoformat(), "reason": cs.get("reason", "chase_sell"),
+                        }
+                    except Exception as _cse:
+                        logger.error("追價賣出送單失敗 %s: %s", symbol, _cse)
 
             pos_before = om.positions.get(symbol)
             exit_reason = rm.on_tick(symbol=symbol, price=price, now=now)
@@ -675,9 +795,26 @@ class TradingEngine:
                         broker.cancel_conditional_order(cids["sl"])
                     if cids.get("tp"):
                         broker.cancel_conditional_order(cids["tp"])
+                _udef_sell = f"auto_sell_{symbol}"
+                _pending_sells[symbol] = {
+                    "lots": pos_before.lots,
+                    "price": price,
+                    "sent_at": now_tw().isoformat(),
+                    "reason": exit_reason,
+                }
+                _chase_sells[symbol] = {
+                    "lots": pos_before.lots,
+                    "order_price": price,
+                    "order_no": None,
+                    "chase_count": 0,
+                    "reason": exit_reason,
+                }
                 try:
-                    broker.sell(symbol, pos_before.lots, price, reason=exit_reason)
+                    order_no = broker.sell(symbol, pos_before.lots, price, reason=exit_reason, user_def=_udef_sell)
+                    _chase_sells[symbol]["order_no"] = order_no
                 except Exception as _se:
+                    _pending_sells.pop(symbol, None)
+                    _chase_sells.pop(symbol, None)
                     logger.error("賣出下單失敗 %s: %s", symbol, _se)
                 logger.info("🔴 出場 %s  原因=%s  損益=%+.0f", symbol, exit_reason, pnl)
                 log_event("order_sell", symbol=symbol, reason=exit_reason,
@@ -797,7 +934,7 @@ class TradingEngine:
             _a = _cum_ask.get(symbol, 0)
             _bp = _b / (_b + _a) * 100 if (_b + _a) > 0 else 50.0
             _avg5 = _avg_vol5.get(symbol, 0)
-            _vr = (_cum_vol.get(symbol, 0) / _avg5 * 100) if _avg5 > 0 else 100.0
+            _vr = (_cum_vol.get(symbol, 0) / 1000 / _avg5 * 100) if _avg5 > 0 else 100.0
             _ref_price = sess.reference_price
             _h = _daily_high.get(symbol, 0)
             _l = _daily_low.get(symbol, _h)
@@ -881,7 +1018,15 @@ class TradingEngine:
                 _place_order(symbol, sess)
 
         def _place_order(symbol: str, sess: SymbolSession):
-            broker.dry_run = _is_dry_run()  # 每次下單前同步最新 dry_run 設定
+            # 防禦：若 symbol 在處置/全額交割清單（啟動時建立），禁止下單
+            if symbol in _restricted:
+                logger.warning("跳過下單 %s（處置/全額交割股，未被啟動過濾攔截）", symbol)
+                return
+            # 若已有追價買單進行中，不重複送單
+            if symbol in _chase_buys:
+                logger.debug("跳過 %s：追價買單進行中", symbol)
+                return
+            broker.dry_run = _is_dry_run()
             price = sess.curr_price
             remaining = total_capital - sum(
                 p.entry_price * p.lots * 1000 for p in om.positions.values()
@@ -889,73 +1034,174 @@ class TradingEngine:
             bm.max_per_entry = _max_position_capital()
             lots = bm.calculate_lots(price=price, remaining_budget=remaining)
             if lots <= 0:
-                logger.info("DRY RUN %s 計算張數=0，跳過", symbol)
+                logger.info("%s 計算張數=0，跳過", symbol)
                 return
 
-            # 停損：進場價向下 N 個 tick，向上捨入（確保觸價門檻不超過）
-            sl_ticks = _stop_loss_ticks()
-            ts = tw_tick_size(price)
-            stop_loss = round_up_tick(price - sl_ticks * ts)
-
-            # 停利：ref_price × (1 + (進場漲幅 + add_pct) / 100)，向下捨入 tick
             ref = sess.reference_price
-            change_at_entry = (price - ref) / ref * 100 if ref > 0 else 0.0
-            tp_raw = ref * (1 + (change_at_entry + _take_profit_add_pct()) / 100)
-            take_profit = round_down_tick(tp_raw)
 
-            pos = Position(
-                symbol=symbol,
-                entry_price=price,
-                lots=lots,
-                stop_loss=stop_loss,
-                take_profit=take_profit,
-            )
-            om.positions[symbol] = pos
-            _entry_times[symbol] = now_tw()
-            dt.record_entry(symbol)
-
-            # 實際買進（dry_run=True 時只 log，不送單）
-            # order_type=Stock（現買），與觸價賣單一致
+            # 預存追價所需參數，on_filled 確認後再建倉 + 掛觸價單
+            _chase_buys[symbol] = {
+                "lots": lots,
+                "order_price": price,
+                "ref_price": ref,
+                "order_no": None,
+                "chased": False,
+                "order_type": "stock",
+            }
             try:
-                broker.buy(symbol, lots, price)
+                order_no = broker.buy(symbol, lots, price, user_def=f"auto_buy_{symbol}")
+                _chase_buys[symbol]["order_no"] = order_no
+                logger.info("🟢 委託送出 %s  價=%.2f  張=%d（等待成交確認）", symbol, price, lots)
+                log_event("order_buy_sent", symbol=symbol, price=price, lots=lots)
+                _append_log({
+                    "type": "buy_sent",
+                    "ts": now_tw().strftime("%H:%M:%S"),
+                    "symbol": symbol,
+                    "name": sname(symbol),
+                    "lots": lots,
+                    "price": price,
+                    "dry_run": broker.dry_run,
+                })
             except Exception as _be:
+                _chase_buys.pop(symbol, None)
                 logger.error("買進下單失敗 %s: %s", symbol, _be)
 
-            mode_tag = "DRY RUN" if broker.dry_run else "買進"
-            logger.info(
-                "🟢 %s %s  價=%.2f  張=%d  停損=%.2f  停利=%.2f",
-                mode_tag, symbol, price, lots, stop_loss, take_profit,
-            )
-            log_event("order_buy", symbol=symbol, price=price, lots=lots,
-                      stop_loss=stop_loss, take_profit=take_profit,
-                      capital_used=price * lots * 1000)
-            _append_log({
-                "type": "buy",
-                "ts": now_tw().strftime("%H:%M:%S"),
-                "symbol": symbol,
-                "name": sname(symbol),
-                "lots": lots,
-                "price": price,
-                "stop_loss": stop_loss,
-                "take_profit": take_profit,
-                "dry_run": broker.dry_run,
-            })
-            notifier.send(
-                f"🟢 進場 {symbol} {sname(symbol)}\n"
-                f"價={price:.0f}  張數={lots}\n"
-                f"停損={stop_loss:.2f}  停利={take_profit:.2f}",
-                msg_type="dry_entry" if broker.dry_run else "auto_entry",
-            )
+        # ── 成交回報 callback（確認買賣是否真正成交，部分成交自動補單）──────────
+        def _on_filled(*args):
+            try:
+                data = args[-1] if args else None
+                if data is None:
+                    return
+                if isinstance(data, dict):
+                    d = data
+                elif hasattr(data, '__dict__'):
+                    d = vars(data)
+                else:
+                    d = {f: getattr(data, f, None) for f in [
+                        'user_def', 'filled_qty', 'filled_price', 'filled_avg_price',
+                        'stock_no', 'filled_no', 'filled_time', 'buy_sell',
+                    ]}
+                udef       = str(d.get('user_def', '') or '')
+                filled_qty = int(d.get('filled_qty', 0) or 0)
+                filled_px  = float(d.get('filled_price', 0) or d.get('filled_avg_price', 0) or 0)
+                stock_no   = str(d.get('stock_no', '') or '')
+                logger.debug("on_filled: user_def=%s qty=%d price=%.2f stock=%s",
+                             udef, filled_qty, filled_px, stock_no)
 
-            # 掛觸價停損/停利賣單（dry_run 時只 log）
-            trade_date_slash = today_str.replace("-", "/")  # Fubon SDK 需要 YYYY/MM/DD
-            sl_guid = broker.place_conditional_stop(
-                symbol=symbol, lots=lots, stop_price=stop_loss, trade_date=trade_date_slash
-            )
-            tp_guid = broker.place_conditional_take_profit(
-                symbol=symbol, lots=lots, trigger_price=take_profit, trade_date=trade_date_slash
-            )
-            condition_ids[symbol] = {"sl": sl_guid, "tp": tp_guid}
+                if not udef.startswith('auto_'):
+                    return  # 非本引擎委託，忽略
+
+                sym = stock_no
+                if not sym and '_' in udef:
+                    parts = udef.split('_', 2)
+                    sym = parts[2] if len(parts) >= 3 else ''
+
+                actual_lots = filled_qty // 1000
+
+                # ── 買進確認（Option A：成交後才建倉 + 掛觸價單）────────────────
+                if udef.startswith('auto_buy_'):
+                    chase = _chase_buys.get(sym)
+                    if sym not in om.positions and chase:
+                        # 第一次成交：建倉
+                        _chase_buys.pop(sym, None)
+                        _pending_buys.pop(sym, None)
+                        ep = filled_px if filled_px > 0 else chase["order_price"]
+                        sl_t  = _stop_loss_ticks()
+                        ts_sz = tw_tick_size(ep)
+                        stop_loss   = round_up_tick(ep - sl_t * ts_sz)
+                        ref         = chase["ref_price"]
+                        chg         = (ep - ref) / ref * 100 if ref > 0 else 0.0
+                        take_profit = round_down_tick(ref * (1 + (chg + _take_profit_add_pct()) / 100))
+                        pos = Position(symbol=sym, entry_price=ep, lots=actual_lots,
+                                       stop_loss=stop_loss, take_profit=take_profit)
+                        om.positions[sym] = pos
+                        _entry_times[sym] = now_tw()
+                        dt.record_entry(sym)
+                        tds    = today_str.replace("-", "/")
+                        sl_g   = broker.place_conditional_stop(sym, actual_lots, stop_loss, tds)
+                        tp_g   = broker.place_conditional_take_profit(sym, actual_lots, take_profit, tds)
+                        condition_ids[sym] = {"sl": sl_g, "tp": tp_g}
+                        logger.info("✅ 買進成交 %s %d張 @ %.2f 停損=%.2f 停利=%.2f",
+                                    sym, actual_lots, ep, stop_loss, take_profit)
+                        log_event("order_buy", symbol=sym, price=ep, lots=actual_lots,
+                                  stop_loss=stop_loss, take_profit=take_profit,
+                                  capital_used=ep * actual_lots * 1000)
+                        _append_log({"type": "buy", "ts": now_tw().strftime("%H:%M:%S"),
+                                     "symbol": sym, "name": sname(sym), "lots": actual_lots,
+                                     "price": ep, "stop_loss": stop_loss, "take_profit": take_profit,
+                                     "dry_run": broker.dry_run})
+                        notifier.send(
+                            f"✅ 買進成交 {sym} {sname(sym)}\n"
+                            f"成交={ep:.0f}  張數={actual_lots}\n"
+                            f"停損={stop_loss:.2f}  停利={take_profit:.2f}",
+                            msg_type="auto_entry",
+                        )
+                        # 部分成交：補送剩餘
+                        expected = chase.get("lots", actual_lots)
+                        if actual_lots < expected:
+                            remaining = expected - actual_lots
+                            logger.warning("買進部分成交 %s %d/%d張，補送 %d張 @ %.2f",
+                                           sym, actual_lots, expected, remaining, ep)
+                            try:
+                                new_no = broker.buy(sym, remaining, ep,
+                                                    order_type_override=chase.get("order_type", "stock"),
+                                                    user_def=f"auto_buy_{sym}")
+                                _pending_buys[sym] = {"lots": remaining, "price": ep,
+                                                       "sent_at": now_tw().isoformat(),
+                                                       "order_no": new_no,
+                                                       "order_type": chase.get("order_type", "stock")}
+                            except Exception as _rbe:
+                                logger.error("補買失敗 %s: %s", sym, _rbe)
+                    else:
+                        # 後續補單成交：加張數到現有持倉
+                        _pending_buys.pop(sym, None)
+                        if sym in om.positions:
+                            om.positions[sym].lots += actual_lots
+                            logger.info("✅ 買進補足 %s +%d張 合計%d張 @ %.2f",
+                                        sym, actual_lots, om.positions[sym].lots, filled_px)
+                        else:
+                            logger.info("✅ 買進成交（持倉已不存在）%s %d張 @ %.2f", sym, actual_lots, filled_px)
+
+                # ── 強制出場 IOC：有 ROD 備援，不自動補單，避免超賣 ─────────
+                elif udef.startswith('auto_fe_'):
+                    _pending_sells.pop(sym, None)
+                    _chase_sells.pop(sym, None)
+                    logger.info("✅ 強制出場成交 %s %d張 @ %.2f", sym, actual_lots, filled_px)
+
+                # ── 一般出場 / 備援限價賣：部分成交補送，全數成交清除追價 ─────
+                elif udef.startswith(('auto_sell_', 'auto_lsell_')):
+                    pending = _pending_sells.pop(sym, None)
+                    if pending:
+                        expected = pending['lots']
+                        if actual_lots < expected:
+                            remaining = expected - actual_lots
+                            cs = _chase_sells.get(sym)
+                            logger.warning("賣出部分成交 %s %d/%d張，補送 %d張",
+                                           sym, actual_lots, expected, remaining)
+                            try:
+                                new_no = broker.sell(sym, remaining, filled_px,
+                                                     reason=pending.get('reason', 'partial_fill'),
+                                                     user_def=f"auto_sell_{sym}")
+                                _pending_sells[sym] = {**pending, 'lots': remaining,
+                                                        'sent_at': now_tw().isoformat()}
+                                if cs:
+                                    cs["lots"] = remaining
+                                    cs["order_price"] = filled_px
+                                    cs["order_no"] = new_no
+                            except Exception as _rse:
+                                logger.error("補賣失敗 %s: %s", sym, _rse)
+                        else:
+                            _chase_sells.pop(sym, None)
+                            logger.info("✅ 出場全數成交 %s %d張 @ %.2f（%s）",
+                                        sym, actual_lots, filled_px, pending.get('reason', '?'))
+            except Exception as _fe_err:
+                logger.debug("on_filled parse error: %s", _fe_err)
+
+        try:
+            sdk.set_on_filled(_on_filled)
+            logger.info("set_on_filled callback 已註冊")
+        except Exception as _cbe:
+            logger.warning("set_on_filled 註冊失敗: %s", _cbe)
 
         # ── WebSocket 啟動 ─────────────────────────────────────────────────────
         feed = FubonFeed(
@@ -1025,23 +1271,39 @@ class TradingEngine:
                             sym, pos.lots, curr, pnl_est,
                         )
 
-                        # 先取消未到期的觸價單
+                        # 取消未到期的觸價單
                         cids = condition_ids.pop(sym, {})
                         if cids.get("sl"):
                             broker.cancel_conditional_order(cids["sl"])
                         if cids.get("tp"):
                             broker.cancel_conditional_order(cids["tp"])
 
+                        # 若 tick 路徑已送出追價賣單，先取消再強制出場
+                        cs = _chase_sells.pop(sym, None)
+                        if cs and cs.get("order_no"):
+                            broker.cancel_order(cs["order_no"])
+                            _pending_sells.pop(sym, None)
+                            logger.info("強制出場前取消追價賣單 %s order_no=%s", sym, cs["order_no"])
+
                         # ① 市價 IOC（快速成交優先）
+                        _pending_sells[sym] = {
+                            "lots": pos.lots,
+                            "price": curr,
+                            "sent_at": now_loop.isoformat(),
+                            "reason": "force_exit_loop",
+                        }
                         try:
-                            broker.sell(sym, pos.lots, 0.0, reason="force_exit_loop")
+                            broker.sell(sym, pos.lots, 0.0, reason="force_exit_loop",
+                                        user_def=f"auto_fe_{sym}")
                         except Exception as _fe1:
+                            _pending_sells.pop(sym, None)
                             logger.error("強制出場 IOC 失敗 %s: %s", sym, _fe1)
 
                         # ② 備援 ROD 限價賣（防跌停 IOC 無人承接；
                         #    若 IOC 已成交，券商會因無庫存拒絕此單）
                         try:
-                            broker.limit_sell(sym, pos.lots, curr)
+                            broker.limit_sell(sym, pos.lots, curr,
+                                              user_def=f"auto_lsell_{sym}")
                         except Exception as _fe2:
                             logger.warning("強制出場備援 ROD 失敗 %s: %s", sym, _fe2)
 
@@ -1080,6 +1342,19 @@ class TradingEngine:
             logger.info("=== 引擎關閉 | 實際損益=%.0f | tick=%d筆 ===",
                         dt.total_pnl, tick_count[0])
             log_event("engine_stop", actual_pnl=dt.total_pnl, tick_count=tick_count[0])
+            # 引擎關閉時仍有未收到成交回報的委託 → 只 log
+            for _sym, _v in _pending_sells.items():
+                logger.warning("引擎關閉：賣出未確認 %s×%d張 原因:%s sent=%s",
+                               _sym, _v['lots'], _v.get('reason', '?'), _v.get('sent_at', '?'))
+            for _sym, _v in _pending_buys.items():
+                logger.warning("引擎關閉：買進補單未確認 %s×%d張 sent=%s",
+                               _sym, _v['lots'], _v.get('sent_at', '?'))
+            for _sym, _v in _chase_buys.items():
+                logger.warning("引擎關閉：追價買單未成交 %s×%d張 order_price=%.2f chased=%s",
+                               _sym, _v['lots'], _v.get('order_price', 0), _v.get('chased'))
+            for _sym, _v in _chase_sells.items():
+                logger.warning("引擎關閉：追價賣單未成交 %s×%d張 order_price=%.2f 追%d次",
+                               _sym, _v['lots'], _v.get('order_price', 0), _v.get('chase_count', 0))
             engine_logger.removeHandler(file_handler)
 
 

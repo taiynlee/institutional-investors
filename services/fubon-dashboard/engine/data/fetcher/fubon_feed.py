@@ -60,6 +60,7 @@ class FubonFeed:
         self._fsym_to_stock: dict[str, str] = {v: k for k, v in self._futures_sym_map.items()}
 
         self._last_price: dict[str, float] = {}
+        self._last_direction: dict[str, str] = {}   # 'B' 外盤 / 'S' 內盤，沿用上一筆
         self._ws = None
         self._ws_futopt = None
         self._connected = threading.Event()
@@ -177,39 +178,60 @@ class FubonFeed:
                 self._on_index_tick(float(price), ts)
             return
 
-        size = data.get("size")
+        size    = data.get("size")
+        cum_vol = int(data.get("volume") or 0)   # 今日累積成交量（張）
         if self._on_quote is not None and price is not None:
             bid = data.get("bid")
             ask = data.get("ask")
             _sz = int(size or 0)
             if _sz > 0:
-                fp = float(price)
+                fp   = float(price)
+                prev = self._last_price.get(symbol)
+                prev_dir = self._last_direction.get(symbol)   # 'B'/'S'/None
+
                 if bid is not None and ask is not None:
                     fb, fa = float(bid), float(ask)
                     if fp >= fa:
-                        bids_q = [[fb, _sz]]; asks_q = []
+                        direction = 'B'
                     elif fp <= fb:
-                        bids_q = []; asks_q = [[fa, _sz]]
+                        direction = 'S'
                     else:
-                        half = max(_sz // 2, 1)
-                        bids_q = [[fb, half]]; asks_q = [[fa, _sz - half]]
+                        # 集合競價中間成交：用 tick rule，price 不變沿用上一筆
+                        if prev is not None and fp > prev:
+                            direction = 'B'
+                        elif prev is not None and fp < prev:
+                            direction = 'S'
+                        else:
+                            direction = prev_dir   # None = 真正的第一筆
                 else:
-                    prev = self._last_price.get(symbol)
-                    half = max(_sz // 2, 1)
+                    # 純 tick rule
                     if prev is not None and fp > prev:
-                        bids_q = [[fp, _sz]]; asks_q = []
+                        direction = 'B'
                     elif prev is not None and fp < prev:
-                        bids_q = []; asks_q = [[fp, _sz]]
+                        direction = 'S'
                     else:
-                        # unknown direction (first tick or unchanged) → neutral
-                        bids_q = [[fp, half]]; asks_q = [[fp, _sz - half]]
+                        direction = prev_dir   # price 不變 → 沿用上一筆方向
+
+                # 更新方向記憶（None 不覆蓋有效方向）
+                if direction is not None:
+                    self._last_direction[symbol] = direction
+
+                if direction == 'B':
+                    bids_q = [[fp, _sz]]; asks_q = []
+                elif direction == 'S':
+                    bids_q = []; asks_q = [[fp, _sz]]
+                else:
+                    # 真正的第一筆且方向未知 → 各半
+                    half = max(_sz // 2, 1)
+                    bids_q = [[fp, half]]; asks_q = [[fp, _sz - half]]
+
                 self._on_quote(symbol, bids_q, asks_q)
                 self._last_price[symbol] = fp
 
         if self._on_tick is None:
             return
         if price is not None and size is not None:
-            self._on_tick(symbol, float(price), int(size), ts)
+            self._on_tick(symbol, float(price), int(size), ts, cum_vol)
 
     def _handle_quote(self, symbol: str, data: dict):
         if symbol == self._index_symbol and self._on_index_tick:

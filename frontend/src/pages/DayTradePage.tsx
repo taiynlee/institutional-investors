@@ -159,6 +159,9 @@ function SignalLog({ entries, windowSecs, threshold }: { entries: any[]; windowS
 }
 
 // ── 今日交易 ─────────────────────────────────────────────────────────────────
+const _minsNow = () => { const n = new Date(); return n.getHours() * 60 + n.getMinutes() }
+const _CLOSE_MINS = 13 * 60 + 31  // 13:31 判定收盤
+
 function LiveTab() {
   const [list, setList] = useState<any | null>(null)
   const [status, setStatus] = useState<{ total_pnl: number; trade_count: number } | null>(null)
@@ -168,6 +171,10 @@ function LiveTab() {
   const [engineRunning, setEngineRunning] = useState<boolean | null>(null)
   const evsRef = useRef<EventSource | null>(null)
   const [loading, setLoading] = useState(true)
+  const [listRefreshing, setListRefreshing] = useState(false)
+  const [closedAt, setClosedAt] = useState<string | null>(
+    () => _minsNow() >= _CLOSE_MINS ? '13:30' : null
+  )
   const stream = useEngineStream()
   const [cancellingCond, setCancellingCond] = useState<string | null>(null)
 
@@ -179,6 +186,23 @@ function LiveTab() {
     if (Array.isArray(stream.positions)) setPositions(stream.positions)
   }, [stream])
 
+  // 收盤計時器
+  useEffect(() => {
+    if (closedAt) return
+    const minsLeft = _CLOSE_MINS - _minsNow()
+    if (minsLeft <= 0) { setClosedAt('13:30'); return }
+    const t = setTimeout(() => setClosedAt('13:30'), minsLeft * 60 * 1000)
+    return () => clearTimeout(t)
+  }, [closedAt])
+
+  const doRefreshList = (quiet = false) => {
+    if (!quiet) setListRefreshing(true)
+    axios.get(`${API}/daytrade-list`)
+      .then(r => setList(r.data))
+      .catch(() => {})
+      .finally(() => { if (!quiet) setListRefreshing(false) })
+  }
+
   useEffect(() => {
     setLoading(true)
     axios.get(`${API}/daytrade-list`)
@@ -187,12 +211,28 @@ function LiveTab() {
       .finally(() => setLoading(false))
   }, [])
 
+  // 盤中每 5 分鐘自動刷新名單（收盤後停止）
+  useEffect(() => {
+    if (closedAt) return
+    const tid = setInterval(() => {
+      const m = _minsNow()
+      if (m >= 8 * 60 + 30 && m < _CLOSE_MINS) doRefreshList(true)
+    }, 5 * 60 * 1000)
+    return () => clearInterval(tid)
+  }, [closedAt])
+
   useEffect(() => {
     if (!list?.stocks?.length) return
     const syms = list.stocks.map((s: any) => s.stock_id).join(',')
     if (evsRef.current) evsRef.current.close()
     const evs = new EventSource(`${API}/stream?syms=${syms}`)
-    evs.onmessage = e => { try { setTicks(JSON.parse(e.data)) } catch {} }
+    // merge 策略：SSE 送空 {} 或部分資料時不覆蓋舊值，保留收盤快照
+    evs.onmessage = e => {
+      try {
+        const d = JSON.parse(e.data)
+        if (Object.keys(d).length > 0) setTicks(prev => ({ ...prev, ...d }))
+      } catch {}
+    }
     evsRef.current = evs
     return () => evs.close()
   }, [list?.date])
@@ -350,13 +390,25 @@ function LiveTab() {
       {/* 主列表：照 Fubon 欄位 */}
       <div className={card}>
         {/* 列表標頭 */}
-        <div className="px-4 py-2 border-b border-[#253d5c] flex items-center gap-2">
+        <div className="px-4 py-2 border-b border-[#253d5c] flex items-center gap-2 flex-wrap">
           <span
             className="text-sm font-semibold text-[#dde6f0] cursor-help border-b border-dotted border-[#4a6fa8]"
             title={`最新觀察名單 — 產生邏輯（每日 21:05 自動執行）\n\n四個來源取聯集：\n① 股票池 × 當沖篩選條件\n   必要條件（4條全過）：TWSE當沖標的 + 近5日均量≥2000張 + 收盤>MA20 + 外資淨+投信淨≥0\n   籌碼加分（≥2條）：外資買超 + 投信買超 + 融資日減\n② ∪ 策略A + 策略B 當日篩選結果\n③ ∪ 策略C 滿分100分\n   （月營收YoY≥10% + 連續加速 + 近2季EPS>0 + 各項評分滿分）\n④ ∪ A追蹤清單（status: tracking / triggered / entered）\n\n過濾：\n⑤ 扣除退場止損名單\n⑥ 昨收 200~990 元（可在當沖設定調整）`}
           >最新觀察名單</span>
           {list && <Badge text={`${list.count} 檔`} color="blue" />}
           {list?.date && <span className={`text-xs ${muted}`}>{list.date}</span>}
+          {closedAt
+            ? <span className="text-xs text-yellow-400 font-semibold ml-1">■ 已收盤 · 收盤快照</span>
+            : (
+              <button
+                onClick={() => doRefreshList(false)}
+                disabled={listRefreshing}
+                className="ml-auto text-[10px] px-2 py-0.5 rounded border border-[#253d5c] text-[#6b84a0] hover:text-[#dde6f0] hover:border-[#4a6fa8] disabled:opacity-40 transition-colors"
+              >
+                {listRefreshing ? '更新中…' : '↻ 刷新名單'}
+              </button>
+            )
+          }
         </div>
 
         {loading ? (
@@ -487,6 +539,8 @@ function LiveTab() {
                       <td className="px-3 py-2.5">
                         {vol != null && vol > 0 && s.avg_vol5 > 0 ? (() => {
                           const paceRaw = vol / s.avg_vol5 * 100
+                          // 若 > 500% 代表 SDK 回傳分批競價累計量，顯示為異常
+                          if (paceRaw > 500) return <span title="SDK累計量異常，股票可能為分批競價處置股" className={`text-[10px] ${mono} text-orange-400`}>⚠ 異常</span>
                           const barW    = Math.min(paceRaw, 100)
                           const barCl   = paceRaw >= 100 ? 'bg-green-400' : paceRaw >= 50 ? 'bg-yellow-400' : 'bg-[#6b84a0]'
                           const txtCl   = paceRaw >= 100 ? 'text-green-400' : paceRaw >= 50 ? 'text-yellow-400' : muted

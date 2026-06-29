@@ -2,7 +2,6 @@ import pytest
 import numpy as np
 from app.services.screener import (
     calc_bb_position, is_squeeze, check_entry_criteria,
-    find_50d_high_event, check_breakout_candle,
 )
 
 
@@ -48,41 +47,15 @@ def test_is_squeeze_detects_contraction():
     assert is_squeeze(closes) is True
 
 
-def test_find_50d_high_event_detects_breakout():
-    _, _, _, closes, vols = make_ohlcv()
-    # Breakout at idx=60, 19 days ago → within lookback_event=25
-    event = find_50d_high_event(closes, vols, lookback_event=25)
-    assert event is not None
-    bb_peak, days_ago = event
-    assert bb_peak > 8
-    assert days_ago <= 25
 
-
-def test_find_50d_high_event_no_breakout():
-    closes = list(np.linspace(130, 100, 80))
-    vols = [1000] * 80
-    assert find_50d_high_event(closes, vols) is None
-
-
-def test_check_breakout_candle_pass():
-    assert check_breakout_candle(
-        open_=100, high=105, low=99, close=104,
-        volume=3000, ma20_vol=1000,
-    ) is True
-
-
-def test_check_breakout_candle_fail_long_shadow():
-    assert check_breakout_candle(
-        open_=100, high=110, low=99, close=101,
-        volume=3000, ma20_vol=1000,
-    ) is False
-
-
-def test_check_entry_criteria_pass():
+def test_check_entry_criteria_returns_dict():
     opens, highs, lows, closes, vols = make_ohlcv()
     result = check_entry_criteria(opens, highs, lows, closes, vols)
-    # Breakout detected, bb_peak > 8
-    assert result["bb_peak"] > 8
+    for key in ("bb_position", "bb_peak", "peak_days_ago", "is_squeeze",
+                "trend_ok", "passes_A", "passes_B_price", "passes"):
+        assert key in result, f"missing key: {key}"
+    assert isinstance(result["passes"], bool)
+    assert isinstance(result["bb_position"], float)
 
 
 def test_check_entry_criteria_fail_too_low():

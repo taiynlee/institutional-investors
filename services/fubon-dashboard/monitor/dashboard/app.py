@@ -559,6 +559,34 @@ def create_app(
             except Exception:
                 pass
 
+        # 5b. 處置股票過濾（TWT85U 全部排除，避免分批競價量爆表且禁止當沖）
+        disposal_excluded = 0
+        try:
+            import urllib.request as _ureq_d, json as _json_d
+            _req_d = _ureq_d.Request(
+                "https://www.twse.com.tw/exchangeReport/TWT85U?response=json",
+                headers={"User-Agent": "Mozilla/5.0", "Referer": "https://www.twse.com.tw/"},
+            )
+            with _ureq_d.urlopen(_req_d, timeout=10) as _resp_d:
+                _twt_data = _json_d.loads(_resp_d.read().decode("utf-8"))
+            _disposal_set = {row[0].strip() for row in _twt_data.get("data", []) if row and row[0].strip()}
+            _before_d = len(selected)
+            selected -= _disposal_set
+            for _c in list(snapshots):
+                if _c not in selected:
+                    del snapshots[_c]
+            disposal_excluded = _before_d - len(selected)
+            if disposal_excluded > 0:
+                import logging as _log_d
+                _log_d.getLogger(__name__).info(
+                    "sync_daytrade_list: 排除處置股 %d 檔", disposal_excluded
+                )
+        except Exception as _e_d:
+            import logging as _log_d
+            _log_d.getLogger(__name__).warning(
+                "sync_daytrade_list: 處置股過濾失敗（略過）: %s", _e_d
+            )
+
         # 寫入 PG（含快照）
         codes_list = list(selected)
         try:
@@ -572,7 +600,7 @@ def create_app(
             "ok": True, "date": target_date, "count": len(codes_list),
             "live_filter": live_count, "score_ab": score_count,
             "watchlist_a": watch_count, "excluded_exit": exit_count,
-            "excluded_price": price_excluded,
+            "excluded_price": price_excluded, "excluded_disposal": disposal_excluded,
             "price_range": [price_min, price_max],
         }
 
@@ -1820,19 +1848,24 @@ def create_app(
                 out.setdefault(sym, {})["price"] = p
 
             # Today OHLV (date-filtered)
+            # volume 欄位儲存 SDK trades.volume（今日累積股數），MAX 取最新值，÷1000 轉張
+            # H/L/Open 只取 09:00+ 真實成交（濾除試撮和停牌期間模擬價）
+            open_ts = f"{today} 09:00:00"
             for sym, op, hi, lo, vol in c.execute(
                 f"""SELECT t.symbol,
                     (SELECT price FROM ticks t2
-                     WHERE t2.symbol=t.symbol AND t2.ts LIKE ?
+                     WHERE t2.symbol=t.symbol AND t2.ts >= ? AND t2.ts LIKE ?
                      ORDER BY t2.id ASC LIMIT 1) AS open,
-                    MAX(t.price), MIN(t.price), SUM(t.volume)
+                    MAX(CASE WHEN t.ts >= ? THEN t.price END),
+                    MIN(CASE WHEN t.ts >= ? THEN t.price END),
+                    MAX(t.volume)
                     FROM ticks t WHERE t.symbol IN ({ph}) AND t.ts LIKE ?
                     GROUP BY t.symbol""",
-                [today_pct] + symbols + [today_pct],
+                [open_ts, today_pct, open_ts, open_ts] + symbols + [today_pct],
             ).fetchall():
                 out.setdefault(sym, {}).update(
                     open=op, high=hi, low=lo,
-                    vol_lots=int(vol or 0),
+                    vol_lots=int((vol or 0) // 1000),
                 )
 
             # Level 2 quotes
@@ -1896,7 +1929,7 @@ def create_app(
             while True:
                 data = _query_live(symbols)
                 yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
-                await asyncio.sleep(0.8)
+                await asyncio.sleep(0.2)
 
         return StreamingResponse(
             event_gen(),
