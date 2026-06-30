@@ -546,11 +546,11 @@ function LiveTab() {
                           const txtCl   = paceRaw >= 100 ? 'text-green-400' : paceRaw >= 50 ? 'text-yellow-400' : muted
                           const label   = paceRaw < 1 ? '<1%' : `${Math.round(paceRaw)}%`
                           return (
-                            <div style={{width:60}}>
-                              <div className="h-[4px] rounded mb-1 bg-[#253d5c]">
+                            <div className="flex items-center gap-1.5" style={{width:72}}>
+                              <div className="h-[4px] rounded bg-[#253d5c] flex-1">
                                 <div className={`h-full rounded ${barCl}`} style={{width:`${barW}%`}} />
                               </div>
-                              <span className={`text-[10px] ${mono} ${txtCl}`}>{label}</span>
+                              <span className={`text-[10px] ${mono} ${txtCl} shrink-0`}>{label}</span>
                             </div>
                           )
                         })() : <span className={muted}>—</span>}
