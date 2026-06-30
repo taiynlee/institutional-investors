@@ -1041,6 +1041,11 @@ async def job8_daytrade_screener():
         return
     if await _already_fetched("job8", today):
         return
+    if not await _already_fetched("job1", today):
+        # job1（法人＋股價）尚未寫入今日收盤價，daily_price 最新一筆會是過期資料，
+        # 算出的昨收/漲跌% 全部錯誤。延後給 watchdog 補跑，避免用舊收盤價建立快照。
+        logger.warning("job8 延後：job1 尚未完成，避免 daily_price 過期")
+        return
     try:
         async with httpx.AsyncClient() as client:
             r = await client.post(
