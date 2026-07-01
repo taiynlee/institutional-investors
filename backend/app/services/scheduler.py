@@ -144,10 +144,13 @@ async def job2_margin():
         twse_rows = await fetch_margin(today)
         tpex_rows = await fetch_tpex_margin(today)
         margin_rows = [r for r in twse_rows + tpex_rows if r["code"] in stock_codes]
+        if not margin_rows:
+            await _log_fetch("job2", today, "failed", 0)
+            logger.error("job2 failed: 抓到 0 筆（TWSE 資料未就緒或網路異常），留待 watchdog 補跑")
+            return
         async with AsyncSessionLocal() as db:
-            if margin_rows:
-                stmt = pg_insert(MarginTrading).values(margin_rows)
-                await db.execute(stmt.on_conflict_do_nothing(index_elements=["code", "trade_date"]))
+            stmt = pg_insert(MarginTrading).values(margin_rows)
+            await db.execute(stmt.on_conflict_do_nothing(index_elements=["code", "trade_date"]))
             await db.commit()
         await _log_fetch("job2", today, "success", len(margin_rows))
     except Exception as e:
@@ -1228,7 +1231,7 @@ def create_scheduler() -> AsyncIOScheduler:
     scheduler.add_job(job6_quarterly_eps, "cron", month="3", day=1, hour=9, minute=0)
     scheduler.add_job(job7_ic_chain, "cron", month="1,7", day=1, hour=2, minute=0)
     scheduler.add_job(job_cleanup_db, "cron", day_of_week="sun", hour=2, minute=30)
-    scheduler.add_job(job_watchdog, "interval", minutes=30)
+    scheduler.add_job(job_watchdog, "interval", minutes=5)
     return scheduler
 
 
