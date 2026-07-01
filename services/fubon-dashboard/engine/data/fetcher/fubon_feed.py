@@ -269,8 +269,25 @@ class FubonFeed:
             with self._reconnect_lock:
                 self._reconnecting = False
             return
+        # 最小重連間隔：防止 connect→disconnect 快速循環累積死 thread
+        now_ts = time.monotonic()
+        last = getattr(self, "_last_reconnect_ts", 0)
+        if now_ts - last < 5:
+            with self._reconnect_lock:
+                self._reconnecting = False
+            threading.Timer(5, self._reconnect_stock).start()
+            return
+        self._last_reconnect_ts = now_ts
+
         try:
             logger.info("股票 WebSocket 重連中...")
+            # 先強制斷線清理舊 socket 狀態，避免 run_forever() 拋 "socket is already opened"
+            try:
+                if self._ws is not None:
+                    self._ws.disconnect()
+            except Exception:
+                pass
+
             try:
                 self._sdk.init_realtime(Mode.Speed)
             except Exception as ie:

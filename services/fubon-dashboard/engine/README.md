@@ -131,6 +131,17 @@ python3 engine/test_fill_callback.py
 
 ---
 
+## WebSocket 重連機制
+
+`FubonFeed._reconnect_stock()` 斷線時自動重連，關鍵設計：
+
+- **重連前強制 disconnect**：`self._ws.disconnect()` 清理舊 socket 狀態，防止 `run_forever()` 拋 `"socket is already opened"` 累積死 thread
+- **最小間隔 5 秒**：`_last_reconnect_ts` 記錄上次時間，若間隔 < 5s 延後執行，防止 connect→disconnect 快速循環（未修復前 4 小時可累積 2000+ 死 thread，導致 GIL 爭用假死）
+- **指數退避**：首次 2s，後續加倍，上限 60s
+- **`_reconnect_count` 重置**：重連成功後歸零，確保下次斷線從 2s 開始
+
+---
+
 ## 重要時間點
 
 | 時間 | 事件 |
