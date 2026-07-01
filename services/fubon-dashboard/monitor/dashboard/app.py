@@ -1848,7 +1848,7 @@ def create_app(
                 out.setdefault(sym, {})["price"] = p
 
             # Today OHLV (date-filtered)
-            # volume 欄位儲存 SDK trades.volume（今日累積股數），MAX 取最新值，÷1000 轉張
+            # volume 欄位儲存 SDK trades.volume（今日累積張數，與 TWSE v 欄位一致），MAX 取最新值
             # H/L/Open 只取 09:00+ 真實成交（濾除試撮和停牌期間模擬價）
             open_ts = f"{today} 09:00:00"
             for sym, op, hi, lo, vol in c.execute(
@@ -1865,7 +1865,7 @@ def create_app(
             ).fetchall():
                 out.setdefault(sym, {}).update(
                     open=op, high=hi, low=lo,
-                    vol_lots=int((vol or 0) // 1000),
+                    vol_lots=int(vol or 0),
                 )
 
             # Level 2 quotes

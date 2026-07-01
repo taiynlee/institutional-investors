@@ -1216,7 +1216,12 @@ async def job_cleanup_db():
 
 
 def create_scheduler() -> AsyncIOScheduler:
-    scheduler = AsyncIOScheduler(timezone="Asia/Taipei", misfire_grace_time=300)
+    # misfire_grace_time 必須透過 job_defaults 傳入，直接當 kwarg 無效（APScheduler 3.x bug）
+    # 設 None = 永遠補跑，各 job 本身有 _already_fetched guard 不會重複執行
+    scheduler = AsyncIOScheduler(
+        timezone="Asia/Taipei",
+        job_defaults={"misfire_grace_time": None, "coalesce": True},
+    )
     scheduler.add_job(job1_institutional_price, "cron", hour=18, minute=0)
     scheduler.add_job(job2_margin, "cron", hour=20, minute=45)
     scheduler.add_job(job3_shareholding, "cron", day_of_week="sat", hour=11, minute=30)
