@@ -661,6 +661,7 @@ class TradingEngine:
         _daily_high: dict[str, float] = {}  # 今日最高成交價（09:00 後）
         _daily_low:  dict[str, float] = {}  # 今日最低成交價（09:00 後）
         _log_cleared_date = [None]     # 追蹤清除日期
+        _notified_today: set[str] = set()  # 今日已發 LINE 觸發通知的股票（每支只通知一次）
 
         def _append_log(entry: dict):
             """新增訊號 log，最新在最前；每個交易日 09:00 清除前一天資料。"""
@@ -670,6 +671,7 @@ class TradingEngine:
                     and now_t.hour == 9 and now_t.minute <= 5):
                 with self._lock:
                     self._state["signal_log"] = []
+                _notified_today.clear()
                 _log_cleared_date[0] = now_d
             with self._lock:
                 log: list = self._state["signal_log"]
@@ -1015,6 +1017,22 @@ class TradingEngine:
                       tick_rise_60s=round(sess.tick_rise_60s, 1))
 
             if result.should_enter:
+                # 每支股票今日第一次觸發 → 發 LINE（dry_run 也送）
+                if symbol not in _notified_today:
+                    _notified_today.add(symbol)
+                    _thr_now = round(_vol_ratio_min_pct(), 1)
+                    _mode = "DRY RUN" if _is_dry_run() else "實盤"
+                    notifier.send(
+                        f"📶 訊號觸發 [{_mode}] {symbol} {sname(symbol)}\n"
+                        f"時間={now_tw().strftime('%H:%M:%S')}\n"
+                        f"tick↑={round(sess.tick_rise_60s,1)}（門檻≥{_tick_rise_threshold()}）\n"
+                        f"外盤%={round(_bp,1)}%（門檻≥{_bid_pct_threshold()}%）\n"
+                        f"1m買盤%={round(sess.bid_pct_window,1)}%（門檻≥{_bid_1m_pct_threshold()}%）\n"
+                        f"量比={round(_vr,1)}%（門檻≥{_thr_now}%）\n"
+                        f"振幅={round(_amp,2)}%（門檻≥{_amplitude_min_pct()}%）\n"
+                        f"漲幅={round(sess.change_pct,2)}%",
+                        msg_type="signal",
+                    )
                 _place_order(symbol, sess)
 
         def _place_order(symbol: str, sess: SymbolSession):
