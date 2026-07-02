@@ -1,4 +1,28 @@
-import { useState } from 'react'
+import { useState, Component, type ReactNode, type ErrorInfo } from 'react'
+
+class ErrorBoundary extends Component<{ children: ReactNode; name: string }, { error: Error | null }> {
+  constructor(props: { children: ReactNode; name: string }) {
+    super(props)
+    this.state = { error: null }
+  }
+  static getDerivedStateFromError(e: Error) { return { error: e } }
+  componentDidCatch(e: Error, info: ErrorInfo) {
+    console.error(`[ErrorBoundary:${this.props.name}]`, e, info.componentStack)
+  }
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="p-8 text-red-400 font-mono text-sm">
+          <div className="font-bold mb-2">⚠ {this.props.name} 頁面發生錯誤</div>
+          <pre className="text-xs text-red-300 whitespace-pre-wrap">{this.state.error.message}</pre>
+          <button className="mt-4 px-3 py-1 bg-gray-700 text-white rounded text-xs"
+            onClick={() => this.setState({ error: null })}>重試</button>
+        </div>
+      )
+    }
+    return this.props.children
+  }
+}
 import { useServerClock } from './hooks/useServerTime'
 import { Dashboard } from './pages/Dashboard'
 import { ScoreA } from './pages/ScoreA'
@@ -81,7 +105,7 @@ export default function App() {
         {tab === 'holders'    && <Holders onResearchStock={goResearch} />}
         {tab === 'pool'       && <StockPoolPage />}
         {tab === 'us-stocks'  && <UsStocksPage />}
-        {tab === 'day-trade'  && <DayTradePage />}
+        {tab === 'day-trade'  && <ErrorBoundary name="台股當沖"><DayTradePage /></ErrorBoundary>}
       </div>
       {researchCode && (
         <StockResearch code={researchCode} onClose={() => setResearchCode(null)} />

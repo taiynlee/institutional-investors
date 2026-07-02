@@ -81,7 +81,8 @@ const REASON_LABEL: Record<string, string> = {
   max_daily_trades_reached: '已達當日上限',
   ok:                       '全通過',
 }
-function reasonLabel(r: string): string {
+function reasonLabel(r: string | undefined | null): string {
+  if (!r) return ''
   if (REASON_LABEL[r]) return REASON_LABEL[r]
   if (r.startsWith('change_pct_exceeded_'))  return `漲跌幅超限(${r.split('exceeded_')[1]})`
   if (r.startsWith('tick_rise_low_'))        return `tick+買盤均不足(${r.replace('tick_rise_low_', '')})`
