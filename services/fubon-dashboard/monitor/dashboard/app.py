@@ -498,7 +498,7 @@ def create_app(
         try:
             r = _httpx.get(f"{_BACKEND}/api/score-c", timeout=15)
             if r.status_code == 200:
-                codes = [row["code"] for row in r.json() if row.get("score_c") == 100 and "code" in row]
+                codes = [row["code"] for row in r.json() if "code" in row]
                 score_count += len(codes)
                 selected.update(codes)
         except Exception:
