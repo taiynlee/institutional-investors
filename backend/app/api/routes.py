@@ -156,30 +156,6 @@ async def get_score_a(
         .order_by(ScreeningResult.score_a.desc())
     )).scalars().all()
 
-    if not results and calc_date is None:
-        latest = (await db.execute(
-            select(ScreeningResult.calc_date)
-            .where(and_(
-                ScreeningResult.passes == True,
-                ScreeningResult.tags.contains("A"),
-                ScreeningResult.score_a > 0,
-            ))
-            .order_by(ScreeningResult.calc_date.desc())
-            .limit(1)
-        )).scalar_one_or_none()
-        if latest:
-            target_date = latest
-            results = (await db.execute(
-                select(ScreeningResult)
-                .where(and_(
-                    ScreeningResult.calc_date == latest,
-                    ScreeningResult.passes == True,
-                    ScreeningResult.tags.contains("A"),
-                    ScreeningResult.score_a > 0,
-                ))
-                .order_by(ScreeningResult.score_a.desc())
-            )).scalars().all()
-
     codes = [r.code for r in results]
     stats = await _appearance_stats(codes, target_date, db) if codes else {}
     ic_map = await _ic_names_map(codes, db)
@@ -207,25 +183,6 @@ async def get_score_b(
         ))
         .order_by(ScreeningResult.score_b.desc())
     )).scalars().all()
-
-    if not results and calc_date is None:
-        latest = (await db.execute(
-            select(ScreeningResult.calc_date)
-            .where(and_(ScreeningResult.passes == True, ScreeningResult.tags.contains("B")))
-            .order_by(ScreeningResult.calc_date.desc())
-            .limit(1)
-        )).scalar_one_or_none()
-        if latest:
-            target_date = latest
-            results = (await db.execute(
-                select(ScreeningResult)
-                .where(and_(
-                    ScreeningResult.calc_date == latest,
-                    ScreeningResult.passes == True,
-                    ScreeningResult.tags.contains("B"),
-                ))
-                .order_by(ScreeningResult.score_b.desc())
-            )).scalars().all()
 
     codes = [r.code for r in results]
     stats = await _appearance_stats(codes, target_date, db) if codes else {}
