@@ -446,7 +446,7 @@ def create_app(
     @app.post("/daytrade-list/sync")
     def sync_daytrade_list(date_str: str = ""):
         """21:05 由 backend job8 觸發：
-        pool live-filter ∪ 策略A ∪ 策略B ∪ watchlist-a(active) − 退場止損 → PG daytrade_candidate
+        pool live-filter（chip_count≥2）− 股價範圍 − 處置股 → PG daytrade_candidate
         """
         from datetime import date as _date, timedelta
         import httpx as _httpx
@@ -463,7 +463,7 @@ def create_app(
         # snapshot: {code: {ref_close, ref_close_date, avg_vol5_lot, chip_count, above_ma20}}
         snapshots: dict = {}
 
-        # 1. Pool live-filter（above_ma20 + vol_ok + chip_count≥2）
+        # 1. Pool live-filter（chip_count≥2）
         live_count = 0
         try:
             r = _httpx.get(f"{_BACKEND}/api/daytrade/list",
@@ -484,55 +484,7 @@ def create_app(
         except Exception:
             pass
 
-        # 2. 策略A + 策略B
-        score_count = 0
-        try:
-            for ep in (f"{_BACKEND}/api/score-a", f"{_BACKEND}/api/score-b"):
-                r = _httpx.get(ep, timeout=10)
-                if r.status_code == 200:
-                    codes = [row["code"] for row in r.json() if "code" in row]
-                    score_count += len(codes)
-                    selected.update(codes)
-        except Exception:
-            pass
-
-        # 2b. 策略C 滿分100分
-        try:
-            r = _httpx.get(f"{_BACKEND}/api/score-c", timeout=15)
-            if r.status_code == 200:
-                codes = [row["code"] for row in r.json() if row.get("score_c") == 100 and "code" in row]
-                score_count += len(codes)
-                selected.update(codes)
-        except Exception:
-            pass
-
-        # 3. WatchlistA（tracking / triggered / entered）
-        watch_count = 0
-        try:
-            r = _httpx.get(f"{_BACKEND}/api/watchlist-a", timeout=10)
-            if r.status_code == 200:
-                active = {"tracking", "triggered", "entered"}
-                codes = [row["code"] for row in r.json() if row.get("status") in active]
-                watch_count = len(codes)
-                selected.update(codes)
-        except Exception:
-            pass
-
-        # 4. 扣除退場止損名單
-        exit_count = 0
-        try:
-            r = _httpx.get(f"{_BACKEND}/api/exit-alerts", timeout=10)
-            if r.status_code == 200:
-                exit_codes = {row["code"] for row in r.json()}
-                exit_count = len(exit_codes & selected)
-                selected -= exit_codes
-                for c in exit_codes:
-                    snapshots.pop(c, None)
-        except Exception:
-            pass
-
-        # 5. 股價範圍過濾（批次取昨收，過濾 < price_min 或 > price_max）
-        # 同時補全非 pool 股票的 ref_close snapshot
+        # 2. 股價範圍過濾（批次取昨收，過濾 < price_min 或 > price_max）
         price_excluded = 0
         if selected:
             try:
@@ -540,7 +492,6 @@ def create_app(
                                params={"codes": ",".join(selected)}, timeout=15)
                 if r.status_code == 200:
                     prices = r.json()
-                    # 補 ref_close 給 score-a/b / watchlist-a（pool 已有完整 snapshot）
                     for c, close in prices.items():
                         if c not in snapshots:
                             snapshots[c] = {"ref_close": close}
@@ -559,7 +510,7 @@ def create_app(
             except Exception:
                 pass
 
-        # 5b. 處置股票過濾（TWT85U 全部排除，避免分批競價量爆表且禁止當沖）
+        # 3. 處置股票過濾（TWT85U 全部排除，避免分批競價量爆表且禁止當沖）
         disposal_excluded = 0
         try:
             import urllib.request as _ureq_d, json as _json_d
@@ -598,8 +549,7 @@ def create_app(
 
         return {
             "ok": True, "date": target_date, "count": len(codes_list),
-            "live_filter": live_count, "score_ab": score_count,
-            "watchlist_a": watch_count, "excluded_exit": exit_count,
+            "live_filter": live_count,
             "excluded_price": price_excluded, "excluded_disposal": disposal_excluded,
             "price_range": [price_min, price_max],
         }

@@ -2305,7 +2305,7 @@ async def get_daytrade_list(
         change = round((prev_close or 0) - (prev_prev_close or prev_close or 0), 2)
         change_pct = round(change / prev_prev_close * 100, 2) if prev_prev_close else 0
 
-        if live and not (above_ma20 and chip_count >= 2 and (foreign_net + trust_net) >= 0):
+        if live and not (chip_count >= 2):
             continue
 
         result.append({

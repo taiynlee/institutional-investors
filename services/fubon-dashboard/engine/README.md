@@ -124,30 +124,16 @@ python3 engine/test_fill_callback.py
 
 每日 21:15 由 `sync_daytrade_list` 產生隔日候選清單，寫入 PG `daytrade_candidate`。
 
-### 來源（聯集）
+### 來源
 
 | 來源 | 說明 |
 |------|------|
-| Pool live-filter | 股票池通過下方三條件 |
-| 策略A / 策略B | passes=True |
-| 策略C | score_c == 100 |
-| WatchlistA | 狀態 tracking / triggered / entered |
-
-### Pool live-filter 條件（AND）
-
-| 條件 | 說明 |
-|------|------|
-| `above_ma60` | 昨收 > MA60（DB 欄位名 `above_ma20`，語意已更新） |
-| `chip_count ≥ 2` | 外資買超 / 投信買超 / 融資減少，各計 1 分 |
-| 外資+投信 ≥ 0 | 法人合計不賣超 |
-
-> `vol_ok`（5日均量）已移除：引擎量比條件於盤中即時把關，歷史均量門檻多餘。
+| Pool live-filter | 股票池通過 chip_count≥2 |
 
 ### 排除條件
 
 | 過濾 | 說明 |
 |------|------|
-| 退場止損名單 | exit-alerts 全排除 |
 | 股價範圍 | 預設 60～3000 元（可在設定頁調整） |
 | 處置股 | TWSE TWT85U 全排除 |
 
