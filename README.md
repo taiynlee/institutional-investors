@@ -197,7 +197,7 @@ Docker Compose（frontend nginx）
 
 | 子頁 | 資料來源 | 說明 |
 |-----|---------|------|
-| 今日交易 | WebSocket `/fubon-api/ws/stream` | 即時持倉 + 盤中損益（WS 串流，每秒更新）。觀察名單欄位：代碼/名稱、昨收、現價、漲跌、漲跌%、已成交買賣盤（外盤%）、期貨價/差價、Open/High/Low、振幅%（(High−Low)/昨收×100）、今日累積量/5日均量% |
+| 今日交易 | WebSocket `/fubon-api/ws/stream` | 即時持倉 + 盤中損益（WS 串流，每秒更新）。觀察名單欄位：代碼/名稱、昨收、現價、漲幅%、1m tick↑（觀察窗口內上漲 tick 數）、1m 買盤%（bid 佔比）、量比（今日量/5日均量×100）、振幅%（(High−Low)/昨收×100）。欄位閾值顏色跟隨「交易設定」參數動態調整。右上角「+ 新增股票」可輸入代碼或名稱模糊搜尋新增至今日觀察名單，每列 ✕ 按鈕可移除。 |
 | 手動買賣 | `/fubon-api/manual-trade/*` | 買進：市價IOC + 自動掛OCO停損/停利觸價單；賣出：ROD限價現賣，不綁持倉紀錄 |
 | 交易紀錄 | `/fubon-api/trades` | 今日成交記錄（ticks.db） |
 | 盤前狀況 | `/fubon-api/pre-session/logs` | 盤前跑批紀錄（PG），含日期切換 |

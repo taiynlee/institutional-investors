@@ -176,6 +176,13 @@ function LiveTab() {
   )
   const stream = useEngineStream()
   const [cancellingCond, setCancellingCond] = useState<string | null>(null)
+  const [addMode, setAddMode] = useState(false)
+  const [addCode, setAddCode] = useState('')
+  const [addingCode, setAddingCode] = useState(false)
+  const [removingCode, setRemovingCode] = useState<string | null>(null)
+  const [suggestions, setSuggestions] = useState<{code:string;name:string}[]>([])
+  const [suggFocus, setSuggFocus] = useState(-1)
+  const addSearchRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // WebSocket 推送：取代 /status + /positions + /engine/status 輪詢
   useEffect(() => {
@@ -236,6 +243,48 @@ function LiveTab() {
     return () => evs.close()
   }, [list?.date])
 
+
+  const doAddCode = async (overrideCode?: string) => {
+    const code = (overrideCode ?? addCode).trim().toUpperCase()
+    if (!code) return
+    setAddingCode(true)
+    setSuggestions([])
+    try {
+      await axios.post('/api/daytrade/candidate', { code })
+      setAddMode(false)
+      setAddCode('')
+      doRefreshList(false)
+    } catch (e: any) {
+      alert(`✕ 新增失敗: ${e?.response?.data?.detail ?? e.message}`)
+    } finally {
+      setAddingCode(false)
+    }
+  }
+
+  const onAddInputChange = (val: string) => {
+    setAddCode(val)
+    setSuggFocus(-1)
+    if (addSearchRef.current) clearTimeout(addSearchRef.current)
+    if (val.trim().length < 1) { setSuggestions([]); return }
+    addSearchRef.current = setTimeout(async () => {
+      try {
+        const res = await axios.get(`/api/stocks/search?q=${encodeURIComponent(val.trim())}`)
+        setSuggestions((res.data ?? []).slice(0, 8))
+      } catch { setSuggestions([]) }
+    }, 200)
+  }
+
+  const doRemoveCode = async (code: string) => {
+    setRemovingCode(code)
+    try {
+      await axios.delete(`/api/daytrade/candidate/${code}`)
+      doRefreshList(false)
+    } catch (e: any) {
+      alert(`✕ 移除失敗: ${e?.response?.data?.detail ?? e.message}`)
+    } finally {
+      setRemovingCode(null)
+    }
+  }
 
   const cancelConditions = async (symbol: string) => {
     setCancellingCond(symbol)
@@ -382,24 +431,71 @@ function LiveTab() {
       <div className={card}>
         {/* 列表標頭 */}
         <div className="px-4 py-2 border-b border-[#253d5c] flex items-center gap-2 flex-wrap">
-          <span
-            className="text-sm font-semibold text-[#dde6f0] cursor-help border-b border-dotted border-[#4a6fa8]"
-            title={`最新觀察名單 — 產生邏輯（每日 21:05 自動執行）\n\n四個來源取聯集：\n① 股票池 × 當沖篩選條件\n   必要條件（4條全過）：TWSE當沖標的 + 近5日均量≥2000張 + 收盤>MA20 + 外資淨+投信淨≥0\n   籌碼加分（≥2條）：外資買超 + 投信買超 + 融資日減\n② ∪ 策略A + 策略B 當日篩選結果\n③ ∪ 策略C 滿分100分\n   （月營收YoY≥10% + 連續加速 + 近2季EPS>0 + 各項評分滿分）\n④ ∪ A追蹤清單（status: tracking / triggered / entered）\n\n過濾：\n⑤ 扣除退場止損名單\n⑥ 昨收 200~990 元（可在當沖設定調整）`}
-          >最新觀察名單</span>
+          <span className="text-sm font-semibold text-[#dde6f0]">今日觀察名單</span>
           {list && <Badge text={`${list.count} 檔`} color="blue" />}
           {list?.date && <span className={`text-xs ${muted}`}>{list.date}</span>}
-          {closedAt
-            ? <span className="text-xs text-yellow-400 font-semibold ml-1">■ 已收盤 · 收盤快照</span>
-            : (
+          {closedAt && <span className="text-xs text-yellow-400 font-semibold ml-1">■ 已收盤 · 收盤快照</span>}
+          <div className="ml-auto flex items-center gap-2">
+            {addMode ? (
+              <>
+                <div className="relative">
+                  <input
+                    type="text"
+                    value={addCode}
+                    onChange={e => onAddInputChange(e.target.value)}
+                    placeholder="代碼或名稱"
+                    maxLength={10}
+                    className={`text-xs bg-[#1a2d4a] border border-[#4a6fa8] rounded px-2 py-0.5 text-[#dde6f0] w-32 outline-none`}
+                    onKeyDown={e => {
+                      if (e.key === 'ArrowDown') { e.preventDefault(); setSuggFocus(f => Math.min(f+1, suggestions.length-1)) }
+                      else if (e.key === 'ArrowUp') { e.preventDefault(); setSuggFocus(f => Math.max(f-1, -1)) }
+                      else if (e.key === 'Enter') {
+                        if (suggFocus >= 0 && suggestions[suggFocus]) { doAddCode(suggestions[suggFocus].code); setSuggFocus(-1) }
+                        else doAddCode()
+                      }
+                      else if (e.key === 'Escape') { if (suggestions.length) { setSuggestions([]); setSuggFocus(-1) } else { setAddMode(false); setAddCode('') } }
+                    }}
+                    autoFocus
+                  />
+                  {suggestions.length > 0 && (
+                    <div className="absolute top-full left-0 mt-0.5 z-50 w-48 bg-[#0f1f35] border border-[#253d5c] rounded shadow-lg overflow-hidden">
+                      {suggestions.map((s, i) => (
+                        <div
+                          key={s.code}
+                          className={`px-2 py-1 text-xs cursor-pointer flex gap-2 ${i === suggFocus ? 'bg-[#1a2d4a]' : 'hover:bg-[#1a2d4a]'}`}
+                          onMouseDown={e => { e.preventDefault(); doAddCode(s.code) }}
+                          onMouseEnter={() => setSuggFocus(i)}
+                        >
+                          <span className="text-[#60a5fa] font-mono">{s.code}</span>
+                          <span className={muted}>{s.name}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <button
+                  onClick={() => doAddCode()}
+                  disabled={!addCode || addingCode}
+                  className="text-[10px] px-2 py-0.5 rounded border border-green-600/50 text-green-400 hover:bg-green-900/20 disabled:opacity-40 transition-colors"
+                >
+                  {addingCode ? '加入中…' : '+ 加入'}
+                </button>
+                <button
+                  onClick={() => { setAddMode(false); setAddCode(''); setSuggestions([]) }}
+                  className={`text-[10px] px-1.5 py-0.5 rounded border border-[#253d5c] ${muted} hover:text-[#dde6f0] transition-colors`}
+                >
+                  取消
+                </button>
+              </>
+            ) : (
               <button
-                onClick={() => doRefreshList(false)}
-                disabled={listRefreshing}
-                className="ml-auto text-[10px] px-2 py-0.5 rounded border border-[#253d5c] text-[#6b84a0] hover:text-[#dde6f0] hover:border-[#4a6fa8] disabled:opacity-40 transition-colors"
+                onClick={() => setAddMode(true)}
+                className="text-[10px] px-2 py-0.5 rounded border border-[#4a6fa8]/50 text-[#60a5fa] hover:bg-[#1a2d4a] transition-colors"
               >
-                {listRefreshing ? '更新中…' : '↻ 刷新名單'}
+                + 新增股票
               </button>
-            )
-          }
+            )}
+          </div>
         </div>
 
         {loading ? (
@@ -419,6 +515,7 @@ function LiveTab() {
                   <th className="px-3 py-2 text-right" style={{minWidth:64}}>1m 買盤%</th>
                   <th className="px-3 py-2 text-right" style={{minWidth:60}}>量比</th>
                   <th className="px-3 py-2 text-right" style={{minWidth:56}}>振幅</th>
+                  <th className="px-2 py-2" style={{minWidth:32}}></th>
                 </tr>
               </thead>
               <tbody>
@@ -492,6 +589,17 @@ function LiveTab() {
                             return <span className={ok ? 'text-yellow-300' : muted}>{ampPct.toFixed(1)}%</span>
                           })()
                         ) : <span className={muted}>—</span>}
+                      </td>
+                      {/* 移除 */}
+                      <td className="px-2 py-2.5 text-right">
+                        <button
+                          onClick={() => doRemoveCode(s.stock_id)}
+                          disabled={removingCode === s.stock_id}
+                          title="從今日名單移除"
+                          className={`text-[11px] px-1 py-0 rounded ${muted} hover:text-red-400 disabled:opacity-30 transition-colors`}
+                        >
+                          {removingCode === s.stock_id ? '…' : '✕'}
+                        </button>
                       </td>
                     </tr>
                   )

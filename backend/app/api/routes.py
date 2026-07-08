@@ -2318,6 +2318,65 @@ async def sync_daytrade_candidates(body: DaytradeSyncBody, db: AsyncSession = De
     return {"ok": True, "date": body.date, "count": len(body.codes)}
 
 
+class DaytradeCandidateAddBody(BaseModel):
+    code: str
+    trade_date: Optional[str] = None  # defaults to today
+
+
+@router.post("/api/daytrade/candidate")
+async def add_daytrade_candidate(body: DaytradeCandidateAddBody, db: AsyncSession = Depends(get_db)):
+    from sqlalchemy import text as _text
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+    from datetime import timedelta as _td
+
+    trade_date = date.fromisoformat(body.trade_date) if body.trade_date else date.today()
+    while trade_date.weekday() >= 5:
+        trade_date += _td(days=1)
+
+    # fetch ref_close + avg_vol5 from daily_price
+    price_rows = (await db.execute(_text("""
+        SELECT trade_date, close, volume
+        FROM daily_price
+        WHERE code = :code
+        ORDER BY trade_date DESC
+        LIMIT 6
+    """), {"code": body.code})).mappings().all()
+
+    ref_close = float(price_rows[0]["close"]) if price_rows else None
+    ref_close_date = price_rows[0]["trade_date"] if price_rows else None
+    avg_vol5_lot = round(sum(r["volume"] for r in price_rows[:5]) / min(5, len(price_rows)) / 1000) if price_rows else None
+
+    row = {
+        "trade_date": trade_date,
+        "code": body.code,
+        "ref_close": ref_close,
+        "ref_close_date": ref_close_date,
+        "avg_vol5_lot": avg_vol5_lot,
+        "chip_count": None,
+        "above_ma20": None,
+    }
+    await db.execute(pg_insert(DaytradeCandidate).values([row]).on_conflict_do_nothing())
+    await db.commit()
+    return {"ok": True, "trade_date": trade_date.isoformat(), "code": body.code, "ref_close": ref_close}
+
+
+@router.delete("/api/daytrade/candidate/{code}")
+async def remove_daytrade_candidate(code: str, trade_date: Optional[str] = Query(None), db: AsyncSession = Depends(get_db)):
+    from sqlalchemy import delete as _delete
+    from datetime import timedelta as _td
+
+    td = date.fromisoformat(trade_date) if trade_date else date.today()
+    while td.weekday() >= 5:
+        td += _td(days=1)
+
+    await db.execute(_delete(DaytradeCandidate).where(
+        DaytradeCandidate.trade_date == td,
+        DaytradeCandidate.code == code,
+    ))
+    await db.commit()
+    return {"ok": True, "trade_date": td.isoformat(), "code": code}
+
+
 # ── Pre-session log (PG-backed) ──────────────────────────────────────────────
 
 class PreSessionLogStartBody(BaseModel):
