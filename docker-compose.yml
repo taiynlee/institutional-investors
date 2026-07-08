@@ -29,6 +29,7 @@ services:
       FINMIND_TOKEN: ""
       SKIP_STARTUP_SYNC: "1"
       LINE_BOT_URL: "http://host.docker.internal:8001"
+      TZ: Asia/Taipei
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
