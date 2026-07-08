@@ -45,7 +45,7 @@ class TradingParamsBody(BaseModel):
     latest_dynamic_add_time: str = "13:09"
     force_exit_time: str = "13:20"
     # 當沖篩選
-    daytrade_price_min: float = 180.0
+    daytrade_price_min: float = 60.0
     daytrade_price_max: float = 990.0
 
 
@@ -141,7 +141,7 @@ def create_app(
         "entry_start_time": "09:15",
         "latest_dynamic_add_time": "13:09",
         "force_exit_time": "13:20",
-        "daytrade_price_min": 180.0,
+        "daytrade_price_min": 60.0,
         "daytrade_price_max": 990.0,
     }
 
@@ -457,7 +457,7 @@ def create_app(
             nxt += timedelta(days=1)
         target_date = nxt.isoformat()
 
-        price_min = _trading_params.get("daytrade_price_min", 200.0)
+        price_min = _trading_params.get("daytrade_price_min", 60.0)
         price_max = _trading_params.get("daytrade_price_max", 990.0)
         selected: set[str] = set()
         # snapshot: {code: {ref_close, ref_close_date, avg_vol5_lot, chip_count, above_ma20}}

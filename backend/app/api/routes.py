@@ -2228,13 +2228,13 @@ async def get_daytrade_list(
             select(StockPool.code, StockPool.name).where(StockPool.code.in_(codes))
         )).all()}
 
-    # Batch fetch latest prices (last 20 rows each)
+    # Batch fetch latest prices (last 100 calendar days = 65+ trading days, for MA60)
     prices_raw = (await db.execute(_text("""
         SELECT code, trade_date, open, high, low, close, volume
         FROM daily_price
         WHERE code = ANY(:codes)
           AND trade_date >= (
-            SELECT MAX(trade_date) - INTERVAL '30 days'
+            SELECT MAX(trade_date) - INTERVAL '100 days'
             FROM daily_price WHERE code = daily_price.code
           )
         ORDER BY code, trade_date DESC
@@ -2271,6 +2271,7 @@ async def get_daytrade_list(
         volume = round(volume_shares / 1000) if volume_shares else None
         avg_vol5_shares = round(sum(p["volume"] for p in prices[:5]) / min(5, len(prices))) if prices else 0
         ma20 = sum(p["close"] for p in prices[:20]) / min(20, len(prices)) if prices else 0
+        ma60 = sum(p["close"] for p in prices[:60]) / min(60, len(prices)) if prices else 0
 
         foreign_net = float(inst["foreign_net"]) if inst else 0
         trust_net = float(inst["trust_net"]) if inst else 0
@@ -2292,12 +2293,12 @@ async def get_daytrade_list(
             prev_close = float(snap["ref_close"])
             avg_vol5 = snap["avg_vol5_lot"] if snap.get("avg_vol5_lot") is not None else round(avg_vol5_shares / 1000)
             chip_count = snap["chip_count"] if snap.get("chip_count") is not None else live_chip_count
-            above_ma20 = snap["above_ma20"] if snap.get("above_ma20") is not None else ((prev_close or 0) > ma20)
+            above_ma20 = snap["above_ma20"] if snap.get("above_ma20") is not None else ((prev_close or 0) > ma60)
         else:
             prev_close = prices[0]["close"] if prices else None
             avg_vol5 = round(avg_vol5_shares / 1000)
             chip_count = live_chip_count
-            above_ma20 = (prev_close or 0) > ma20
+            above_ma20 = (prev_close or 0) > ma60
 
         vol_ok = avg_vol5 >= 2000  # avg_vol5 已換算成張，2000張門檻正確
         prev_prev_close = prices[1]["close"] if len(prices) > 1 else prev_close
@@ -2316,6 +2317,7 @@ async def get_daytrade_list(
             "prev_prev_close": prev_prev_close,
             "avg_vol5": avg_vol5,        # 張
             "ma20": round(ma20, 4),
+            "ma60": round(ma60, 4),
             "foreign_net": foreign_net,
             "trust_net": trust_net,
             "dealer_net": dealer_net,
@@ -2324,7 +2326,7 @@ async def get_daytrade_list(
             "short_balance": short_balance,
             "change": change,
             "change_pct": change_pct,
-            "above_ma20": above_ma20,
+            "above_ma20": above_ma20,  # 實際為 above_ma60（欄位名沿用相容性）
             "vol_ok": vol_ok,
             "chip_count": chip_count,
         })
