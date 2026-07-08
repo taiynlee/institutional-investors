@@ -2300,12 +2300,12 @@ async def get_daytrade_list(
             chip_count = live_chip_count
             above_ma20 = (prev_close or 0) > ma60
 
-        vol_ok = avg_vol5 >= 2000  # avg_vol5 已換算成張，2000張門檻正確
+        vol_ok = avg_vol5 >= 2000  # 僅供前端顯示參考，不再作為 live filter 條件（引擎量比即時把關）
         prev_prev_close = prices[1]["close"] if len(prices) > 1 else prev_close
         change = round((prev_close or 0) - (prev_prev_close or prev_close or 0), 2)
         change_pct = round(change / prev_prev_close * 100, 2) if prev_prev_close else 0
 
-        if live and not (above_ma20 and vol_ok and chip_count >= 2 and (foreign_net + trust_net) >= 0):
+        if live and not (above_ma20 and chip_count >= 2 and (foreign_net + trust_net) >= 0):
             continue
 
         result.append({
