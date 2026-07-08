@@ -814,32 +814,23 @@ function PreSessionTab() {
         <div className={`text-[10px] uppercase tracking-widest ${muted} mb-3`}>最新觀察名單產生邏輯（每日 21:05）</div>
         <div className="space-y-3 text-xs text-[#dde6f0]">
           <div>
-            <div className="font-semibold text-[#60a5fa] mb-1">① 股票池 × 當沖篩選條件</div>
-            <div className="grid grid-cols-2 gap-x-8 gap-y-0.5 pl-3">
-              <div className="text-[#6b84a0] text-[11px]">必要條件（4條全過）</div>
-              <div className="text-[#6b84a0] text-[11px]">籌碼加分（≥ 2條入選）</div>
-              <div>✔ 在 TWSE 當沖標的名單</div>
+            <div className="font-semibold text-[#60a5fa] mb-1">① 股票池 × 篩選條件</div>
+            <div className="pl-3 space-y-0.5">
+              <div className="text-[#6b84a0] text-[11px]">籌碼加分 ≥ 2 條入選</div>
               <div>⬡ 外資昨日買超（foreign_net &gt; 0）</div>
-              <div>✔ 近5日均量 ≥ 2000張</div>
               <div>⬡ 投信連續買超（trust_net &gt; 0）</div>
-              <div>✔ 收盤價 &gt; MA20（日線）</div>
               <div>⬡ 融資餘額日減少（margin_change &lt; 0）</div>
-              <div>✔ 外資淨＋投信淨 ≥ 0</div>
-              <div></div>
             </div>
           </div>
           <div>
             <div className="font-semibold text-[#60a5fa] mb-0.5">② ∪ 策略A + 策略B 當日篩選結果</div>
           </div>
           <div>
-            <div className="font-semibold text-[#60a5fa] mb-0.5">③ ∪ 策略C 滿分100分（月營收加速 + 季EPS全正）</div>
-          </div>
-          <div>
-            <div className="font-semibold text-[#60a5fa] mb-0.5">④ ∪ A追蹤清單（tracking / triggered / entered）</div>
+            <div className="font-semibold text-[#60a5fa] mb-0.5">③ ∪ 策略C 當日名單（全部納入）</div>
           </div>
           <div className="pt-1 border-t border-[#253d5c]">
             <div className="font-semibold text-[#f59e0b] mb-0.5">過濾</div>
-            <div>扣除退場止損名單　·　昨收 {priceMin}~{priceMax} 元</div>
+            <div>昨收 {priceMin}~{priceMax} 元　·　處置股全排除</div>
           </div>
         </div>
       </div>
