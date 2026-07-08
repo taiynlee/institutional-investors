@@ -120,6 +120,52 @@ python3 engine/test_fill_callback.py
 
 ---
 
+## 當沖候選清單篩選規則（job8 21:15）
+
+每日 21:15 由 `sync_daytrade_list` 產生隔日候選清單，寫入 PG `daytrade_candidate`。
+
+### 來源（聯集）
+
+| 來源 | 說明 |
+|------|------|
+| Pool live-filter | 股票池通過下方三條件 |
+| 策略A / 策略B | passes=True |
+| 策略C | score_c == 100 |
+| WatchlistA | 狀態 tracking / triggered / entered |
+
+### Pool live-filter 條件（AND）
+
+| 條件 | 說明 |
+|------|------|
+| `above_ma60` | 昨收 > MA60（DB 欄位名 `above_ma20`，語意已更新） |
+| `chip_count ≥ 2` | 外資買超 / 投信買超 / 融資減少，各計 1 分 |
+| 外資+投信 ≥ 0 | 法人合計不賣超 |
+
+> `vol_ok`（5日均量）已移除：引擎量比條件於盤中即時把關，歷史均量門檻多餘。
+
+### 排除條件
+
+| 過濾 | 說明 |
+|------|------|
+| 退場止損名單 | exit-alerts 全排除 |
+| 股價範圍 | 預設 60～3000 元（可在設定頁調整） |
+| 處置股 | TWSE TWT85U 全排除 |
+
+### Fubon SDK WS 訂閱上限
+
+- 每連線：200 subscriptions（每檔 trades + quote = 2）→ **單連線最多 100 檔**
+- 最多 5 條連線 → 上限 500 檔
+
+---
+
+## LINE 觸發通知
+
+訊號觸發（`should_enter=True`）時立即發 LINE，同一股票每日只通知一次（dry_run 也送）。
+
+**注意**：通知內容使用 `sess.evaluate()` 呼叫前的 snapshot 值，避免 WS thread 在評估後更新 `tick_rise_60s` 等欄位，導致顯示數值與觸發條件不一致。
+
+---
+
 ## 處置股過濾
 
 三重防護（TWSE TWT85U 處置股 + 全額交割股）：
