@@ -2199,11 +2199,11 @@ async def get_daytrade_list(
         if date_str:
             target_date = date.fromisoformat(date_str)
         else:
-            target_date = (await db.execute(
-                select(func.max(DaytradeCandidate.trade_date))
-            )).scalar_one_or_none()
-            if not target_date:
-                return {"date": None, "count": 0, "stocks": []}
+            # 用今日日期（跳過週末）；沒資料直接回空，不 fallback 昨天
+            target_date = date.today()
+            from datetime import timedelta as _td
+            while target_date.weekday() >= 5:
+                target_date += _td(days=1)
 
         snap_rows = (await db.execute(
             select(
