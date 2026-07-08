@@ -124,11 +124,13 @@ python3 engine/test_fill_callback.py
 
 每日 21:15 由 `sync_daytrade_list` 產生隔日候選清單，寫入 PG `daytrade_candidate`。
 
-### 來源
+### 來源（聯集去重）
 
 | 來源 | 說明 |
 |------|------|
 | Pool live-filter | 股票池通過 chip_count≥2 |
+| 策略A / 策略B | passes=True |
+| 策略C | score_c == 100 |
 
 ### 排除條件
 

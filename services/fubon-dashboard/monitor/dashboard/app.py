@@ -446,7 +446,7 @@ def create_app(
     @app.post("/daytrade-list/sync")
     def sync_daytrade_list(date_str: str = ""):
         """21:05 由 backend job8 觸發：
-        pool live-filter（chip_count≥2）− 股價範圍 − 處置股 → PG daytrade_candidate
+        pool live-filter（chip_count≥2）∪ 策略A/B/C − 股價範圍 − 處置股 → PG daytrade_candidate
         """
         from datetime import date as _date, timedelta
         import httpx as _httpx
@@ -484,7 +484,27 @@ def create_app(
         except Exception:
             pass
 
-        # 2. 股價範圍過濾（批次取昨收，過濾 < price_min 或 > price_max）
+        # 2. 策略A / 策略B / 策略C（聯集，去重）
+        score_count = 0
+        try:
+            for ep in (f"{_BACKEND}/api/score-a", f"{_BACKEND}/api/score-b"):
+                r = _httpx.get(ep, timeout=10)
+                if r.status_code == 200:
+                    codes = [row["code"] for row in r.json() if "code" in row]
+                    score_count += len(codes)
+                    selected.update(codes)
+        except Exception:
+            pass
+        try:
+            r = _httpx.get(f"{_BACKEND}/api/score-c", timeout=15)
+            if r.status_code == 200:
+                codes = [row["code"] for row in r.json() if row.get("score_c") == 100 and "code" in row]
+                score_count += len(codes)
+                selected.update(codes)
+        except Exception:
+            pass
+
+        # 3. 股價範圍過濾（批次取昨收，過濾 < price_min 或 > price_max）
         price_excluded = 0
         if selected:
             try:
@@ -510,7 +530,7 @@ def create_app(
             except Exception:
                 pass
 
-        # 3. 處置股票過濾（TWT85U 全部排除，避免分批競價量爆表且禁止當沖）
+        # 4. 處置股票過濾（TWT85U 全部排除，避免分批競價量爆表且禁止當沖）
         disposal_excluded = 0
         try:
             import urllib.request as _ureq_d, json as _json_d
@@ -549,7 +569,7 @@ def create_app(
 
         return {
             "ok": True, "date": target_date, "count": len(codes_list),
-            "live_filter": live_count,
+            "live_filter": live_count, "score_abc": score_count,
             "excluded_price": price_excluded, "excluded_disposal": disposal_excluded,
             "price_range": [price_min, price_max],
         }
