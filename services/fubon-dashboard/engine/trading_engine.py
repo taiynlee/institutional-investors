@@ -942,6 +942,10 @@ class TradingEngine:
             _l = _daily_low.get(symbol, _h)
             _amp = (_h - _l) / _ref_price * 100 if _ref_price > 0 and _h > _l else 0.0
             _thr = _tick_rise_threshold()
+            # snapshot sess 易變欄位，避免 WS thread 在評估後、通知前更新導致數值不一致
+            _snap_tick  = round(sess.tick_rise_60s, 1)
+            _snap_bid1m = round(sess.bid_pct_window, 1)
+            _snap_chg   = round(sess.change_pct, 2)
             result = sess.evaluate(
                 combiner=combiner,
                 current_time=now_time,
@@ -1025,12 +1029,12 @@ class TradingEngine:
                     notifier.send(
                         f"📶 訊號觸發 [{_mode}] {symbol} {sname(symbol)}\n"
                         f"時間={now_tw().strftime('%H:%M:%S')}\n"
-                        f"tick↑={round(sess.tick_rise_60s,1)}（門檻≥{_tick_rise_threshold()}）\n"
+                        f"tick↑={_snap_tick}（門檻≥{_tick_rise_threshold()}）\n"
                         f"外盤%={round(_bp,1)}%（門檻≥{_bid_pct_threshold()}%）\n"
-                        f"1m買盤%={round(sess.bid_pct_window,1)}%（門檻≥{_bid_1m_pct_threshold()}%）\n"
+                        f"1m買盤%={_snap_bid1m}%（門檻≥{_bid_1m_pct_threshold()}%）\n"
                         f"量比={round(_vr,1)}%（門檻≥{_thr_now}%）\n"
                         f"振幅={round(_amp,2)}%（門檻≥{_amplitude_min_pct()}%）\n"
-                        f"漲幅={round(sess.change_pct,2)}%",
+                        f"漲幅={_snap_chg}%",
                         msg_type="signal",
                     )
                 _place_order(symbol, sess)
