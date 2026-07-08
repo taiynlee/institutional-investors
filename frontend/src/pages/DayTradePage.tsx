@@ -130,7 +130,6 @@ function SignalLogRow({ e, windowSecs = 60 }: { e: any; windowSecs?: number }) {
       <span className="font-bold shrink-0">{e.name} {e.symbol}</span>
       <span className={`${mono} text-[10px]`}>{windowSecs}s▲{e.tick_rise}t</span>
       <span className={`${mono} text-[10px]`}>買1m={e.bid_1m_pct}%</span>
-      <span className={`${mono} text-[10px]`}>買盤={e.bid_pct}%</span>
       <span className={`${mono} text-[10px]`}>量比={e.vol_ratio}%(≥{e.vol_ratio_thr}%)</span>
       <span className={`${mono} text-[10px]`}>振幅={e.amplitude_pct}%</span>
       <span className={`${mono} text-[10px]`}>漲{e.change_pct}%</span>
@@ -168,7 +167,6 @@ function LiveTab() {
   const [status, setStatus] = useState<{ total_pnl: number; trade_count: number } | null>(null)
   const [positions, setPositions] = useState<any[]>([])
   const [ticks, setTicks] = useState<Record<string, any>>({})
-  const [futures, setFutures] = useState<Record<string, any>>({})
   const [engineRunning, setEngineRunning] = useState<boolean | null>(null)
   const evsRef = useRef<EventSource | null>(null)
   const [loading, setLoading] = useState(true)
@@ -238,15 +236,6 @@ function LiveTab() {
     return () => evs.close()
   }, [list?.date])
 
-  useEffect(() => {
-    if (!list?.stocks?.length) return
-    const syms = list.stocks.map((s: any) => s.stock_id).join(',')
-    const fetch = () => axios.get(`${API}/futures-snapshot?syms=${syms}`)
-      .then(r => { if (r.data?.data) setFutures(r.data.data) }).catch(() => {})
-    fetch()
-    const tid = setInterval(fetch, 30_000)
-    return () => clearInterval(tid)
-  }, [list?.date])
 
   const cancelConditions = async (symbol: string) => {
     setCancellingCond(symbol)
@@ -263,6 +252,7 @@ function LiveTab() {
   const pnlColor = (v: number) => v > 0 ? 'text-red-400' : v < 0 ? 'text-green-400' : 'text-[#6b84a0]'
 
   const stocks: any[] = list?.stocks ?? []
+  const liveStats: Record<string, { tick_rise: number; bid_1m_pct: number }> = stream?.live_stats ?? {}
   const idxData = ticks['__index__'] ?? {}
   const idxPrice: number | null = idxData.price ?? null
   const idxChgDayPct: number = idxData.chg_day_pct ?? 0
@@ -424,21 +414,17 @@ function LiveTab() {
                   <th className="px-3 py-2 text-left" style={{minWidth:150}}>代碼　名稱</th>
                   <th className="px-3 py-2 text-right" style={{minWidth:52}}>昨收</th>
                   <th className="px-3 py-2 text-right" style={{minWidth:60}}>現價</th>
-                  <th className="px-3 py-2 text-right" style={{minWidth:56}}>漲跌</th>
-                  <th className="px-3 py-2 text-right" style={{minWidth:66}}>漲跌%</th>
-                  <th className="px-3 py-2 text-left"  style={{minWidth:104}}>已成交買賣盤</th>
-                  <th className="px-3 py-2 text-right" style={{minWidth:56}}>期貨</th>
-                  <th className="px-3 py-2 text-right" style={{minWidth:50}}>差價</th>
-                  <th className="px-3 py-2 text-right" style={{minWidth:56}}>Open</th>
-                  <th className="px-3 py-2 text-right" style={{minWidth:56}}>High</th>
-                  <th className="px-3 py-2 text-right" style={{minWidth:56}}>Low</th>
-                  <th className="px-3 py-2 text-right" style={{minWidth:56}}>振幅%</th>
-                  <th className="px-3 py-2 text-right" style={{minWidth:72}}>今日累積量/5日均量</th>
+                  <th className="px-3 py-2 text-right" style={{minWidth:66}}>漲幅</th>
+                  <th className="px-3 py-2 text-right" style={{minWidth:64}}>1m tick↑</th>
+                  <th className="px-3 py-2 text-right" style={{minWidth:64}}>1m 買盤%</th>
+                  <th className="px-3 py-2 text-right" style={{minWidth:60}}>量比</th>
+                  <th className="px-3 py-2 text-right" style={{minWidth:56}}>振幅</th>
                 </tr>
               </thead>
               <tbody>
                 {stocks.map((s: any) => {
                   const tk = ticks[s.stock_id] ?? {}
+                  const ls = liveStats[s.stock_id]
                   const lp    = tk.price ?? null
                   const ref   = s.prev_close
                   const rtChg = lp != null && ref ? lp - ref : s.change
@@ -446,20 +432,9 @@ function LiveTab() {
                   const isUp  = rtChg >= 0
                   const accent = isUp ? 'border-l-red-400' : 'border-l-green-400'
                   const chgCls = isUp ? 'text-red-400' : 'text-green-400'
-
-                  const bp     = tk.bid_pct ?? null
-                  const ap     = bp != null ? 100 - bp : null
-                  const bidStr = bp != null && bp >= 65
-
-                  const open_v  = tk.open      ?? null
-                  const high_v  = tk.high      ?? null
-                  const low_v   = tk.low       ?? null
-                  const vol     = tk.vol_lots  ?? null
-                  const v1m     = tk.vol_1m    ?? null
-                  const vpm     = tk.vol_prev_1m ?? null
-                  const volRise = v1m != null && vpm != null && v1m > vpm
-
-                  const dash = <span className={muted}>—</span>
+                  const high_v = tk.high ?? null
+                  const low_v  = tk.low  ?? null
+                  const vol    = tk.vol_lots ?? null
 
                   return (
                     <tr key={s.stock_id} className="border-b border-[#253d5c] hover:bg-[#1a2d4a] transition-colors">
@@ -474,87 +449,47 @@ function LiveTab() {
                       <td className={`px-3 py-2.5 text-right ${mono} text-sm font-bold ${lp != null ? chgCls : muted}`}>
                         {lp != null ? lp.toFixed(1) : '—'}
                       </td>
-                      {/* 漲跌 (絕對值) */}
-                      <td className={`px-3 py-2.5 text-right ${mono} text-xs ${chgCls}`}>
-                        {`${isUp ? '+' : ''}${rtChg.toFixed(1)}`}
-                      </td>
-                      {/* 漲跌% */}
+                      {/* 漲幅 */}
                       <td className="px-3 py-2.5 text-right">
                         <span className={`inline-block px-1.5 py-0.5 rounded text-xs font-semibold ${mono} ${isUp ? 'bg-red-400/15 text-red-400' : 'bg-green-400/15 text-green-400'}`}>
                           {`${isUp ? '+' : ''}${rtPct.toFixed(2)}%`}
                         </span>
                       </td>
-                      {/* 買賣盤 — 委買 ≥ 65% 亮訊號 */}
-                      <td className="px-3 py-2.5">
-                        {bp != null ? (
-                          <div>
-                            <div className={`flex h-[5px] rounded overflow-hidden mb-0.5 ${bidStr ? 'ring-1 ring-red-400/60' : ''}`} style={{width:86}}>
-                              <div className="bg-red-400" style={{width:`${bp}%`}} />
-                              <div className="bg-green-400" style={{width:`${ap}%`}} />
-                            </div>
-                            <div className={`flex items-center justify-between text-[10px] ${mono}`} style={{width:86}}>
-                              <span className={bidStr ? 'text-red-400 font-bold' : 'text-red-300'}>
-                                買{bp.toFixed(0)}%{bidStr ? '▲' : ''}
-                              </span>
-                              <span className="text-green-400">賣{ap?.toFixed(0)}%</span>
-                            </div>
-                          </div>
-                        ) : dash}
-                      </td>
-                      {/* 期貨 */}
+                      {/* 1m tick↑ */}
                       <td className={`px-3 py-2.5 text-right ${mono} text-xs`}>
-                        {futures[s.stock_id] ? (
-                          <span className={futures[s.stock_id].change >= 0 ? 'text-red-400' : 'text-green-400'}>
-                            {futures[s.stock_id].price.toFixed(0)}
-                          </span>
-                        ) : <span className={muted}>—</span>}
-                      </td>
-                      {/* 差價 */}
-                      <td className={`px-3 py-2.5 text-right ${mono} text-xs`}>
-                        {futures[s.stock_id] && lp != null ? (() => {
-                          const sp = futures[s.stock_id].price - lp
-                          return <span className={sp >= 0 ? 'text-red-400' : 'text-green-400'}>{sp > 0 ? '+' : ''}{sp.toFixed(1)}</span>
+                        {ls != null ? (() => {
+                          const thr = stream?.tick_rise_threshold ?? 4
+                          const ok = ls.tick_rise >= thr
+                          return <span className={ok ? 'text-red-400 font-semibold' : 'text-[#dde6f0]'}>{ls.tick_rise}</span>
                         })() : <span className={muted}>—</span>}
                       </td>
-                      {/* Open */}
-                      <td className={`px-3 py-2.5 text-right ${mono} text-xs text-[#dde6f0]`}>
-                        {open_v != null ? open_v.toFixed(1) : '—'}
-                      </td>
-                      {/* High */}
-                      <td className={`px-3 py-2.5 text-right ${mono} text-xs text-red-400`}>
-                        {high_v != null ? high_v.toFixed(1) : '—'}
-                      </td>
-                      {/* Low */}
-                      <td className={`px-3 py-2.5 text-right ${mono} text-xs text-green-400`}>
-                        {low_v != null ? low_v.toFixed(1) : '—'}
-                      </td>
-                      {/* 振幅% = (High - Low) / 昨收 × 100 */}
+                      {/* 1m 買盤% */}
                       <td className={`px-3 py-2.5 text-right ${mono} text-xs`}>
-                        {high_v != null && low_v != null && ref ? (
-                          <span className="text-yellow-300">
-                            {((high_v - low_v) / ref * 100).toFixed(1)}%
-                          </span>
-                        ) : <span className={muted}>—</span>}
+                        {ls != null ? (() => {
+                          const thr = stream?.bid_1m_pct_threshold ?? 70
+                          const ok = ls.bid_1m_pct >= thr
+                          return <span className={ok ? 'text-red-400 font-semibold' : 'text-[#dde6f0]'}>{ls.bid_1m_pct}%</span>
+                        })() : <span className={muted}>—</span>}
                       </td>
-                      {/* 今日累積量 / 5日均量 % */}
-                      <td className="px-3 py-2.5">
+                      {/* 量比 = 今日累積量 / 5日均量 */}
+                      <td className={`px-3 py-2.5 text-right ${mono} text-xs`}>
                         {vol != null && vol > 0 && s.avg_vol5 > 0 ? (() => {
                           const paceRaw = vol / s.avg_vol5 * 100
-                          // 若 > 500% 代表 SDK 回傳分批競價累計量，顯示為異常
-                          if (paceRaw > 500) return <span title="SDK累計量異常，股票可能為分批競價處置股" className={`text-[10px] ${mono} text-orange-400`}>⚠ 異常</span>
-                          const barW    = Math.min(paceRaw, 100)
-                          const barCl   = paceRaw >= 100 ? 'bg-green-400' : paceRaw >= 50 ? 'bg-yellow-400' : 'bg-[#6b84a0]'
-                          const txtCl   = paceRaw >= 100 ? 'text-green-400' : paceRaw >= 50 ? 'text-yellow-400' : muted
-                          const label   = paceRaw < 1 ? '<1%' : `${Math.round(paceRaw)}%`
-                          return (
-                            <div className="flex items-center gap-1.5" style={{width:72}}>
-                              <div className="h-[4px] rounded bg-[#253d5c] flex-1">
-                                <div className={`h-full rounded ${barCl}`} style={{width:`${barW}%`}} />
-                              </div>
-                              <span className={`text-[10px] ${mono} ${txtCl} shrink-0`}>{label}</span>
-                            </div>
-                          )
+                          if (paceRaw > 500) return <span title="SDK累計量異常" className="text-orange-400">⚠</span>
+                          const cl = paceRaw >= 100 ? 'text-green-400' : paceRaw >= 50 ? 'text-yellow-400' : muted
+                          return <span className={cl}>{paceRaw < 1 ? '<1' : Math.round(paceRaw)}%</span>
                         })() : <span className={muted}>—</span>}
+                      </td>
+                      {/* 振幅 = (High - Low) / 昨收 × 100 */}
+                      <td className={`px-3 py-2.5 text-right ${mono} text-xs`}>
+                        {high_v != null && low_v != null && ref ? (
+                          (() => {
+                            const ampPct = (high_v - low_v) / ref * 100
+                            const thr = stream?.amplitude_min_pct ?? 3.0
+                            const ok = ampPct >= thr
+                            return <span className={ok ? 'text-yellow-300' : muted}>{ampPct.toFixed(1)}%</span>
+                          })()
+                        ) : <span className={muted}>—</span>}
                       </td>
                     </tr>
                   )

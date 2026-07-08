@@ -224,6 +224,16 @@ def create_app(
                     state = {"status": "unavailable"}
                     pnl = {"max_daily": _max_daily}
                     positions = []
+                live_stats: dict = {}
+                if _engine is not None and hasattr(_engine, "sessions"):
+                    for _sym, _sess in list(_engine.sessions.items()):
+                        try:
+                            live_stats[_sym] = {
+                                "tick_rise": round(_sess.tick_rise_60s, 1),
+                                "bid_1m_pct": round(_sess.bid_pct_window, 1),
+                            }
+                        except Exception:
+                            pass
                 msg = json.dumps(
                     {"type": "state", **state,
                      "dry_run": _trading_params.get("dry_run", True),
@@ -233,7 +243,8 @@ def create_app(
                      "bid_1m_pct_threshold": _trading_params.get("bid_1m_pct_threshold", 70.0),
                      "vol_ratio_coefficient": _trading_params.get("vol_ratio_coefficient", 1.3),
                      "entry_start_time": _trading_params.get("entry_start_time", "09:15"),
-                     "pnl": pnl, "positions": positions},
+                     "pnl": pnl, "positions": positions,
+                     "live_stats": live_stats},
                     ensure_ascii=False, default=str,
                 )
                 dead: set = set()
