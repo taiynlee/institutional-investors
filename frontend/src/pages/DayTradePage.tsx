@@ -296,7 +296,7 @@ function LiveTab() {
             const _mins = _h * 60 + _m - 9 * 60
             const _coef = (stream as any)?.vol_ratio_coefficient ?? 1.3
             const _volPct = Math.round(_mins * _coef * 10) / 10
-            return `進場九條件：\n① 時間窗口（進場開始 ~ 進場截止）\n② 同標的當下未持倉（可關閉）\n③ 今日進場次數 < max_daily_positions\n④ 個股漲跌幅在 ±max_change_pct 內\n⑤ ⭐必要（二擇一）：${stream?.tick_window_seconds ?? 60}秒內上漲 ≥ ${stream?.tick_rise_threshold ?? 4} tick，或觀察窗買盤佔比 ≥ ${stream?.bid_1m_pct_threshold ?? 70}%\n⑥ 若有個股期貨：期貨價 > 現價（正價差，可關閉）\n⑦ 已成交買盤 ≥ ${stream?.bid_pct_threshold ?? 60}%（可調）\n⑧ 今日累積量/5日均量 ≥ 開盤後觀察${_mins}分鐘×${_coef} = ${_volPct}%（係數可調）\n⑨ 振幅（今日動能）≥ ${stream?.amplitude_min_pct ?? 3}%（可調）`
+            return `進場八條件：\n① 時間窗口（進場開始 ~ 進場截止）\n② 同標的當下未持倉（可關閉）\n③ 今日進場次數 < max_daily_positions\n④ 個股漲跌幅在 ±max_change_pct 內\n⑤ ⭐必要（二擇一）：${stream?.tick_window_seconds ?? 60}秒內上漲 ≥ ${stream?.tick_rise_threshold ?? 4} tick，或觀察窗買盤佔比 ≥ ${stream?.bid_1m_pct_threshold ?? 70}%\n⑥ 若有個股期貨：期貨價 > 現價（正價差，可關閉）\n⑦ 今日累積量/5日均量 ≥ 開盤後觀察${_mins}分鐘×${_coef} = ${_volPct}%（係數可調）\n⑧ 振幅（今日動能）≥ ${stream?.amplitude_min_pct ?? 3}%（可調）`
           })()}
         >
           <span className="text-[10px] text-[#6b84a0] mb-0.5">今日已交易</span>
@@ -938,7 +938,6 @@ const PARAM_DEFS: PD[] = [
   // 進場條件（由常調 → 少調排序）
   { id:'tick_rise_threshold',      group:'進場條件', label:'tick 上漲門檻',          desc:'觀察窗口內股價上漲需 ≥ 此 tick 數才觸發進場；tick 依各價位不同計算', unit:'tick', rtKey:'tick_rise_threshold', type:'number', step:1, min:1 },
   { id:'bid_1m_pct_threshold',     group:'進場條件', label:'觀察窗口買盤佔比門檻',   desc:'條件⑤的第二觸發路徑：觀察窗口（tick_window_seconds）內買盤佔總成交量 >= 此%，即使上漲 tick 數不足，也允許進場。預設 70%，與「上漲 N tick」為二擇一', unit:'%', rtKey:'bid_1m_pct_threshold', type:'number', step:5, min:50, max:100 },
-  { id:'bid_pct_threshold',        group:'進場條件', label:'買盤比例門檻',           desc:'已成交買盤佔總成交量須達此比例才允許進場；買盤比例 = 買方成交量 / (買+賣) × 100', unit:'%', rtKey:'bid_pct_threshold', type:'number', step:5, min:0, max:100 },
   { id:'amplitude_min_pct',        group:'進場條件', label:'振幅門檻',               desc:'振幅 = (當日最高價 − 最低價) / 昨收 × 100%，反映這支股票今天的動能。振幅太低代表盤整沒方向，不適合當沖，建議設 3~5%', unit:'%', rtKey:'amplitude_min_pct', type:'number', step:0.5, min:0, max:20 },
   { id:'vol_ratio_coefficient',    group:'進場條件', label:'量比係數',               desc:'條件⑧量比門檻 = (進場開始時間 − 09:00 分鐘數) × 此係數。例：09:15進場、係數1.3 → 門檻=19.5%。係數越高代表要求開盤後的交易量相對5日均量越活躍才進場。預設1.3，可調整範圍0.5~5', unit:'', rtKey:'vol_ratio_coefficient', type:'number', step:0.1, min:0.1, max:5 },
   { id:'tick_window_seconds',      group:'進場條件', label:'tick 觀察窗口',          desc:'計算 tick_rise 用的滾動時間窗口（秒）；預設60秒 = 看過去1分鐘漲了幾tick', unit:'秒', rtKey:'tick_window_seconds', type:'number', step:10, min:10, max:300 },

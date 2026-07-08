@@ -293,10 +293,6 @@ class TradingEngine:
         def _check_futures_signal() -> bool:
             return str(_gs("check_futures_signal", "True")).lower() in ("true", "1", "yes")
 
-        def _bid_pct_threshold() -> float:
-            try: return max(0.0, float(_gs("bid_pct_threshold", "60.0")))
-            except Exception: return 60.0
-
         with self._lock:
             self._state["dry_run"] = dry_run
             self._state["max_daily_positions"] = max_daily_positions
@@ -956,8 +952,6 @@ class TradingEngine:
                 futures_signal=futures_signals.get(symbol),
                 entry_cutoff_mins=_entry_cutoff(),
                 entry_start_mins=_entry_start_mins(),
-                bid_pct=_bp,
-                bid_pct_threshold=_bid_pct_threshold(),
                 check_not_in_position=_check_not_in_position(),
                 check_futures_signal=_check_futures_signal(),
                 vol_ratio=_vr,
@@ -978,13 +972,11 @@ class TradingEngine:
                     "reason": result.reason or "ok",
                     # 條件⑤ 動能
                     "tick_rise": round(sess.tick_rise_60s, 1),
-                    "bid_1m_pct": round(sess.bid_pct_window, 1),   # 觀察窗口外盤%（條件⑤備用路徑）
-                    # 條件⑦ 累積買盤
-                    "bid_pct": round(_bp, 1),
-                    # 條件⑧ 量比
+                    "bid_1m_pct": round(sess.bid_pct_window, 1),
+                    # 條件⑦ 量比
                     "vol_ratio": round(_vr, 1),
-                    "vol_ratio_thr": round(_vol_ratio_min_pct(), 1),  # 當下門檻（隨時間變動）
-                    # 條件⑨ 振幅
+                    "vol_ratio_thr": round(_vol_ratio_min_pct(), 1),
+                    # 條件⑧ 振幅
                     "amplitude_pct": round(_amp, 2),
                     # 個股漲幅（條件④）
                     "change_pct": round(sess.change_pct, 2),
@@ -997,7 +989,6 @@ class TradingEngine:
                 entry_cutoff_mins=_entry_cutoff(),
                 entry_start_mins=_entry_start_mins(),
                 check_futures_signal=_check_futures_signal(),
-                bid_pct_threshold=_bid_pct_threshold(),
                 vol_ratio=_vr,
                 vol_ratio_min_pct=_vol_ratio_min_pct(),
                 amplitude_pct=_amp,
@@ -1030,7 +1021,6 @@ class TradingEngine:
                         f"📶 訊號觸發 [{_mode}] {symbol} {sname(symbol)}\n"
                         f"時間={now_tw().strftime('%H:%M:%S')}\n"
                         f"tick↑={_snap_tick}（門檻≥{_tick_rise_threshold()}）\n"
-                        f"外盤%={round(_bp,1)}%（門檻≥{_bid_pct_threshold()}%）\n"
                         f"1m買盤%={_snap_bid1m}%（門檻≥{_bid_1m_pct_threshold()}%）\n"
                         f"量比={round(_vr,1)}%（門檻≥{_thr_now}%）\n"
                         f"振幅={round(_amp,2)}%（門檻≥{_amplitude_min_pct()}%）\n"

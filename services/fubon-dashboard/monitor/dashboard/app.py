@@ -33,7 +33,6 @@ class TradingParamsBody(BaseModel):
     max_change_pct: float = 5.0
     check_not_in_position: bool = True
     check_futures_signal: bool = True
-    bid_pct_threshold: float = 60.0
     amplitude_min_pct: float = 3.0
     bid_1m_pct_threshold: float = 70.0
     vol_ratio_coefficient: float = 1.3
@@ -116,7 +115,7 @@ def create_app(
     _PARAM_KEYS = [
         "dry_run", "max_position_capital", "max_daily_positions", "commission_discount",
         "tick_rise_threshold", "tick_window_seconds", "max_change_pct",
-        "check_not_in_position", "check_futures_signal", "bid_pct_threshold", "amplitude_min_pct",
+        "check_not_in_position", "check_futures_signal", "amplitude_min_pct",
         "bid_1m_pct_threshold", "vol_ratio_coefficient",
         "stop_loss_ticks", "take_profit_add_pct",
         "entry_start_time", "latest_dynamic_add_time", "force_exit_time",
@@ -132,7 +131,6 @@ def create_app(
         "max_change_pct": 5.0,
         "check_not_in_position": True,
         "check_futures_signal": True,
-        "bid_pct_threshold": 60.0,
         "amplitude_min_pct": 3.0,
         "bid_1m_pct_threshold": 70.0,
         "vol_ratio_coefficient": 1.3,
@@ -154,7 +152,7 @@ def create_app(
             return int(v)
         if k in ("commission_discount", "take_profit_add_pct", "max_change_pct",
                  "daytrade_price_min", "daytrade_price_max",
-                 "bid_pct_threshold", "amplitude_min_pct", "bid_1m_pct_threshold",
+                 "amplitude_min_pct",
                  "vol_ratio_coefficient"):
             return float(v)
         return str(v)  # time strings
@@ -231,7 +229,6 @@ def create_app(
                      "dry_run": _trading_params.get("dry_run", True),
                      "tick_window_seconds": _trading_params.get("tick_window_seconds", 60),
                      "tick_rise_threshold": _trading_params.get("tick_rise_threshold", 4),
-                     "bid_pct_threshold": _trading_params.get("bid_pct_threshold", 60.0),
                      "amplitude_min_pct": _trading_params.get("amplitude_min_pct", 3.0),
                      "bid_1m_pct_threshold": _trading_params.get("bid_1m_pct_threshold", 70.0),
                      "vol_ratio_coefficient": _trading_params.get("vol_ratio_coefficient", 1.3),
@@ -484,11 +481,12 @@ def create_app(
         except Exception:
             pass
 
-        # 2. 策略A / 策略B / 策略C（聯集，去重）
+        # 2. 策略A / 策略B / 策略C（聯集，去重；傳 calc_date=base 避免 fallback 舊資料）
         score_count = 0
+        _calc_date = base.isoformat()
         try:
             for ep in (f"{_BACKEND}/api/score-a", f"{_BACKEND}/api/score-b"):
-                r = _httpx.get(ep, timeout=10)
+                r = _httpx.get(ep, params={"calc_date": _calc_date}, timeout=10)
                 if r.status_code == 200:
                     codes = [row["code"] for row in r.json() if "code" in row]
                     score_count += len(codes)
@@ -496,7 +494,7 @@ def create_app(
         except Exception:
             pass
         try:
-            r = _httpx.get(f"{_BACKEND}/api/score-c", timeout=15)
+            r = _httpx.get(f"{_BACKEND}/api/score-c", params={"calc_date": _calc_date}, timeout=15)
             if r.status_code == 200:
                 codes = [row["code"] for row in r.json() if "code" in row]
                 score_count += len(codes)

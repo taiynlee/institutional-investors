@@ -19,9 +19,8 @@ class SignalCombiner:
        (a) tick_window_seconds 秒內上漲 >= tick_rise_threshold 個 tick，或
        (b) 觀察窗口內買盤佔比 >= bid_1m_pct_threshold（預設 70%）
     6. 有個股期貨資料時：期貨價 > 現價（正價差，可關閉）
-    7. 已成交買盤 >= bid_pct_threshold（預設 60%，可調）
-    8. 今日累積量/5日均量 >= 開盤後觀察分鐘數 × vol_ratio_coefficient%
-    9. 當日振幅（(High-Low)/昨收×100）>= amplitude_min_pct（預設 3%，可調）
+    7. 今日累積量/5日均量 >= 開盤後觀察分鐘數 × vol_ratio_coefficient%
+    8. 當日振幅（(High-Low)/昨收×100）>= amplitude_min_pct（預設 3%，可調）
     """
 
     def __init__(
@@ -41,8 +40,6 @@ class SignalCombiner:
         tick_rise: float,
         tick_rise_threshold: int,
         futures_signal=None,
-        bid_pct: float = 50.0,
-        bid_pct_threshold: float = 60.0,
         check_not_in_position: bool = True,
         check_futures_signal: bool = True,
         vol_ratio: float = 100.0,
@@ -67,8 +64,6 @@ class SignalCombiner:
             return no(f"tick_rise_low_{tick_rise:.1f}_bid1m_{bid_1m_pct:.0f}pct")
         if check_futures_signal and futures_signal is not None and not futures_signal.is_leading():
             return no("futures_not_leading")
-        if bid_pct < bid_pct_threshold:
-            return no(f"bid_pct_low_{bid_pct:.0f}")
         if vol_ratio_min_pct > 0 and vol_ratio < vol_ratio_min_pct:
             return no(f"vol_ratio_low_{vol_ratio:.1f}pct_need_{vol_ratio_min_pct:.1f}pct")
         if amplitude_min_pct > 0 and amplitude_pct < amplitude_min_pct:
