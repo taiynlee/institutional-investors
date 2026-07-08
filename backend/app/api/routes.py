@@ -2344,15 +2344,16 @@ async def sync_daytrade_candidates(body: DaytradeSyncBody, db: AsyncSession = De
         rows = []
         for c in body.codes:
             snap = body.snapshots.get(c, {})
-            row: dict = {"trade_date": trade_date, "code": c}
-            if snap.get("ref_close") is not None:
-                row["ref_close"] = snap["ref_close"]
-                ref_d = snap.get("ref_close_date")
-                row["ref_close_date"] = date.fromisoformat(ref_d) if ref_d else None
-                row["avg_vol5_lot"] = snap.get("avg_vol5_lot")
-                row["chip_count"] = snap.get("chip_count")
-                row["above_ma20"] = snap.get("above_ma20")
-            rows.append(row)
+            ref_d = snap.get("ref_close_date")
+            rows.append({
+                "trade_date": trade_date,
+                "code": c,
+                "ref_close": snap.get("ref_close"),
+                "ref_close_date": date.fromisoformat(ref_d) if ref_d else None,
+                "avg_vol5_lot": snap.get("avg_vol5_lot"),
+                "chip_count": snap.get("chip_count"),
+                "above_ma20": snap.get("above_ma20"),
+            })
         await db.execute(
             pg_insert(DaytradeCandidate).values(rows).on_conflict_do_nothing()
         )
