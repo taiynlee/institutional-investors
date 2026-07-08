@@ -427,9 +427,9 @@ function LiveTab() {
                   const ls = liveStats[s.stock_id]
                   const lp    = tk.price ?? null
                   const ref   = s.prev_close
-                  const rtChg = lp != null && ref ? lp - ref : s.change
-                  const rtPct = lp != null && ref ? rtChg / ref * 100 : s.change_pct
-                  const isUp  = rtChg >= 0
+                  const rtChg = lp != null && ref ? lp - ref : null
+                  const rtPct = rtChg != null && ref ? rtChg / ref * 100 : null
+                  const isUp  = rtChg != null ? rtChg >= 0 : true
                   const accent = isUp ? 'border-l-red-400' : 'border-l-green-400'
                   const chgCls = isUp ? 'text-red-400' : 'text-green-400'
                   const high_v = tk.high ?? null
@@ -451,9 +451,11 @@ function LiveTab() {
                       </td>
                       {/* 漲幅 */}
                       <td className="px-3 py-2.5 text-right">
-                        <span className={`inline-block px-1.5 py-0.5 rounded text-xs font-semibold ${mono} ${isUp ? 'bg-red-400/15 text-red-400' : 'bg-green-400/15 text-green-400'}`}>
-                          {`${isUp ? '+' : ''}${rtPct.toFixed(2)}%`}
-                        </span>
+                        {rtPct != null ? (
+                          <span className={`inline-block px-1.5 py-0.5 rounded text-xs font-semibold ${mono} ${isUp ? 'bg-red-400/15 text-red-400' : 'bg-green-400/15 text-green-400'}`}>
+                            {`${isUp ? '+' : ''}${rtPct.toFixed(2)}%`}
+                          </span>
+                        ) : <span className={muted}>—</span>}
                       </td>
                       {/* 1m tick↑ */}
                       <td className={`px-3 py-2.5 text-right ${mono} text-xs`}>

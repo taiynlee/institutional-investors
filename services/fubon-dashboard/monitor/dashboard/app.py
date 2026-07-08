@@ -1818,11 +1818,11 @@ def create_app(
             return {}
         try:
             ph = ','.join('?' * len(symbols))
-            # Latest price
+            # Latest price（今日限定，避免引擎未啟動時回傳昨日舊 tick）
             for sym, p in c.execute(
                 f"SELECT symbol, price FROM ticks WHERE id IN ("
-                f"SELECT MAX(id) FROM ticks WHERE symbol IN ({ph}) GROUP BY symbol)",
-                symbols,
+                f"SELECT MAX(id) FROM ticks WHERE symbol IN ({ph}) AND ts LIKE ? GROUP BY symbol)",
+                symbols + [today_pct],
             ).fetchall():
                 out.setdefault(sym, {})["price"] = p
 
