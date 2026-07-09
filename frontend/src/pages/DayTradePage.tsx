@@ -558,17 +558,23 @@ function LiveTab() {
                       {/* 1m tick↑ */}
                       <td className={`px-3 py-2.5 text-right ${mono} text-xs`}>
                         {ls != null ? (() => {
-                          const thr = stream?.tick_rise_threshold ?? 4
-                          const ok = ls.tick_rise >= thr
-                          return <span className={ok ? 'text-red-400 font-semibold' : 'text-[#dde6f0]'}>{ls.tick_rise}</span>
+                          const thrT = stream?.tick_rise_threshold ?? 4
+                          const thrB = stream?.bid_1m_pct_threshold ?? 70
+                          const okT = ls.tick_rise >= thrT
+                          const okB = ls.bid_1m_pct >= thrB
+                          const cls = (okT && okB) ? 'text-red-400 font-semibold' : okT ? 'text-yellow-400' : 'text-[#dde6f0]'
+                          return <span className={cls}>{ls.tick_rise}</span>
                         })() : <span className={muted}>—</span>}
                       </td>
                       {/* 1m 買盤% */}
                       <td className={`px-3 py-2.5 text-right ${mono} text-xs`}>
                         {ls != null ? (() => {
-                          const thr = stream?.bid_1m_pct_threshold ?? 70
-                          const ok = ls.bid_1m_pct >= thr
-                          return <span className={ok ? 'text-red-400 font-semibold' : 'text-[#dde6f0]'}>{ls.bid_1m_pct}%</span>
+                          const thrT = stream?.tick_rise_threshold ?? 4
+                          const thrB = stream?.bid_1m_pct_threshold ?? 70
+                          const okT = ls.tick_rise >= thrT
+                          const okB = ls.bid_1m_pct >= thrB
+                          const cls = (okT && okB) ? 'text-red-400 font-semibold' : okB ? 'text-yellow-400' : 'text-[#dde6f0]'
+                          return <span className={cls}>{ls.bid_1m_pct}%</span>
                         })() : <span className={muted}>—</span>}
                       </td>
                       {/* 量比 = 今日累積量 / 5日均量 */}
@@ -973,8 +979,8 @@ const PARAM_DEFS: PD[] = [
   { id:'max_position_capital', group:'倉位控制', label:'每次進場資金上限', desc:'每次進場最多動用的資金（超過就截斷）；張數 = floor(min(上限, 剩餘總資金) / (價格 × 1000))', unit:'TWD', rtKey:'max_position_capital', type:'number', step:100000, min:100000 },
   { id:'max_daily_positions',  group:'倉位控制', label:'每日進場次數上限', desc:'一天最多進場幾次（同標的可重複計入）；達上限後當日不再開新倉', unit:'次', rtKey:'max_daily_positions', type:'number', step:1, min:1 },
   // 進場條件（由常調 → 少調排序）
-  { id:'tick_rise_threshold',      group:'進場條件', label:'tick 上漲門檻',          desc:'觀察窗口內股價上漲需 ≥ 此 tick 數才觸發進場；tick 依各價位不同計算', unit:'tick', rtKey:'tick_rise_threshold', type:'number', step:1, min:1 },
-  { id:'bid_1m_pct_threshold',     group:'進場條件', label:'觀察窗口買盤佔比門檻',   desc:'條件⑤的第二觸發路徑：觀察窗口（tick_window_seconds）內買盤佔總成交量 >= 此%，即使上漲 tick 數不足，也允許進場。預設 70%，與「上漲 N tick」為二擇一', unit:'%', rtKey:'bid_1m_pct_threshold', type:'number', step:5, min:50, max:100 },
+  { id:'tick_rise_threshold',      group:'進場條件', label:'tick 上漲門檻',          desc:'條件⑤的第一必要條件：觀察窗口內股價上漲需 ≥ 此 tick 數；須同時滿足「買盤佔比門檻」才允許進場（二者皆須成立）', unit:'tick', rtKey:'tick_rise_threshold', type:'number', step:1, min:1 },
+  { id:'bid_1m_pct_threshold',     group:'進場條件', label:'觀察窗口買盤佔比門檻',   desc:'條件⑤的第二必要條件：觀察窗口（tick_window_seconds）內買盤佔總成交量 >= 此%。須與「上漲 N tick」同時成立才允許進場（二者皆須滿足）。預設 70%', unit:'%', rtKey:'bid_1m_pct_threshold', type:'number', step:5, min:50, max:100 },
   { id:'amplitude_min_pct',        group:'進場條件', label:'振幅門檻',               desc:'振幅 = (當日最高價 − 最低價) / 昨收 × 100%，反映這支股票今天的動能。振幅太低代表盤整沒方向，不適合當沖，建議設 3~5%', unit:'%', rtKey:'amplitude_min_pct', type:'number', step:0.5, min:0, max:20 },
   { id:'vol_ratio_coefficient',    group:'進場條件', label:'量比係數',               desc:'條件⑧量比門檻 = (進場開始時間 − 09:00 分鐘數) × 此係數。例：09:15進場、係數1.3 → 門檻=19.5%。係數越高代表要求開盤後的交易量相對5日均量越活躍才進場。預設1.3，可調整範圍0.5~5', unit:'', rtKey:'vol_ratio_coefficient', type:'number', step:0.1, min:0.1, max:5 },
   { id:'tick_window_seconds',      group:'進場條件', label:'tick 觀察窗口',          desc:'計算 tick_rise 用的滾動時間窗口（秒）；預設60秒 = 看過去1分鐘漲了幾tick', unit:'秒', rtKey:'tick_window_seconds', type:'number', step:10, min:10, max:300 },
