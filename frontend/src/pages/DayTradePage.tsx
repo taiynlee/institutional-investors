@@ -340,7 +340,7 @@ function LiveTab() {
             const _volPct = Math.round(_mins * _coef * 10) / 10
             const _vol1mCoef = (stream as any)?.vol_1m_coef ?? 1.0
             const _c5c = _vol1mCoef > 0
-              ? `(c) 過去60秒外盤量 ≥ 5日均量÷270×${_vol1mCoef}（主動買盤量，=0關閉）`
+              ? `(c) 過去60秒外盤量 ≥ 近5分均量×${_vol1mCoef}（=0關閉；資料不足自動跳過）`
               : `(c) 外盤量條件已關閉（vol_1m_coef=0）`
             return `進場九條件：\n① 時間窗口（進場開始 ~ 進場截止）\n② 同標的當下未持倉（可關閉）\n③ 今日進場次數 < max_daily_positions\n④ 個股漲跌幅在 ±max_change_pct 內\n⑤ ⭐必要（三者同時成立）：\n   (a) ${stream?.tick_window_seconds ?? 60}秒內上漲 ≥ ${stream?.tick_rise_threshold ?? 4} tick\n   (b) 觀察窗買盤佔比 ≥ ${stream?.bid_1m_pct_threshold ?? 70}%\n   ${_c5c}\n⑥ 若有個股期貨：期貨價 > 現價（正價差，可關閉）\n⑦ 今日累積量/5日均量 ≥ 開盤後觀察${_mins}分鐘×${_coef} = ${_volPct}%（係數可調）\n⑧ 振幅（今日動能）≥ ${stream?.amplitude_min_pct ?? 3}%（可調）`
           })()}
@@ -584,16 +584,17 @@ function LiveTab() {
                           return <span className={cls}>{ls.bid_1m_pct}%</span>
                         })() : <span className={muted}>—</span>}
                       </td>
-                      {/* 1m量(張) */}
+                      {/* 1m外盤(張) */}
                       <td className={`px-3 py-2.5 text-right ${mono} text-xs`}>
                         {ls != null && (ls as any).vol_1m != null ? (() => {
                           const v1m = (ls as any).vol_1m as number
-                          const avg5 = s.avg_vol5 ?? 0
-                          const coef = (stream as any)?.vol_1m_coef ?? 1.0
-                          const thr = coef > 0 && avg5 > 0 ? avg5 / 270 * coef : 0
+                          const p5avg = (ls as any).past_5m_avg as number ?? 0
+                          const coef = (stream as any)?.vol_1m_coef ?? 0.8
+                          const thr = coef > 0 && p5avg > 0 ? p5avg * coef : 0
                           const ok = thr <= 0 || v1m >= thr
                           const cls = ok ? 'text-green-400' : 'text-orange-400'
-                          return <span className={cls} title={thr > 0 ? `門檻 ${thr.toFixed(1)} 張` : '條件已關閉'}>{v1m}</span>
+                          const tip = thr > 0 ? `近5分均=${p5avg}張 × ${coef} → 門檻${thr.toFixed(1)}張` : p5avg === 0 ? '資料不足跳過' : '條件已關閉'
+                          return <span className={cls} title={tip}>{v1m}</span>
                         })() : <span className={muted}>—</span>}
                       </td>
                       {/* 量比 = 今日累積量 / 5日均量 */}
@@ -1000,7 +1001,7 @@ const PARAM_DEFS: PD[] = [
   // 進場條件（由常調 → 少調排序）
   { id:'tick_rise_threshold',      group:'進場條件', label:'⑤a tick 上漲門檻',       desc:'⭐ 必要三條件 (a)：觀察窗口內股價上漲需 ≥ 此 tick 數。須與 (b) 買盤佔比、(c) 1分鐘外盤量同時成立，三者缺一不可才允許進場', unit:'tick', rtKey:'tick_rise_threshold', type:'number', step:1, min:1 },
   { id:'bid_1m_pct_threshold',     group:'進場條件', label:'⑤b 買盤佔比門檻',        desc:'⭐ 必要三條件 (b)：觀察窗口（tick_window_seconds）內買盤佔總成交量 ≥ 此%。須與 (a) tick 上漲、(c) 1分鐘外盤量同時成立，三者缺一不可。預設 70%', unit:'%', rtKey:'bid_1m_pct_threshold', type:'number', step:5, min:50, max:100 },
-  { id:'vol_1m_coef',             group:'進場條件', label:'⑤c 1分鐘外盤量係數',      desc:'⭐ 必要三條件 (c)：過去60秒外盤量(張) ≥ 5日均量(張) ÷ 270 × 此係數。須與 (a)(b) 同時成立。外盤量 = 成交價 ≥ 賣一的主動買單撮合量。設0關閉此子條件。例：5日均量5000張 → 門檻 ≈ 18.5張。預設1.0', unit:'倍', rtKey:'vol_1m_coef', type:'number', step:0.1, min:0, max:10 },
+  { id:'vol_1m_coef',             group:'進場條件', label:'⑤c 外盤量係數',            desc:'⭐ 必要三條件 (c)：過去60秒外盤量(張) ≥ 近5分鐘平均每分鐘總成交量(張) × 此係數。須與 (a)(b) 同時成立。設0關閉此子條件；資料不足2分鐘自動跳過。外盤量 = 成交價 ≥ 賣一的主動買單撮合量。例：近5分均量100張、係數0.8 → 外盤需≥80張。預設0.8', unit:'倍', rtKey:'vol_1m_coef', type:'number', step:0.1, min:0, max:5 },
   { id:'amplitude_min_pct',        group:'進場條件', label:'振幅門檻',               desc:'振幅 = (當日最高價 − 最低價) / 昨收 × 100%，反映這支股票今天的動能。振幅太低代表盤整沒方向，不適合當沖，建議設 3~5%', unit:'%', rtKey:'amplitude_min_pct', type:'number', step:0.5, min:0, max:20 },
   { id:'vol_ratio_coefficient',    group:'進場條件', label:'量比係數',               desc:'條件⑦量比門檻 = (進場開始時間 − 09:00 分鐘數) × 此係數。例：09:15進場、係數1.3 → 門檻=19.5%。係數越高代表要求開盤後的交易量相對5日均量越活躍才進場。預設1.3，可調整範圍0.5~5', unit:'', rtKey:'vol_ratio_coefficient', type:'number', step:0.1, min:0.1, max:5 },
   { id:'tick_window_seconds',      group:'進場條件', label:'tick 觀察窗口',          desc:'計算 tick_rise 用的滾動時間窗口（秒）；預設60秒 = 看過去1分鐘漲了幾tick', unit:'秒', rtKey:'tick_window_seconds', type:'number', step:10, min:10, max:300 },

@@ -18,7 +18,8 @@ class SignalCombiner:
     5. ⭐ 必要條件（三者同時成立）：
        (a) tick_window_seconds 秒內上漲 >= tick_rise_threshold 個 tick，且
        (b) 觀察窗口內買盤佔比 >= bid_1m_pct_threshold（預設 70%），且
-       (c) 過去 60 秒外盤量(張) >= avg_vol5_lot ÷ 270 × vol_1m_coef（0=關閉，預設 1.0）
+       (c) 過去 60 秒外盤量(張) >= 近5分鐘平均每分鐘總成交量(張) × vol_1m_coef
+           （0=關閉；資料不足2分鐘自動跳過；預設 0.8）
     6. 有個股期貨資料時：期貨價 > 現價（正價差，可關閉）
     7. 今日累積量/5日均量 >= 開盤後觀察分鐘數 × vol_ratio_coefficient%
     8. 當日振幅（(High-Low)/昨收×100）>= amplitude_min_pct（預設 3%，可調）
@@ -50,8 +51,8 @@ class SignalCombiner:
         bid_1m_pct: float = 50.0,
         bid_1m_pct_threshold: float = 70.0,
         vol_1m_lots: float = 0.0,
-        avg_vol5_lot: float = 0.0,
-        vol_1m_coef: float = 1.0,
+        past_5min_avg_vol: float = 0.0,
+        vol_1m_coef: float = 0.8,
     ) -> SignalResult:
         def no(r):
             return SignalResult(symbol=symbol, should_enter=False, reason=r)
@@ -67,8 +68,8 @@ class SignalCombiner:
         # ⑤ 三者同時成立 (a)(b)(c)
         if tick_rise < tick_rise_threshold or bid_1m_pct < bid_1m_pct_threshold:
             return no(f"tick_rise_low_{tick_rise:.1f}_bid1m_{bid_1m_pct:.0f}pct")
-        if vol_1m_coef > 0 and avg_vol5_lot > 0:
-            min_vol = avg_vol5_lot / 270 * vol_1m_coef
+        if vol_1m_coef > 0 and past_5min_avg_vol > 0:
+            min_vol = past_5min_avg_vol * vol_1m_coef
             if vol_1m_lots < min_vol:
                 return no(f"vol_1m_low_{vol_1m_lots:.1f}lots_need_{min_vol:.1f}lots")
         if check_futures_signal and futures_signal is not None and not futures_signal.is_leading():

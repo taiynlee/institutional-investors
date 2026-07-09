@@ -29,9 +29,13 @@ class SymbolSession:
 
         # 60秒滾動價格歷史（用於 tick_rise_60s 計算）
         self._price_history: deque = deque()  # (datetime, price)
-        # 60秒滾動買賣盤成交量歷史（用於 bid_pct_window 計算）
+        # 60秒滾動買賣盤成交量歷史（用於 bid_pct_window / vol_1m_lots 計算）
         self._quote_history: deque = deque()  # (datetime, bid_vol, ask_vol)
-        # _vol_history 已移除：vol_1m_lots 改用 _quote_history 的外盤量（bid_vol）
+
+        # 分鐘桶：追蹤每根完整分鐘的總成交量（張），用於近5分鐘均量基準
+        self._curr_minute_key: int = -1       # 當前分鐘 = hour*60+minute
+        self._curr_min_vol_acc: float = 0.0  # 本分鐘累計總量（張）
+        self._min_vol_hist: deque = deque(maxlen=6)  # 近6根完整分鐘的總量（張）
 
     def on_tick(self, price: float, size: int, ts_ns: int, tick_window_seconds: int = 60):
         self.curr_price = price
@@ -42,12 +46,21 @@ class SymbolSession:
         self._price_history.append((dt, price))
         while self._price_history and self._price_history[0][0] < cutoff:
             self._price_history.popleft()
+        # 更新分鐘桶（總成交量，size 單位：股，÷1000=張）
+        minute_key = dt.hour * 60 + dt.minute
+        if self._curr_minute_key == -1:
+            self._curr_minute_key = minute_key
+        if minute_key != self._curr_minute_key:
+            self._min_vol_hist.append(self._curr_min_vol_acc)
+            self._curr_minute_key = minute_key
+            self._curr_min_vol_acc = 0.0
+        self._curr_min_vol_acc += size / 1000
 
     def on_quote(self, bids: list, asks: list):
         pass  # quote data no longer used
 
     def on_bid_ask_tick(self, bid_vol: int, ask_vol: int, window_seconds: int = 60):
-        """記錄本 tick 的買賣量到滾動窗口，用於計算觀察期間買盤佔比。"""
+        """記錄本 tick 的買賣量到滾動窗口，用於計算觀察期間買盤佔比與外盤量。"""
         dt = now_tw()
         self._quote_history.append((dt, bid_vol, ask_vol))
         cutoff = dt - timedelta(seconds=window_seconds)
@@ -76,6 +89,14 @@ class SymbolSession:
     def vol_1m_lots(self) -> float:
         """過去 60 秒內外盤成交量（張）。bid_vol 單位：股，÷1000=張。"""
         return sum(b for _, b, _ in self._quote_history) / 1000
+
+    @property
+    def past_5min_avg_vol_lots(self) -> float:
+        """近5根完整分鐘K的平均每分鐘總成交量（張）。不足2筆回傳0（跳過條件）。"""
+        hist = list(self._min_vol_hist)[-5:]
+        if len(hist) < 2:
+            return 0.0
+        return sum(hist) / len(hist)
 
     @property
     def tick_rise_60s(self) -> float:
@@ -107,8 +128,8 @@ class SymbolSession:
         amplitude_min_pct: float = 3.0,
         bid_1m_pct: float = 50.0,
         bid_1m_pct_threshold: float = 70.0,
-        avg_vol5_lot: float = 0.0,
-        vol_1m_coef: float = 1.0,
+        past_5min_avg_vol: float = 0.0,
+        vol_1m_coef: float = 0.8,
     ) -> SignalResult:
         current_mins = current_time.hour * 60 + current_time.minute
         time_ok = current_mins >= entry_start_mins and current_mins < entry_cutoff_mins
@@ -131,7 +152,7 @@ class SymbolSession:
             bid_1m_pct=bid_1m_pct,
             bid_1m_pct_threshold=bid_1m_pct_threshold,
             vol_1m_lots=self.vol_1m_lots,
-            avg_vol5_lot=avg_vol5_lot,
+            past_5min_avg_vol=past_5min_avg_vol,
             vol_1m_coef=vol_1m_coef,
         )
 
@@ -150,8 +171,8 @@ class SymbolSession:
         amplitude_min_pct: float = 3.0,
         bid_1m_pct: float = 50.0,
         bid_1m_pct_threshold: float = 70.0,
-        avg_vol5_lot: float = 0.0,
-        vol_1m_coef: float = 1.0,
+        past_5min_avg_vol: float = 0.0,
+        vol_1m_coef: float = 0.8,
     ) -> SignalResult:
         current_mins = current_time.hour * 60 + current_time.minute
         time_ok = current_mins >= entry_start_mins and current_mins < entry_cutoff_mins
@@ -174,6 +195,6 @@ class SymbolSession:
             bid_1m_pct=bid_1m_pct,
             bid_1m_pct_threshold=bid_1m_pct_threshold,
             vol_1m_lots=self.vol_1m_lots,
-            avg_vol5_lot=avg_vol5_lot,
+            past_5min_avg_vol=past_5min_avg_vol,
             vol_1m_coef=vol_1m_coef,
         )

@@ -946,7 +946,8 @@ class TradingEngine:
             _snap_tick  = round(sess.tick_rise_60s, 1)
             _snap_bid1m = round(sess.bid_pct_window, 1)
             _snap_chg   = round(sess.change_pct, 2)
-            _snap_vol1m = round(sess.vol_1m_lots, 1)
+            _snap_vol1m   = round(sess.vol_1m_lots, 1)
+            _snap_past5avg = round(sess.past_5min_avg_vol_lots, 1)
             result = sess.evaluate(
                 combiner=combiner,
                 current_time=now_time,
@@ -965,11 +966,12 @@ class TradingEngine:
                 amplitude_min_pct=_amplitude_min_pct(),
                 bid_1m_pct=sess.bid_pct_window,
                 bid_1m_pct_threshold=_bid_1m_pct_threshold(),
-                avg_vol5_lot=_avg5,
+                past_5min_avg_vol=_snap_past5avg,
                 vol_1m_coef=_vol_1m_coef(),
             )
             # 只在 60s tick 條件達標時才記 log（避免噪音）
             if sess.tick_rise_60s >= _thr:
+                _v1m_thr = round(_snap_past5avg * _vol_1m_coef(), 1) if _snap_past5avg > 0 else 0
                 _append_log({
                     "type": "eval",
                     "ts": now_tw().strftime("%H:%M:%S"),
@@ -985,9 +987,10 @@ class TradingEngine:
                     "vol_ratio_thr": round(_vol_ratio_min_pct(), 1),
                     # 條件⑧ 振幅
                     "amplitude_pct": round(_amp, 2),
-                    # 條件⑨ 1分鐘量
+                    # 條件⑤c 外盤量 vs 近5分均量
                     "vol_1m": _snap_vol1m,
-                    "vol_1m_thr": round(_avg5 / 270 * _vol_1m_coef(), 1) if _avg5 > 0 else 0,
+                    "vol_1m_thr": _v1m_thr,
+                    "past_5m_avg": _snap_past5avg,
                     # 個股漲幅（條件④）
                     "change_pct": round(sess.change_pct, 2),
                 })
@@ -1005,7 +1008,7 @@ class TradingEngine:
                 amplitude_min_pct=_amplitude_min_pct(),
                 bid_1m_pct=sess.bid_pct_window,
                 bid_1m_pct_threshold=_bid_1m_pct_threshold(),
-                avg_vol5_lot=_avg5,
+                past_5min_avg_vol=_snap_past5avg,
                 vol_1m_coef=_vol_1m_coef(),
             )
 
@@ -1029,13 +1032,13 @@ class TradingEngine:
                     _notified_today.add(symbol)
                     _thr_now = round(_vol_ratio_min_pct(), 1)
                     _mode = "DRY RUN" if _is_dry_run() else "實盤"
-                    _v1m_thr = round(_avg5 / 270 * _vol_1m_coef(), 1) if _avg5 > 0 else 0
+                    _v1m_thr = round(_snap_past5avg * _vol_1m_coef(), 1) if _snap_past5avg > 0 else 0
                     notifier.send(
                         f"📶 訊號觸發 [{_mode}] {symbol} {sname(symbol)}\n"
                         f"時間={now_tw().strftime('%H:%M:%S')}\n"
                         f"1m tick↑={_snap_tick}（門檻≥{_tick_rise_threshold()}）\n"
                         f"1m買盤%={_snap_bid1m}%（門檻≥{_bid_1m_pct_threshold()}%）\n"
-                        f"1m外盤量={_snap_vol1m}張（門檻≥{_v1m_thr}張）\n"
+                        f"1m外盤量={_snap_vol1m}張（門檻≥{_v1m_thr}張，近5分均={_snap_past5avg}張）\n"
                         f"量比={round(_vr,1)}%（門檻≥{_thr_now}%）\n"
                         f"振幅={round(_amp,2)}%（門檻≥{_amplitude_min_pct()}%）\n"
                         f"漲幅={_snap_chg}%",

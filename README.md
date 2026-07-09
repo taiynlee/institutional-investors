@@ -229,7 +229,7 @@ Docker Compose（frontend nginx）
 | 2 | 同標的當下未持倉 | `check_not_in_position`（預設 true） | ✅ 開關 |
 | 3 | 今日進場次數 < 上限 | `max_daily_positions`（預設 5） | ✅ 數值 |
 | 4 | 個股漲跌幅在 ±N% 以內 | `max_change_pct`（預設 5%） | ✅ 數值 |
-| **5** | **⭐ 必要條件（三者同時成立）**：<br>(a) 觀察窗口內上漲 ≥ N tick<br>(b) 觀察窗口買盤佔比 ≥ M%<br>(c) 過去 60 秒外盤量(張) ≥ 5日均量÷270×係數 | (a) `tick_rise_threshold`（預設 4）<br>(b) `bid_1m_pct_threshold`（預設 70%）<br>(c) `vol_1m_coef`（預設 1.0，設 0 關閉子條件） | ✅ 數值 |
+| **5** | **⭐ 必要條件（三者同時成立）**：<br>(a) 觀察窗口內上漲 ≥ N tick<br>(b) 觀察窗口買盤佔比 ≥ M%<br>(c) 過去 60 秒外盤量(張) ≥ 近5分鐘平均每分鐘總成交量(張) × 係數（動態基準，適應盤中量能節奏；資料不足2分鐘自動跳過） | (a) `tick_rise_threshold`（預設 4）<br>(b) `bid_1m_pct_threshold`（預設 70%）<br>(c) `vol_1m_coef`（預設 0.8，設 0 關閉子條件） | ✅ 數值 |
 | 6 | 個股期貨正價差（有期貨資料才判斷） | `check_futures_signal`（預設 true） | ✅ 開關 |
 | 7 | 今日累積量/5日均量 >= 開盤後觀察分鐘數 × 係數% | `vol_ratio_coefficient`（預設 1.3）；例：09:15進場 → 15×1.3=19.5% | ✅ 數值 |
 | 8 | 振幅（今日動能）>= 門檻 | `amplitude_min_pct`（預設 3%）；振幅 = (High-Low)/昨收×100% | ✅ 數值 |

@@ -36,7 +36,7 @@ class TradingParamsBody(BaseModel):
     amplitude_min_pct: float = 3.0
     bid_1m_pct_threshold: float = 70.0
     vol_ratio_coefficient: float = 1.3
-    vol_1m_coef: float = 1.0
+    vol_1m_coef: float = 0.8
     # 停損停利
     stop_loss_ticks: int = 4
     take_profit_add_pct: float = 4.0
@@ -135,7 +135,7 @@ def create_app(
         "amplitude_min_pct": 3.0,
         "bid_1m_pct_threshold": 70.0,
         "vol_ratio_coefficient": 1.3,
-        "vol_1m_coef": 1.0,
+        "vol_1m_coef": 0.8,
         "stop_loss_ticks": 4,
         "take_profit_add_pct": 4.0,
         "entry_start_time": "09:15",
@@ -267,6 +267,7 @@ def create_app(
                                 "tick_rise": round(_sess.tick_rise_60s, 1),
                                 "bid_1m_pct": round(_sess.bid_pct_window, 1),
                                 "vol_1m": round(_sess.vol_1m_lots, 1),
+                                "past_5m_avg": round(_sess.past_5min_avg_vol_lots, 1),
                             }
                         except Exception:
                             pass
