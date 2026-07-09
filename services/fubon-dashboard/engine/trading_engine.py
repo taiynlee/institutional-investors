@@ -1029,11 +1029,13 @@ class TradingEngine:
                     _notified_today.add(symbol)
                     _thr_now = round(_vol_ratio_min_pct(), 1)
                     _mode = "DRY RUN" if _is_dry_run() else "實盤"
+                    _v1m_thr = round(_avg5 / 270 * _vol_1m_coef(), 1) if _avg5 > 0 else 0
                     notifier.send(
                         f"📶 訊號觸發 [{_mode}] {symbol} {sname(symbol)}\n"
                         f"時間={now_tw().strftime('%H:%M:%S')}\n"
                         f"tick↑={_snap_tick}（門檻≥{_tick_rise_threshold()}）\n"
                         f"1m買盤%={_snap_bid1m}%（門檻≥{_bid_1m_pct_threshold()}%）\n"
+                        f"1m外盤量={_snap_vol1m}張（門檻≥{_v1m_thr}張）\n"
                         f"量比={round(_vr,1)}%（門檻≥{_thr_now}%）\n"
                         f"振幅={round(_amp,2)}%（門檻≥{_amplitude_min_pct()}%）\n"
                         f"漲幅={_snap_chg}%",

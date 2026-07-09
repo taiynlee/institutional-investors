@@ -21,7 +21,7 @@ class SignalCombiner:
     6. 有個股期貨資料時：期貨價 > 現價（正價差，可關閉）
     7. 今日累積量/5日均量 >= 開盤後觀察分鐘數 × vol_ratio_coefficient%
     8. 當日振幅（(High-Low)/昨收×100）>= amplitude_min_pct（預設 3%，可調）
-    9. 過去 60 秒成交量(張) >= avg_vol5_lot ÷ 270 × vol_1m_coef（0=關閉，預設 1.0）
+    9. 過去 60 秒外盤量(張) >= avg_vol5_lot ÷ 270 × vol_1m_coef（0=關閉，預設 1.0）
     """
 
     def __init__(
