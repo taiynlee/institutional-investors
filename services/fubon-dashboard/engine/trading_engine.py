@@ -1033,7 +1033,7 @@ class TradingEngine:
                     notifier.send(
                         f"📶 訊號觸發 [{_mode}] {symbol} {sname(symbol)}\n"
                         f"時間={now_tw().strftime('%H:%M:%S')}\n"
-                        f"tick↑={_snap_tick}（門檻≥{_tick_rise_threshold()}）\n"
+                        f"1m tick↑={_snap_tick}（門檻≥{_tick_rise_threshold()}）\n"
                         f"1m買盤%={_snap_bid1m}%（門檻≥{_bid_1m_pct_threshold()}%）\n"
                         f"1m外盤量={_snap_vol1m}張（門檻≥{_v1m_thr}張）\n"
                         f"量比={round(_vr,1)}%（門檻≥{_thr_now}%）\n"
