@@ -31,8 +31,7 @@ class SymbolSession:
         self._price_history: deque = deque()  # (datetime, price)
         # 60秒滾動買賣盤成交量歷史（用於 bid_pct_window 計算）
         self._quote_history: deque = deque()  # (datetime, bid_vol, ask_vol)
-        # 60秒滾動成交量歷史（用於 vol_1m_lots 計算）
-        self._vol_history: deque = deque()  # (datetime, size_lots)
+        # _vol_history 已移除：vol_1m_lots 改用 _quote_history 的外盤量（bid_vol）
 
     def on_tick(self, price: float, size: int, ts_ns: int, tick_window_seconds: int = 60):
         self.curr_price = price
@@ -43,10 +42,6 @@ class SymbolSession:
         self._price_history.append((dt, price))
         while self._price_history and self._price_history[0][0] < cutoff:
             self._price_history.popleft()
-        # 更新滾動成交量歷史（size 單位：股，÷1000=張）
-        self._vol_history.append((dt, size / 1000))
-        while self._vol_history and self._vol_history[0][0] < cutoff:
-            self._vol_history.popleft()
 
     def on_quote(self, bids: list, asks: list):
         pass  # quote data no longer used
@@ -79,8 +74,8 @@ class SymbolSession:
 
     @property
     def vol_1m_lots(self) -> float:
-        """過去 60 秒內的成交量（張）。"""
-        return sum(v for _, v in self._vol_history)
+        """過去 60 秒內外盤成交量（張）。bid_vol 單位：股，÷1000=張。"""
+        return sum(b for _, b, _ in self._quote_history) / 1000
 
     @property
     def tick_rise_60s(self) -> float:
