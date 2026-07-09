@@ -287,6 +287,10 @@ class TradingEngine:
             try: return max(0.0, min(100.0, float(_gs("bid_1m_pct_threshold", "70.0"))))
             except Exception: return 70.0
 
+        def _vol_1m_coef() -> float:
+            try: return max(0.0, float(_gs("vol_1m_coef", "1.0")))
+            except Exception: return 1.0
+
         def _check_not_in_position() -> bool:
             return str(_gs("check_not_in_position", "True")).lower() in ("true", "1", "yes")
 
@@ -942,6 +946,7 @@ class TradingEngine:
             _snap_tick  = round(sess.tick_rise_60s, 1)
             _snap_bid1m = round(sess.bid_pct_window, 1)
             _snap_chg   = round(sess.change_pct, 2)
+            _snap_vol1m = round(sess.vol_1m_lots, 1)
             result = sess.evaluate(
                 combiner=combiner,
                 current_time=now_time,
@@ -960,6 +965,8 @@ class TradingEngine:
                 amplitude_min_pct=_amplitude_min_pct(),
                 bid_1m_pct=sess.bid_pct_window,
                 bid_1m_pct_threshold=_bid_1m_pct_threshold(),
+                avg_vol5_lot=_avg5,
+                vol_1m_coef=_vol_1m_coef(),
             )
             # 只在 60s tick 條件達標時才記 log（避免噪音）
             if sess.tick_rise_60s >= _thr:
@@ -978,6 +985,9 @@ class TradingEngine:
                     "vol_ratio_thr": round(_vol_ratio_min_pct(), 1),
                     # 條件⑧ 振幅
                     "amplitude_pct": round(_amp, 2),
+                    # 條件⑨ 1分鐘量
+                    "vol_1m": _snap_vol1m,
+                    "vol_1m_thr": round(_avg5 / 270 * _vol_1m_coef(), 1) if _avg5 > 0 else 0,
                     # 個股漲幅（條件④）
                     "change_pct": round(sess.change_pct, 2),
                 })
@@ -995,6 +1005,8 @@ class TradingEngine:
                 amplitude_min_pct=_amplitude_min_pct(),
                 bid_1m_pct=sess.bid_pct_window,
                 bid_1m_pct_threshold=_bid_1m_pct_threshold(),
+                avg_vol5_lot=_avg5,
+                vol_1m_coef=_vol_1m_coef(),
             )
 
             logger.info(

@@ -21,6 +21,7 @@ class SignalCombiner:
     6. 有個股期貨資料時：期貨價 > 現價（正價差，可關閉）
     7. 今日累積量/5日均量 >= 開盤後觀察分鐘數 × vol_ratio_coefficient%
     8. 當日振幅（(High-Low)/昨收×100）>= amplitude_min_pct（預設 3%，可調）
+    9. 過去 60 秒成交量(張) >= avg_vol5_lot ÷ 270 × vol_1m_coef（0=關閉，預設 1.0）
     """
 
     def __init__(
@@ -48,6 +49,9 @@ class SignalCombiner:
         amplitude_min_pct: float = 3.0,
         bid_1m_pct: float = 50.0,
         bid_1m_pct_threshold: float = 70.0,
+        vol_1m_lots: float = 0.0,
+        avg_vol5_lot: float = 0.0,
+        vol_1m_coef: float = 1.0,
     ) -> SignalResult:
         def no(r):
             return SignalResult(symbol=symbol, should_enter=False, reason=r)
@@ -68,5 +72,9 @@ class SignalCombiner:
             return no(f"vol_ratio_low_{vol_ratio:.1f}pct_need_{vol_ratio_min_pct:.1f}pct")
         if amplitude_min_pct > 0 and amplitude_pct < amplitude_min_pct:
             return no(f"amplitude_low_{amplitude_pct:.1f}pct_need_{amplitude_min_pct:.1f}pct")
+        if vol_1m_coef > 0 and avg_vol5_lot > 0:
+            min_vol = avg_vol5_lot / 270 * vol_1m_coef
+            if vol_1m_lots < min_vol:
+                return no(f"vol_1m_low_{vol_1m_lots:.1f}lots_need_{min_vol:.1f}lots")
 
         return SignalResult(symbol=symbol, should_enter=True, reason="ok")

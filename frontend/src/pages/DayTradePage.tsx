@@ -89,6 +89,7 @@ function reasonLabel(r: string | undefined | null): string {
   if (r.startsWith('bid_pct_low_'))          return `買盤不足(${r.split('low_')[1]}%)`
   if (r.startsWith('vol_ratio_low_'))        return `量比不足(${r.replace('vol_ratio_low_', '')})`
   if (r.startsWith('amplitude_low_'))        return `振幅不足(${r.replace('amplitude_low_', '')})`
+  if (r.startsWith('vol_1m_low_'))           return `1分鐘量不足(${r.replace('vol_1m_low_', '')})`
   if (r === 'futures_not_leading')           return '期貨未領漲'
   return r
 }
@@ -131,6 +132,7 @@ function SignalLogRow({ e, windowSecs = 60 }: { e: any; windowSecs?: number }) {
       <span className={`${mono} text-[10px]`}>{windowSecs}s▲{e.tick_rise}t</span>
       <span className={`${mono} text-[10px]`}>買1m={e.bid_1m_pct}%</span>
       <span className={`${mono} text-[10px]`}>量比={e.vol_ratio}%(≥{e.vol_ratio_thr}%)</span>
+      <span className={`${mono} text-[10px]`}>1m量={e.vol_1m}張(≥{e.vol_1m_thr})</span>
       <span className={`${mono} text-[10px]`}>振幅={e.amplitude_pct}%</span>
       <span className={`${mono} text-[10px]`}>漲{e.change_pct}%</span>
       {!passed && <span className="text-red-400 text-[10px]">✗{reasonLabel(e.reason)}</span>}
@@ -302,7 +304,7 @@ function LiveTab() {
   const pnlColor = (v: number) => v > 0 ? 'text-red-400' : v < 0 ? 'text-green-400' : 'text-[#6b84a0]'
 
   const stocks: any[] = list?.stocks ?? []
-  const liveStats: Record<string, { tick_rise: number; bid_1m_pct: number }> = stream?.live_stats ?? {}
+  const liveStats: Record<string, { tick_rise: number; bid_1m_pct: number; vol_1m?: number }> = stream?.live_stats ?? {}
   const idxData = ticks['__index__'] ?? {}
   const idxPrice: number | null = idxData.price ?? null
   const idxChgDayPct: number = idxData.chg_day_pct ?? 0
@@ -336,7 +338,11 @@ function LiveTab() {
             const _mins = _h * 60 + _m - 9 * 60
             const _coef = (stream as any)?.vol_ratio_coefficient ?? 1.3
             const _volPct = Math.round(_mins * _coef * 10) / 10
-            return `進場八條件：\n① 時間窗口（進場開始 ~ 進場截止）\n② 同標的當下未持倉（可關閉）\n③ 今日進場次數 < max_daily_positions\n④ 個股漲跌幅在 ±max_change_pct 內\n⑤ ⭐必要（二擇一）：${stream?.tick_window_seconds ?? 60}秒內上漲 ≥ ${stream?.tick_rise_threshold ?? 4} tick，或觀察窗買盤佔比 ≥ ${stream?.bid_1m_pct_threshold ?? 70}%\n⑥ 若有個股期貨：期貨價 > 現價（正價差，可關閉）\n⑦ 今日累積量/5日均量 ≥ 開盤後觀察${_mins}分鐘×${_coef} = ${_volPct}%（係數可調）\n⑧ 振幅（今日動能）≥ ${stream?.amplitude_min_pct ?? 3}%（可調）`
+            const _vol1mCoef = (stream as any)?.vol_1m_coef ?? 1.0
+            const _vol1mTip = _vol1mCoef > 0
+              ? `⑨ 過去60秒量 ≥ 5日均量÷270×${_vol1mCoef}（係數可調，=0關閉）`
+              : `⑨ 1分鐘量條件已關閉（vol_1m_coef=0）`
+            return `進場九條件：\n① 時間窗口（進場開始 ~ 進場截止）\n② 同標的當下未持倉（可關閉）\n③ 今日進場次數 < max_daily_positions\n④ 個股漲跌幅在 ±max_change_pct 內\n⑤ ⭐必要（二者同時成立）：${stream?.tick_window_seconds ?? 60}秒內上漲 ≥ ${stream?.tick_rise_threshold ?? 4} tick，且觀察窗買盤佔比 ≥ ${stream?.bid_1m_pct_threshold ?? 70}%\n⑥ 若有個股期貨：期貨價 > 現價（正價差，可關閉）\n⑦ 今日累積量/5日均量 ≥ 開盤後觀察${_mins}分鐘×${_coef} = ${_volPct}%（係數可調）\n⑧ 振幅（今日動能）≥ ${stream?.amplitude_min_pct ?? 3}%（可調）\n${_vol1mTip}`
           })()}
         >
           <span className="text-[10px] text-[#6b84a0] mb-0.5">今日已交易</span>
@@ -514,6 +520,7 @@ function LiveTab() {
                   <th className="px-3 py-2 text-right" style={{minWidth:66}}>漲幅</th>
                   <th className="px-3 py-2 text-right" style={{minWidth:64}}>1m tick↑</th>
                   <th className="px-3 py-2 text-right" style={{minWidth:64}}>1m 買盤%</th>
+                  <th className="px-3 py-2 text-right" style={{minWidth:60}}>1m量(張)</th>
                   <th className="px-3 py-2 text-right" style={{minWidth:60}}>量比</th>
                   <th className="px-3 py-2 text-right" style={{minWidth:56}}>振幅</th>
                   <th className="px-2 py-2" style={{minWidth:32}}></th>
@@ -575,6 +582,18 @@ function LiveTab() {
                           const okB = ls.bid_1m_pct >= thrB
                           const cls = (okT && okB) ? 'text-red-400 font-semibold' : okB ? 'text-yellow-400' : 'text-[#dde6f0]'
                           return <span className={cls}>{ls.bid_1m_pct}%</span>
+                        })() : <span className={muted}>—</span>}
+                      </td>
+                      {/* 1m量(張) */}
+                      <td className={`px-3 py-2.5 text-right ${mono} text-xs`}>
+                        {ls != null && (ls as any).vol_1m != null ? (() => {
+                          const v1m = (ls as any).vol_1m as number
+                          const avg5 = s.avg_vol5 ?? 0
+                          const coef = (stream as any)?.vol_1m_coef ?? 1.0
+                          const thr = coef > 0 && avg5 > 0 ? avg5 / 270 * coef : 0
+                          const ok = thr <= 0 || v1m >= thr
+                          const cls = ok ? 'text-green-400' : 'text-orange-400'
+                          return <span className={cls} title={thr > 0 ? `門檻 ${thr.toFixed(1)} 張` : '條件已關閉'}>{v1m}</span>
                         })() : <span className={muted}>—</span>}
                       </td>
                       {/* 量比 = 今日累積量 / 5日均量 */}
@@ -983,6 +1002,7 @@ const PARAM_DEFS: PD[] = [
   { id:'bid_1m_pct_threshold',     group:'進場條件', label:'觀察窗口買盤佔比門檻',   desc:'條件⑤的第二必要條件：觀察窗口（tick_window_seconds）內買盤佔總成交量 >= 此%。須與「上漲 N tick」同時成立才允許進場（二者皆須滿足）。預設 70%', unit:'%', rtKey:'bid_1m_pct_threshold', type:'number', step:5, min:50, max:100 },
   { id:'amplitude_min_pct',        group:'進場條件', label:'振幅門檻',               desc:'振幅 = (當日最高價 − 最低價) / 昨收 × 100%，反映這支股票今天的動能。振幅太低代表盤整沒方向，不適合當沖，建議設 3~5%', unit:'%', rtKey:'amplitude_min_pct', type:'number', step:0.5, min:0, max:20 },
   { id:'vol_ratio_coefficient',    group:'進場條件', label:'量比係數',               desc:'條件⑧量比門檻 = (進場開始時間 − 09:00 分鐘數) × 此係數。例：09:15進場、係數1.3 → 門檻=19.5%。係數越高代表要求開盤後的交易量相對5日均量越活躍才進場。預設1.3，可調整範圍0.5~5', unit:'', rtKey:'vol_ratio_coefficient', type:'number', step:0.1, min:0.1, max:5 },
+  { id:'vol_1m_coef',             group:'進場條件', label:'1分鐘量係數',             desc:'條件⑨：過去60秒成交量(張) ≥ 5日均量(張) ÷ 270 × 此係數。270 = 每日約270根1分鐘K。設0關閉此條件。例：5日均量5000張 → 每分鐘門檻 = 5000÷270×1.0 ≈ 18.5張，確保進場時段有足夠流動性。預設1.0', unit:'倍', rtKey:'vol_1m_coef', type:'number', step:0.1, min:0, max:10 },
   { id:'tick_window_seconds',      group:'進場條件', label:'tick 觀察窗口',          desc:'計算 tick_rise 用的滾動時間窗口（秒）；預設60秒 = 看過去1分鐘漲了幾tick', unit:'秒', rtKey:'tick_window_seconds', type:'number', step:10, min:10, max:300 },
   { id:'entry_start_time',         group:'進場條件', label:'進場開始時間',           desc:'此時間之前不開新倉（例：09:15 = 開盤後觀察15分鐘再進場）', unit:'HH:MM', rtKey:'entry_start_time', type:'time' },
   { id:'max_change_pct',           group:'進場條件', label:'最大漲跌幅',             desc:'個股當日漲跌幅（絕對值）超過此%不進場，避免追高或跌太多', unit:'%', rtKey:'max_change_pct', type:'number', step:0.5, min:0.5 },
