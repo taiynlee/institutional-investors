@@ -244,9 +244,9 @@ class TradingEngine:
                 h, m = map(int, dynamic_add_str.split(":"))
                 return h * 60 + m
 
-        def _tick_rise_threshold() -> int:
-            try: return max(1, int(_gs("tick_rise_threshold", "4")))
-            except Exception: return 4
+        def _min_change_pct() -> float:
+            try: return max(0.0, float(_gs("min_change_pct", "2.0")))
+            except Exception: return 2.0
 
         def _stop_loss_ticks() -> int:
             try: return max(1, int(_gs("stop_loss_ticks", "4")))
@@ -279,10 +279,6 @@ class TradingEngine:
             mins_after_open = max(0, _entry_start_mins() - 9 * 60)
             return round(mins_after_open * _vol_ratio_coefficient(), 1)
 
-        def _amplitude_min_pct() -> float:
-            try: return max(0.0, float(_gs("amplitude_min_pct", "3.0")))
-            except Exception: return 3.0
-
         def _bid_1m_pct_threshold() -> float:
             try: return max(0.0, min(100.0, float(_gs("bid_1m_pct_threshold", "70.0"))))
             except Exception: return 70.0
@@ -293,9 +289,6 @@ class TradingEngine:
 
         def _check_not_in_position() -> bool:
             return str(_gs("check_not_in_position", "True")).lower() in ("true", "1", "yes")
-
-        def _check_futures_signal() -> bool:
-            return str(_gs("check_futures_signal", "True")).lower() in ("true", "1", "yes")
 
         with self._lock:
             self._state["dry_run"] = dry_run
@@ -926,6 +919,7 @@ class TradingEngine:
 
             # 熱重載可調參數
             combiner.max_change_pct = _max_change_pct()
+            combiner.min_change_pct = _min_change_pct()
             rm.force_exit_time = _force_exit_time()
             self._state["dry_run"] = _is_dry_run()  # 讓 WebSocket push 反映最新設定
 
@@ -941,9 +935,7 @@ class TradingEngine:
             _h = _daily_high.get(symbol, 0)
             _l = _daily_low.get(symbol, _h)
             _amp = (_h - _l) / _ref_price * 100 if _ref_price > 0 and _h > _l else 0.0
-            _thr = _tick_rise_threshold()
             # snapshot sess 易變欄位，避免 WS thread 在評估後、通知前更新導致數值不一致
-            _snap_tick  = round(sess.tick_rise_60s, 1)
             _snap_bid1m = round(sess.bid_pct_window, 1)
             _snap_chg   = round(sess.change_pct, 2)
             _snap_vol1m   = round(sess.vol_1m_lots, 1)
@@ -954,23 +946,18 @@ class TradingEngine:
                 positions_count=trades_today,
                 max_positions=_max_daily_positions(),
                 not_in_position=not_in_pos,
-                tick_rise_threshold=_thr,
-                futures_signal=futures_signals.get(symbol),
                 entry_cutoff_mins=_entry_cutoff(),
                 entry_start_mins=_entry_start_mins(),
                 check_not_in_position=_check_not_in_position(),
-                check_futures_signal=_check_futures_signal(),
                 vol_ratio=_vr,
                 vol_ratio_min_pct=_vol_ratio_min_pct(),
-                amplitude_pct=_amp,
-                amplitude_min_pct=_amplitude_min_pct(),
                 bid_1m_pct=sess.bid_pct_window,
                 bid_1m_pct_threshold=_bid_1m_pct_threshold(),
                 past_5min_avg_vol=_snap_past5avg,
                 vol_1m_coef=_vol_1m_coef(),
             )
-            # 只在 60s tick 條件達標時才記 log（避免噪音）
-            if sess.tick_rise_60s >= _thr:
+            # 記 eval log：外盤%超過門檻60%（接近）或已通過時才記，過濾低外盤噪音
+            if _snap_bid1m >= 60 or result.should_enter:
                 _v1m_thr = round(_snap_past5avg * _vol_1m_coef(), 1) if _snap_past5avg > 0 else 0
                 _append_log({
                     "type": "eval",
@@ -979,33 +966,25 @@ class TradingEngine:
                     "name": sname(symbol),
                     "passed": result.should_enter,
                     "reason": result.reason or "ok",
-                    # 條件⑤ 動能
-                    "tick_rise": round(sess.tick_rise_60s, 1),
-                    "bid_1m_pct": round(sess.bid_pct_window, 1),
-                    # 條件⑦ 量比
+                    # 條件 外盤
+                    "bid_1m_pct": _snap_bid1m,
+                    # 條件 量比
                     "vol_ratio": round(_vr, 1),
                     "vol_ratio_thr": round(_vol_ratio_min_pct(), 1),
-                    # 條件⑧ 振幅
-                    "amplitude_pct": round(_amp, 2),
-                    # 條件⑤c 外盤量 vs 近5分均量
+                    # 條件 外盤量 vs 近5分均量
                     "vol_1m": _snap_vol1m,
                     "vol_1m_thr": _v1m_thr,
                     "past_5m_avg": _snap_past5avg,
-                    # 個股漲幅（條件④）
-                    "change_pct": round(sess.change_pct, 2),
+                    # 條件 漲幅（下限 min_change_pct / 上限 max_change_pct）
+                    "change_pct": _snap_chg,
                 })
             theory = sess.evaluate_theoretical(
                 combiner=combiner,
                 current_time=now_time,
-                tick_rise_threshold=_tick_rise_threshold(),
-                futures_signal=futures_signals.get(symbol),
                 entry_cutoff_mins=_entry_cutoff(),
                 entry_start_mins=_entry_start_mins(),
-                check_futures_signal=_check_futures_signal(),
                 vol_ratio=_vr,
                 vol_ratio_min_pct=_vol_ratio_min_pct(),
-                amplitude_pct=_amp,
-                amplitude_min_pct=_amplitude_min_pct(),
                 bid_1m_pct=sess.bid_pct_window,
                 bid_1m_pct_threshold=_bid_1m_pct_threshold(),
                 past_5min_avg_vol=_snap_past5avg,
@@ -1013,18 +992,18 @@ class TradingEngine:
             )
 
             logger.info(
-                "EVAL %s  實際=%s(%s)  理論=%s(%s)  漲幅=%.2f%%  60s漲=%+.1ftick",
+                "EVAL %s  實際=%s(%s)  理論=%s(%s)  漲幅=%.2f%%  外盤=%.0f%%",
                 symbol,
                 "✓" if result.should_enter else "✗", result.reason or "ok",
                 "✓" if theory.should_enter else "✗", theory.reason or "ok",
-                sess.change_pct, sess.tick_rise_60s,
+                sess.change_pct, _snap_bid1m,
             )
             log_event("signal_eval",
                       symbol=symbol,
                       actual_enter=result.should_enter, actual_reason=result.reason,
                       theory_enter=theory.should_enter, theory_reason=theory.reason,
                       change_pct=round(sess.change_pct, 2),
-                      tick_rise_60s=round(sess.tick_rise_60s, 1))
+                      bid_1m_pct=_snap_bid1m)
 
             if result.should_enter:
                 # 每支股票今日第一次觸發 → 發 LINE（dry_run 也送）
@@ -1036,12 +1015,10 @@ class TradingEngine:
                     notifier.send(
                         f"📶 訊號觸發 [{_mode}] {symbol} {sname(symbol)}\n"
                         f"時間={now_tw().strftime('%H:%M:%S')}\n"
-                        f"1m tick↑={_snap_tick}（門檻≥{_tick_rise_threshold()}）\n"
-                        f"1m買盤%={_snap_bid1m}%（門檻≥{_bid_1m_pct_threshold()}%）\n"
-                        f"1m外盤量={_snap_vol1m}張（門檻≥{_v1m_thr}張，近5分均={_snap_past5avg}張）\n"
-                        f"量比={round(_vr,1)}%（門檻≥{_thr_now}%）\n"
-                        f"振幅={round(_amp,2)}%（門檻≥{_amplitude_min_pct()}%）\n"
-                        f"漲幅={_snap_chg}%",
+                        f"漲幅={_snap_chg:+.2f}%（門檻≥{_min_change_pct():.1f}%）\n"
+                        f"外盤%={_snap_bid1m}%（門檻≥{_bid_1m_pct_threshold():.0f}%）\n"
+                        f"外盤量={_snap_vol1m}張（門檻≥{_v1m_thr}張，近5分均={_snap_past5avg}張）\n"
+                        f"量比={round(_vr,1)}%（門檻≥{_thr_now}%）",
                         msg_type="signal",
                     )
                 _place_order(symbol, sess)
@@ -1076,6 +1053,9 @@ class TradingEngine:
                 "order_no": None,
                 "chased": False,
                 "order_type": "stock",
+                "snap_bid1m": _snap_bid1m,
+                "snap_vol1m": _snap_vol1m,
+                "snap_chg": _snap_chg,
             }
             try:
                 order_no = broker.buy(symbol, lots, price, user_def=f"auto_buy_{symbol}")
@@ -1090,6 +1070,9 @@ class TradingEngine:
                     "lots": lots,
                     "price": price,
                     "dry_run": broker.dry_run,
+                    "change_pct": _snap_chg,
+                    "bid_1m_pct": _snap_bid1m,
+                    "vol_1m": _snap_vol1m,
                 })
             except Exception as _be:
                 _chase_buys.pop(symbol, None)
@@ -1158,7 +1141,10 @@ class TradingEngine:
                         _append_log({"type": "buy", "ts": now_tw().strftime("%H:%M:%S"),
                                      "symbol": sym, "name": sname(sym), "lots": actual_lots,
                                      "price": ep, "stop_loss": stop_loss, "take_profit": take_profit,
-                                     "dry_run": broker.dry_run})
+                                     "dry_run": broker.dry_run,
+                                     "change_pct": chase.get("snap_chg"),
+                                     "bid_1m_pct": chase.get("snap_bid1m"),
+                                     "vol_1m": chase.get("snap_vol1m")})
                         notifier.send(
                             f"✅ 買進成交 {sym} {sname(sym)}\n"
                             f"成交={ep:.0f}  張數={actual_lots}\n"

@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useRef, useState } from 'react'
+import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
 import axios from 'axios'
 import { ManualTradeContent } from './ManualTradePage'
 
@@ -84,75 +84,117 @@ const REASON_LABEL: Record<string, string> = {
 function reasonLabel(r: string | undefined | null): string {
   if (!r) return ''
   if (REASON_LABEL[r]) return REASON_LABEL[r]
+  if (r.startsWith('change_pct_too_low_'))   return `漲幅不足(${r.replace('change_pct_too_low_', '')})`
   if (r.startsWith('change_pct_exceeded_'))  return `漲跌幅超限(${r.split('exceeded_')[1]})`
-  if (r.startsWith('tick_rise_low_'))        return `tick+買盤均不足(${r.replace('tick_rise_low_', '')})`
-  if (r.startsWith('bid_pct_low_'))          return `買盤不足(${r.split('low_')[1]}%)`
+  if (r.startsWith('bid1m_low_'))            return `外盤%不足(${r.replace('bid1m_low_', '')})`
   if (r.startsWith('vol_ratio_low_'))        return `量比不足(${r.replace('vol_ratio_low_', '')})`
-  if (r.startsWith('amplitude_low_'))        return `振幅不足(${r.replace('amplitude_low_', '')})`
-  if (r.startsWith('vol_1m_low_'))           return `1分鐘量不足(${r.replace('vol_1m_low_', '')})`
-  if (r === 'futures_not_leading')           return '期貨未領漲'
+  if (r.startsWith('vol_1m_low_'))           return `外盤量不足(${r.replace('vol_1m_low_', '')})`
   return r
 }
 
-function SignalLogRow({ e, windowSecs = 60 }: { e: any; windowSecs?: number }) {
-  if (e.type === 'buy') {
-    return (
-      <div className={`flex gap-1.5 items-baseline text-green-400`}>
-        <span className="text-[#6b84a0] shrink-0">[{e.ts}]</span>
-        <span className="shrink-0">🟢 BUY</span>
-        <span className="font-bold shrink-0">{e.name} {e.symbol}</span>
-        <span>{e.lots}張 @{e.price?.toFixed(1)}</span>
-        <span className="text-orange-400">停損{e.stop_loss?.toFixed(1)}</span>
-        <span className="text-green-300">停利{e.take_profit?.toFixed(1)}</span>
-        {e.dry_run && <span className="text-blue-400 text-[10px]">[DRY]</span>}
-      </div>
-    )
-  }
-  if (e.type === 'sell') {
-    const pnlCls = (e.pnl ?? 0) >= 0 ? 'text-red-400' : 'text-green-400'
-    return (
-      <div className={`flex gap-1.5 items-baseline text-red-400`}>
-        <span className="text-[#6b84a0] shrink-0">[{e.ts}]</span>
-        <span className="shrink-0">🔴 SELL</span>
-        <span className="font-bold shrink-0">{e.name} {e.symbol}</span>
-        <span>{e.lots}張</span>
-        <span>{e.entry_price?.toFixed(1)}→{e.exit_price?.toFixed(1)}</span>
-        <span className={pnlCls}>損益{(e.pnl ?? 0) >= 0 ? '+' : ''}{(e.pnl ?? 0).toLocaleString()}</span>
-        <span className="text-[#6b84a0] text-[10px]">{e.reason}</span>
-      </div>
-    )
-  }
-  // eval
-  const passed = e.passed === true
-  return (
-    <div className={`flex flex-wrap gap-1.5 items-baseline ${passed ? 'text-green-300' : 'text-yellow-400'}`}>
-      <span className="text-[#6b84a0] shrink-0">[{e.ts}]</span>
-      <span className="shrink-0">{passed ? '✅' : '⚠'}</span>
-      <span className="font-bold shrink-0">{e.name} {e.symbol}</span>
-      <span className={`${mono} text-[10px]`}>{windowSecs}s▲{e.tick_rise}t</span>
-      <span className={`${mono} text-[10px]`}>買1m={e.bid_1m_pct}%</span>
-      <span className={`${mono} text-[10px]`}>量比={e.vol_ratio}%(≥{e.vol_ratio_thr}%)</span>
-      <span className={`${mono} text-[10px]`}>1m量={e.vol_1m}張(≥{e.vol_1m_thr})</span>
-      <span className={`${mono} text-[10px]`}>振幅={e.amplitude_pct}%</span>
-      <span className={`${mono} text-[10px]`}>漲{e.change_pct}%</span>
-      {!passed && <span className="text-red-400 text-[10px]">✗{reasonLabel(e.reason)}</span>}
-    </div>
-  )
-}
+function SignalTable({ entries }: { entries: any[] }) {
+  const rows = useMemo(() => {
+    const result: any[] = []
+    const open: Record<string, any> = {}
+    for (const e of [...entries].reverse()) {
+      if (e.type === 'buy_sent') {
+        if (!open[e.symbol]) {
+          const row = {
+            sig_time: e.ts, symbol: e.symbol, name: e.name,
+            change_pct: e.change_pct, bid_1m_pct: e.bid_1m_pct, vol_1m: e.vol_1m,
+            entry: e.price, tp: null, sl: null, lots: e.lots,
+            exit_time: null, exit_type: null, pnl_lot: null,
+          }
+          result.push(row)
+          open[e.symbol] = row
+        }
+      } else if (e.type === 'buy') {
+        const row = open[e.symbol]
+        if (row) {
+          row.tp = e.take_profit
+          row.sl = e.stop_loss
+          if (e.change_pct != null) row.change_pct = e.change_pct
+          if (e.bid_1m_pct != null) row.bid_1m_pct = e.bid_1m_pct
+          if (e.vol_1m != null) row.vol_1m = e.vol_1m
+        }
+      } else if (e.type === 'sell') {
+        const row = open[e.symbol]
+        if (row) {
+          row.exit_time = e.ts
+          row.exit_type = e.reason
+          row.pnl_lot = row.lots > 0 ? Math.round((e.pnl ?? 0) / row.lots) : (e.pnl ?? 0)
+          delete open[e.symbol]
+        }
+      }
+    }
+    return result.reverse()
+  }, [entries])
 
-function SignalLog({ entries, windowSecs, threshold }: { entries: any[]; windowSecs: number; threshold: number }) {
+  const exitLabel = (r: string | null | undefined) => {
+    if (!r) return '持倉中'
+    if (r === 'stop_loss') return '停損'
+    if (r === 'take_profit') return '停利'
+    if (r.includes('force') || r.includes('timeout') || r.includes('exit')) return '強制出場'
+    return r
+  }
+
   return (
     <div className={card}>
       <div className="px-4 py-2 border-b border-[#253d5c] flex items-center gap-2">
-        <span className="text-xs text-[#6b84a0]">訊號 Log</span>
-        <span className={`text-[10px] ${muted}`}>{windowSecs}s tick ≥{threshold} 達標才記錄・最新在上・開盤前清除</span>
-        {entries.length > 0 && <span className="ml-auto text-[10px] text-[#6b84a0]">{entries.length} 筆</span>}
+        <span className="text-xs text-[#6b84a0]">今日進場紀錄</span>
+        <span className={`text-[10px] ${muted}`}>最新在上・開盤前清除</span>
+        {rows.length > 0 && <span className="ml-auto text-[10px] text-[#6b84a0]">{rows.length} 筆</span>}
       </div>
-      {entries.length === 0
-        ? <div className={`px-4 py-3 text-[11px] ${muted}`}>等待訊號觸發...</div>
+      {rows.length === 0
+        ? <div className={`px-4 py-3 text-[11px] ${muted}`}>等待進場訊號...</div>
         : (
-          <div className={`overflow-y-auto max-h-[260px] px-3 py-2 space-y-[3px] font-mono text-[11px]`}>
-            {entries.map((e, i) => <SignalLogRow key={i} e={e} windowSecs={windowSecs} />)}
+          <div className="overflow-x-auto overflow-y-auto max-h-[280px]">
+            <table className="w-full text-[11px] font-mono">
+              <thead className="sticky top-0 bg-[#0d1f33]">
+                <tr className="border-b border-[#1a2d4a] text-[#6b84a0] text-[10px]">
+                  <th className="px-2 py-1.5 text-left whitespace-nowrap">訊號時間</th>
+                  <th className="px-2 py-1.5 text-left whitespace-nowrap">代號</th>
+                  <th className="px-2 py-1.5 text-left whitespace-nowrap">名稱</th>
+                  <th className="px-2 py-1.5 text-left whitespace-nowrap">觸發條件</th>
+                  <th className="px-2 py-1.5 text-right whitespace-nowrap">進場價</th>
+                  <th className="px-2 py-1.5 text-right whitespace-nowrap">停利價</th>
+                  <th className="px-2 py-1.5 text-right whitespace-nowrap">停損價</th>
+                  <th className="px-2 py-1.5 text-left whitespace-nowrap">出場時間</th>
+                  <th className="px-2 py-1.5 text-left whitespace-nowrap">結果</th>
+                  <th className="px-2 py-1.5 text-right whitespace-nowrap">損益/張</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r, i) => {
+                  const pnlCls = r.pnl_lot == null ? '' : r.pnl_lot > 0 ? 'text-red-400' : 'text-green-400'
+                  const resCls = r.exit_type === 'take_profit' ? 'text-red-400'
+                    : r.exit_type === 'stop_loss' ? 'text-green-400'
+                    : 'text-[#6b84a0]'
+                  return (
+                    <tr key={i} className="border-b border-[#1a2d4a]/40 hover:bg-[#162336]/50">
+                      <td className="px-2 py-1.5 text-[#6b84a0]">{r.sig_time}</td>
+                      <td className="px-2 py-1.5 font-bold">{r.symbol}</td>
+                      <td className="px-2 py-1.5 text-[#b0c4de] whitespace-nowrap">{r.name}</td>
+                      <td className="px-2 py-1.5 text-[#8ab4d4] whitespace-nowrap">
+                        {r.change_pct != null ? `漲${r.change_pct > 0 ? '+' : ''}${r.change_pct}%` : ''}
+                        {r.bid_1m_pct != null ? ` 外${r.bid_1m_pct}%` : ''}
+                        {r.vol_1m != null ? ` 量${r.vol_1m}張` : ''}
+                      </td>
+                      <td className="px-2 py-1.5 text-right">{r.entry?.toFixed(1) ?? '--'}</td>
+                      <td className="px-2 py-1.5 text-right text-red-400">{r.tp?.toFixed(1) ?? '--'}</td>
+                      <td className="px-2 py-1.5 text-right text-green-400">{r.sl?.toFixed(1) ?? '--'}</td>
+                      <td className="px-2 py-1.5 text-[#6b84a0]">{r.exit_time ?? '--'}</td>
+                      <td className={`px-2 py-1.5 ${resCls}`}>{exitLabel(r.exit_type)}</td>
+                      <td className={`px-2 py-1.5 text-right font-bold ${pnlCls}`}>
+                        {r.pnl_lot != null
+                          ? `${r.pnl_lot > 0 ? '+' : ''}${r.pnl_lot.toLocaleString()}`
+                          : '--'}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
           </div>
         )
       }
@@ -304,7 +346,7 @@ function LiveTab() {
   const pnlColor = (v: number) => v > 0 ? 'text-red-400' : v < 0 ? 'text-green-400' : 'text-[#6b84a0]'
 
   const stocks: any[] = list?.stocks ?? []
-  const liveStats: Record<string, { tick_rise: number; bid_1m_pct: number; vol_1m?: number }> = stream?.live_stats ?? {}
+  const liveStats: Record<string, { bid_1m_pct: number; vol_1m?: number }> = stream?.live_stats ?? {}
   const idxData = ticks['__index__'] ?? {}
   const idxPrice: number | null = idxData.price ?? null
   const idxChgDayPct: number = idxData.chg_day_pct ?? 0
@@ -336,13 +378,15 @@ function LiveTab() {
             const est = stream?.entry_start_time ?? '09:15'
             const [_h, _m] = est.split(':').map(Number)
             const _mins = _h * 60 + _m - 9 * 60
-            const _coef = (stream as any)?.vol_ratio_coefficient ?? 1.3
+            const _coef = (stream as any)?.vol_ratio_coefficient ?? 1.0
             const _volPct = Math.round(_mins * _coef * 10) / 10
-            const _vol1mCoef = (stream as any)?.vol_1m_coef ?? 1.0
-            const _c5c = _vol1mCoef > 0
-              ? `(c) 過去60秒外盤量 ≥ 近5分均量×${_vol1mCoef}（=0關閉；資料不足自動跳過）`
-              : `(c) 外盤量條件已關閉（vol_1m_coef=0）`
-            return `進場九條件：\n① 時間窗口（進場開始 ~ 進場截止）\n② 同標的當下未持倉（可關閉）\n③ 今日進場次數 < max_daily_positions\n④ 個股漲跌幅在 ±max_change_pct 內\n⑤ ⭐必要（三者同時成立）：\n   (a) ${stream?.tick_window_seconds ?? 60}秒內上漲 ≥ ${stream?.tick_rise_threshold ?? 4} tick\n   (b) 觀察窗買盤佔比 ≥ ${stream?.bid_1m_pct_threshold ?? 70}%\n   ${_c5c}\n⑥ 若有個股期貨：期貨價 > 現價（正價差，可關閉）\n⑦ 今日累積量/5日均量 ≥ 開盤後觀察${_mins}分鐘×${_coef} = ${_volPct}%（係數可調）\n⑧ 振幅（今日動能）≥ ${stream?.amplitude_min_pct ?? 3}%（可調）`
+            const _vol1mCoef = (stream as any)?.vol_1m_coef ?? 0.8
+            const _minChg = (stream as any)?.min_change_pct ?? 2.0
+            const _bidThr = stream?.bid_1m_pct_threshold ?? 85
+            const _c3 = _vol1mCoef > 0
+              ? `③ 外盤量：過去60秒外盤量 ≥ 近5分均量×${_vol1mCoef}（資料不足自動跳過）`
+              : `③ 外盤量條件已關閉（vol_1m_coef=0）`
+            return `進場六條件：\n① 時間窗口（${est} ~ 截止）\n② 未持倉 / 今日進場次數 < 上限\n漲幅條件：${_minChg}% ≤ 今日漲幅 ≤ ${(stream as any)?.max_change_pct ?? 5}%\n⭐ 外盤雙條件（需同時成立）：\n① 外盤佔比 ≥ ${_bidThr}%\n${_c3}\n量比：今日成交量 ≥ 5日均量進度×${_coef}（門檻=${_volPct}%）`
           })()}
         >
           <span className="text-[10px] text-[#6b84a0] mb-0.5">今日已交易</span>
@@ -518,8 +562,7 @@ function LiveTab() {
                   <th className="px-3 py-2 text-right" style={{minWidth:52}}>昨收</th>
                   <th className="px-3 py-2 text-right" style={{minWidth:60}}>現價</th>
                   <th className="px-3 py-2 text-right" style={{minWidth:66}}>漲幅</th>
-                  <th className="px-3 py-2 text-right" style={{minWidth:64}}>1m tick↑</th>
-                  <th className="px-3 py-2 text-right" style={{minWidth:64}}>1m 買盤%</th>
+                  <th className="px-3 py-2 text-right" style={{minWidth:64}}>外盤%</th>
                   <th className="px-3 py-2 text-right" style={{minWidth:66}}>1m外盤(張)</th>
                   <th className="px-3 py-2 text-right" style={{minWidth:60}}>量比</th>
                   <th className="px-3 py-2 text-right" style={{minWidth:56}}>振幅</th>
@@ -562,25 +605,12 @@ function LiveTab() {
                           </span>
                         ) : <span className={muted}>—</span>}
                       </td>
-                      {/* 1m tick↑ */}
+                      {/* 外盤% */}
                       <td className={`px-3 py-2.5 text-right ${mono} text-xs`}>
                         {ls != null ? (() => {
-                          const thrT = stream?.tick_rise_threshold ?? 4
-                          const thrB = stream?.bid_1m_pct_threshold ?? 70
-                          const okT = ls.tick_rise >= thrT
+                          const thrB = stream?.bid_1m_pct_threshold ?? 85
                           const okB = ls.bid_1m_pct >= thrB
-                          const cls = (okT && okB) ? 'text-red-400 font-semibold' : okT ? 'text-yellow-400' : 'text-[#dde6f0]'
-                          return <span className={cls}>{ls.tick_rise}</span>
-                        })() : <span className={muted}>—</span>}
-                      </td>
-                      {/* 1m 買盤% */}
-                      <td className={`px-3 py-2.5 text-right ${mono} text-xs`}>
-                        {ls != null ? (() => {
-                          const thrT = stream?.tick_rise_threshold ?? 4
-                          const thrB = stream?.bid_1m_pct_threshold ?? 70
-                          const okT = ls.tick_rise >= thrT
-                          const okB = ls.bid_1m_pct >= thrB
-                          const cls = (okT && okB) ? 'text-red-400 font-semibold' : okB ? 'text-yellow-400' : 'text-[#dde6f0]'
+                          const cls = okB ? 'text-red-400 font-semibold' : ls.bid_1m_pct >= 65 ? 'text-yellow-400' : 'text-[#dde6f0]'
                           return <span className={cls}>{ls.bid_1m_pct}%</span>
                         })() : <span className={muted}>—</span>}
                       </td>
@@ -606,15 +636,10 @@ function LiveTab() {
                           return <span className={cl}>{paceRaw < 1 ? '<1' : Math.round(paceRaw)}%</span>
                         })() : <span className={muted}>—</span>}
                       </td>
-                      {/* 振幅 = (High - Low) / 昨收 × 100 */}
+                      {/* 振幅 = (High - Low) / 昨收 × 100（僅顯示參考，無門檻限制）*/}
                       <td className={`px-3 py-2.5 text-right ${mono} text-xs`}>
                         {high_v != null && low_v != null && ref ? (
-                          (() => {
-                            const ampPct = (high_v - low_v) / ref * 100
-                            const thr = stream?.amplitude_min_pct ?? 3.0
-                            const ok = ampPct >= thr
-                            return <span className={ok ? 'text-yellow-300' : muted}>{ampPct.toFixed(1)}%</span>
-                          })()
+                          <span className="text-[#8ab4d4]">{((high_v - low_v) / ref * 100).toFixed(1)}%</span>
                         ) : <span className={muted}>—</span>}
                       </td>
                       {/* 移除 */}
@@ -637,12 +662,8 @@ function LiveTab() {
         )}
       </div>
 
-      {/* 訊號 Log */}
-      <SignalLog
-        entries={stream?.signal_log ?? []}
-        windowSecs={stream?.tick_window_seconds ?? 60}
-        threshold={stream?.tick_rise_threshold ?? 4}
-      />
+      {/* 今日進場紀錄 */}
+      <SignalTable entries={stream?.signal_log ?? []} />
     </div>
   )
 }
@@ -999,16 +1020,13 @@ const PARAM_DEFS: PD[] = [
   { id:'max_position_capital', group:'倉位控制', label:'每次進場資金上限', desc:'每次進場最多動用的資金（超過就截斷）；張數 = floor(min(上限, 剩餘總資金) / (價格 × 1000))', unit:'TWD', rtKey:'max_position_capital', type:'number', step:100000, min:100000 },
   { id:'max_daily_positions',  group:'倉位控制', label:'每日進場次數上限', desc:'一天最多進場幾次（同標的可重複計入）；達上限後當日不再開新倉', unit:'次', rtKey:'max_daily_positions', type:'number', step:1, min:1 },
   // 進場條件（由常調 → 少調排序）
-  { id:'tick_rise_threshold',      group:'進場條件', label:'⑤a tick 上漲門檻',       desc:'⭐ 必要三條件 (a)：觀察窗口內股價上漲需 ≥ 此 tick 數。須與 (b) 買盤佔比、(c) 1分鐘外盤量同時成立，三者缺一不可才允許進場', unit:'tick', rtKey:'tick_rise_threshold', type:'number', step:1, min:1 },
-  { id:'bid_1m_pct_threshold',     group:'進場條件', label:'⑤b 買盤佔比門檻',        desc:'⭐ 必要三條件 (b)：觀察窗口（tick_window_seconds）內買盤佔總成交量 ≥ 此%。須與 (a) tick 上漲、(c) 1分鐘外盤量同時成立，三者缺一不可。預設 70%', unit:'%', rtKey:'bid_1m_pct_threshold', type:'number', step:5, min:50, max:100 },
-  { id:'vol_1m_coef',             group:'進場條件', label:'⑤c 外盤量係數',            desc:'⭐ 必要三條件 (c)：過去60秒外盤量(張) ≥ 近5分鐘平均每分鐘總成交量(張) × 此係數。須與 (a)(b) 同時成立。設0關閉此子條件；資料不足2分鐘自動跳過。外盤量 = 成交價 ≥ 賣一的主動買單撮合量。例：近5分均量100張、係數0.8 → 外盤需≥80張。預設0.8', unit:'倍', rtKey:'vol_1m_coef', type:'number', step:0.1, min:0, max:5 },
-  { id:'amplitude_min_pct',        group:'進場條件', label:'振幅門檻',               desc:'振幅 = (當日最高價 − 最低價) / 昨收 × 100%，反映這支股票今天的動能。振幅太低代表盤整沒方向，不適合當沖，建議設 3~5%', unit:'%', rtKey:'amplitude_min_pct', type:'number', step:0.5, min:0, max:20 },
-  { id:'vol_ratio_coefficient',    group:'進場條件', label:'量比係數',               desc:'條件⑦量比門檻 = (進場開始時間 − 09:00 分鐘數) × 此係數。例：09:15進場、係數1.3 → 門檻=19.5%。係數越高代表要求開盤後的交易量相對5日均量越活躍才進場。預設1.3，可調整範圍0.5~5', unit:'', rtKey:'vol_ratio_coefficient', type:'number', step:0.1, min:0.1, max:5 },
-  { id:'tick_window_seconds',      group:'進場條件', label:'tick 觀察窗口',          desc:'計算 tick_rise 用的滾動時間窗口（秒）；預設60秒 = 看過去1分鐘漲了幾tick', unit:'秒', rtKey:'tick_window_seconds', type:'number', step:10, min:10, max:300 },
+  { id:'min_change_pct',           group:'進場條件', label:'漲幅下限',               desc:'⭐ 核心條件①：進場時個股漲幅需 ≥ 此%，確認股票已有漲勢、不是假突破。設 2.0% 代表只追已漲 2% 以上的股。根據 2026-07-09 實盤分析，漲幅>2% 是勝率最高的單一過濾器（30% vs 14%）', unit:'%', rtKey:'min_change_pct', type:'number', step:0.5, min:0, max:5 },
+  { id:'bid_1m_pct_threshold',     group:'進場條件', label:'外盤佔比門檻',           desc:'⭐ 核心條件②：觀察窗口內外盤（主動買單成交量）佔總成交量 ≥ 此%，確認主力在主動追買。外盤% = 成交在賣一以上的量 / 總量 × 100。建議 85%（根據實測，85% 以上勝率轉正期望）', unit:'%', rtKey:'bid_1m_pct_threshold', type:'number', step:5, min:50, max:100 },
+  { id:'vol_1m_coef',              group:'進場條件', label:'外盤量係數',             desc:'過去60秒外盤量(張) ≥ 近5分鐘平均每分鐘總成交量(張) × 此係數，確認外盤有量撐。設0關閉；資料不足2分鐘自動跳過。例：近5分均量100張、係數0.8 → 外盤需≥80張。預設0.8', unit:'倍', rtKey:'vol_1m_coef', type:'number', step:0.1, min:0, max:5 },
+  { id:'vol_ratio_coefficient',    group:'進場條件', label:'量比係數',               desc:'今日累積量/5日均量的動態門檻係數：門檻 = (進場開始至現在的分鐘數) × 此係數。確認這支股票今天有在交易。設1.0代表成交量至少達到5日平均的當前進度', unit:'', rtKey:'vol_ratio_coefficient', type:'number', step:0.1, min:0.1, max:5 },
   { id:'entry_start_time',         group:'進場條件', label:'進場開始時間',           desc:'此時間之前不開新倉（例：09:15 = 開盤後觀察15分鐘再進場）', unit:'HH:MM', rtKey:'entry_start_time', type:'time' },
-  { id:'max_change_pct',           group:'進場條件', label:'最大漲跌幅',             desc:'個股當日漲跌幅（絕對值）超過此%不進場，避免追高或跌太多', unit:'%', rtKey:'max_change_pct', type:'number', step:0.5, min:0.5 },
+  { id:'max_change_pct',           group:'進場條件', label:'漲幅上限',               desc:'個股當日漲幅超過此%不進場，避免追太高（漲停股除外）。與漲幅下限形成進場漲幅區間 [min_change_pct, max_change_pct]', unit:'%', rtKey:'max_change_pct', type:'number', step:0.5, min:0.5 },
   { id:'check_not_in_position',    group:'進場條件', label:'同標的未持倉才可進場',   desc:'勾選（預設）：同一標的已有持倉時拒絕再進場；取消勾選：允許同標的持倉中再進一張', unit:'', rtKey:'check_not_in_position', type:'boolean' },
-  { id:'check_futures_signal',     group:'進場條件', label:'期貨正價差才可進場',     desc:'勾選（預設）：個股有期貨資料時，期貨價須 > 現貨才允許進場；取消勾選：忽略期貨訊號', unit:'', rtKey:'check_futures_signal', type:'boolean' },
   // 停損停利
   { id:'stop_loss_ticks',      group:'停損停利', label:'停損 tick 數',    desc:'進場後向下跌超過此 tick 數觸發停損（觸價單）；停損價 = 進場價 - N × tick_size，向上捨入', unit:'tick', rtKey:'stop_loss_ticks', type:'number', step:1, min:1 },
   { id:'take_profit_add_pct',  group:'停損停利', label:'停利附加漲幅',    desc:'停利觸價單 = 昨收 × (1 + (進場時漲幅 + 此%) / 100)，向下捨入 tick；例：進場漲4%、附加4% → 停利在昨收漲8%', unit:'%', rtKey:'take_profit_add_pct', type:'number', step:0.5, min:0.5 },
