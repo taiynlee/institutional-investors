@@ -339,10 +339,10 @@ function LiveTab() {
             const _coef = (stream as any)?.vol_ratio_coefficient ?? 1.3
             const _volPct = Math.round(_mins * _coef * 10) / 10
             const _vol1mCoef = (stream as any)?.vol_1m_coef ?? 1.0
-            const _vol1mTip = _vol1mCoef > 0
-              ? `⑨ 過去60秒外盤量 ≥ 5日均量÷270×${_vol1mCoef}（主動買盤撮合量，=0關閉）`
-              : `⑨ 1分鐘外盤量條件已關閉（vol_1m_coef=0）`
-            return `進場九條件：\n① 時間窗口（進場開始 ~ 進場截止）\n② 同標的當下未持倉（可關閉）\n③ 今日進場次數 < max_daily_positions\n④ 個股漲跌幅在 ±max_change_pct 內\n⑤ ⭐必要（二者同時成立）：${stream?.tick_window_seconds ?? 60}秒內上漲 ≥ ${stream?.tick_rise_threshold ?? 4} tick，且觀察窗買盤佔比 ≥ ${stream?.bid_1m_pct_threshold ?? 70}%\n⑥ 若有個股期貨：期貨價 > 現價（正價差，可關閉）\n⑦ 今日累積量/5日均量 ≥ 開盤後觀察${_mins}分鐘×${_coef} = ${_volPct}%（係數可調）\n⑧ 振幅（今日動能）≥ ${stream?.amplitude_min_pct ?? 3}%（可調）\n${_vol1mTip}`
+            const _c5c = _vol1mCoef > 0
+              ? `(c) 過去60秒外盤量 ≥ 5日均量÷270×${_vol1mCoef}（主動買盤量，=0關閉）`
+              : `(c) 外盤量條件已關閉（vol_1m_coef=0）`
+            return `進場九條件：\n① 時間窗口（進場開始 ~ 進場截止）\n② 同標的當下未持倉（可關閉）\n③ 今日進場次數 < max_daily_positions\n④ 個股漲跌幅在 ±max_change_pct 內\n⑤ ⭐必要（三者同時成立）：\n   (a) ${stream?.tick_window_seconds ?? 60}秒內上漲 ≥ ${stream?.tick_rise_threshold ?? 4} tick\n   (b) 觀察窗買盤佔比 ≥ ${stream?.bid_1m_pct_threshold ?? 70}%\n   ${_c5c}\n⑥ 若有個股期貨：期貨價 > 現價（正價差，可關閉）\n⑦ 今日累積量/5日均量 ≥ 開盤後觀察${_mins}分鐘×${_coef} = ${_volPct}%（係數可調）\n⑧ 振幅（今日動能）≥ ${stream?.amplitude_min_pct ?? 3}%（可調）`
           })()}
         >
           <span className="text-[10px] text-[#6b84a0] mb-0.5">今日已交易</span>
@@ -998,11 +998,11 @@ const PARAM_DEFS: PD[] = [
   { id:'max_position_capital', group:'倉位控制', label:'每次進場資金上限', desc:'每次進場最多動用的資金（超過就截斷）；張數 = floor(min(上限, 剩餘總資金) / (價格 × 1000))', unit:'TWD', rtKey:'max_position_capital', type:'number', step:100000, min:100000 },
   { id:'max_daily_positions',  group:'倉位控制', label:'每日進場次數上限', desc:'一天最多進場幾次（同標的可重複計入）；達上限後當日不再開新倉', unit:'次', rtKey:'max_daily_positions', type:'number', step:1, min:1 },
   // 進場條件（由常調 → 少調排序）
-  { id:'tick_rise_threshold',      group:'進場條件', label:'tick 上漲門檻',          desc:'條件⑤的第一必要條件：觀察窗口內股價上漲需 ≥ 此 tick 數；須同時滿足「買盤佔比門檻」才允許進場（二者皆須成立）', unit:'tick', rtKey:'tick_rise_threshold', type:'number', step:1, min:1 },
-  { id:'bid_1m_pct_threshold',     group:'進場條件', label:'觀察窗口買盤佔比門檻',   desc:'條件⑤的第二必要條件：觀察窗口（tick_window_seconds）內買盤佔總成交量 >= 此%。須與「上漲 N tick」同時成立才允許進場（二者皆須滿足）。預設 70%', unit:'%', rtKey:'bid_1m_pct_threshold', type:'number', step:5, min:50, max:100 },
+  { id:'tick_rise_threshold',      group:'進場條件', label:'⑤a tick 上漲門檻',       desc:'⭐ 必要三條件 (a)：觀察窗口內股價上漲需 ≥ 此 tick 數。須與 (b) 買盤佔比、(c) 1分鐘外盤量同時成立，三者缺一不可才允許進場', unit:'tick', rtKey:'tick_rise_threshold', type:'number', step:1, min:1 },
+  { id:'bid_1m_pct_threshold',     group:'進場條件', label:'⑤b 買盤佔比門檻',        desc:'⭐ 必要三條件 (b)：觀察窗口（tick_window_seconds）內買盤佔總成交量 ≥ 此%。須與 (a) tick 上漲、(c) 1分鐘外盤量同時成立，三者缺一不可。預設 70%', unit:'%', rtKey:'bid_1m_pct_threshold', type:'number', step:5, min:50, max:100 },
+  { id:'vol_1m_coef',             group:'進場條件', label:'⑤c 1分鐘外盤量係數',      desc:'⭐ 必要三條件 (c)：過去60秒外盤量(張) ≥ 5日均量(張) ÷ 270 × 此係數。須與 (a)(b) 同時成立。外盤量 = 成交價 ≥ 賣一的主動買單撮合量。設0關閉此子條件。例：5日均量5000張 → 門檻 ≈ 18.5張。預設1.0', unit:'倍', rtKey:'vol_1m_coef', type:'number', step:0.1, min:0, max:10 },
   { id:'amplitude_min_pct',        group:'進場條件', label:'振幅門檻',               desc:'振幅 = (當日最高價 − 最低價) / 昨收 × 100%，反映這支股票今天的動能。振幅太低代表盤整沒方向，不適合當沖，建議設 3~5%', unit:'%', rtKey:'amplitude_min_pct', type:'number', step:0.5, min:0, max:20 },
-  { id:'vol_ratio_coefficient',    group:'進場條件', label:'量比係數',               desc:'條件⑧量比門檻 = (進場開始時間 − 09:00 分鐘數) × 此係數。例：09:15進場、係數1.3 → 門檻=19.5%。係數越高代表要求開盤後的交易量相對5日均量越活躍才進場。預設1.3，可調整範圍0.5~5', unit:'', rtKey:'vol_ratio_coefficient', type:'number', step:0.1, min:0.1, max:5 },
-  { id:'vol_1m_coef',             group:'進場條件', label:'1分鐘外盤量係數',          desc:'條件⑨：過去60秒外盤量(張) ≥ 5日均量(張) ÷ 270 × 此係數。外盤量 = 成交價 ≥ 賣一的主動買單撮合量（非總成交量）。270 = 每日約270根1分鐘K。設0關閉此條件。例：5日均量5000張 → 門檻 = 5000÷270×1.0 ≈ 18.5張，確保進場時有主動買盤支撐。預設1.0', unit:'倍', rtKey:'vol_1m_coef', type:'number', step:0.1, min:0, max:10 },
+  { id:'vol_ratio_coefficient',    group:'進場條件', label:'量比係數',               desc:'條件⑦量比門檻 = (進場開始時間 − 09:00 分鐘數) × 此係數。例：09:15進場、係數1.3 → 門檻=19.5%。係數越高代表要求開盤後的交易量相對5日均量越活躍才進場。預設1.3，可調整範圍0.5~5', unit:'', rtKey:'vol_ratio_coefficient', type:'number', step:0.1, min:0.1, max:5 },
   { id:'tick_window_seconds',      group:'進場條件', label:'tick 觀察窗口',          desc:'計算 tick_rise 用的滾動時間窗口（秒）；預設60秒 = 看過去1分鐘漲了幾tick', unit:'秒', rtKey:'tick_window_seconds', type:'number', step:10, min:10, max:300 },
   { id:'entry_start_time',         group:'進場條件', label:'進場開始時間',           desc:'此時間之前不開新倉（例：09:15 = 開盤後觀察15分鐘再進場）', unit:'HH:MM', rtKey:'entry_start_time', type:'time' },
   { id:'max_change_pct',           group:'進場條件', label:'最大漲跌幅',             desc:'個股當日漲跌幅（絕對值）超過此%不進場，避免追高或跌太多', unit:'%', rtKey:'max_change_pct', type:'number', step:0.5, min:0.5 },
