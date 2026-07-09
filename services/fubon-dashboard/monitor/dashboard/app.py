@@ -204,8 +204,41 @@ def create_app(
     # ── WebSocket push ────────────────────────────────────────────────────────
     _ws_clients: set = set()
 
+    def _get_sys_stats() -> dict:
+        """讀 /proc/meminfo + /proc/self/status + os.getloadavg()，不需 psutil。"""
+        import os as _os
+        stats: dict = {}
+        try:
+            with open("/proc/meminfo") as _f:
+                _mem = {l.split(":")[0]: int(l.split()[1]) for l in _f if ":" in l}
+            _total = _mem.get("MemTotal", 0)
+            _avail = _mem.get("MemAvailable", 0)
+            if _total > 0:
+                stats["mem_used_pct"] = round((_total - _avail) / _total * 100, 1)
+                stats["mem_used_mb"] = round((_total - _avail) / 1024, 0)
+                stats["mem_total_mb"] = round(_total / 1024, 0)
+        except Exception:
+            pass
+        try:
+            _la = _os.getloadavg()
+            stats["load1"] = round(_la[0], 2)
+            stats["load5"] = round(_la[1], 2)
+        except Exception:
+            pass
+        try:
+            with open("/proc/self/status") as _f:
+                for _line in _f:
+                    if _line.startswith("VmRSS:"):
+                        stats["proc_rss_mb"] = round(int(_line.split()[1]) / 1024, 1)
+                        break
+        except Exception:
+            pass
+        return stats
+
     async def _push_state():
         """每秒把引擎狀態推給所有已連線的 WebSocket 客戶端。"""
+        _sys_tick = 0
+        _cached_sys: dict = {}
         while True:
             await asyncio.sleep(1)
             if not _ws_clients:
@@ -234,6 +267,10 @@ def create_app(
                             }
                         except Exception:
                             pass
+                _sys_tick += 1
+                if _sys_tick >= 5:
+                    _cached_sys = _get_sys_stats()
+                    _sys_tick = 0
                 msg = json.dumps(
                     {"type": "state", **state,
                      "dry_run": _trading_params.get("dry_run", True),
@@ -244,7 +281,8 @@ def create_app(
                      "vol_ratio_coefficient": _trading_params.get("vol_ratio_coefficient", 1.3),
                      "entry_start_time": _trading_params.get("entry_start_time", "09:15"),
                      "pnl": pnl, "positions": positions,
-                     "live_stats": live_stats},
+                     "live_stats": live_stats,
+                     "sys_stats": _cached_sys},
                     ensure_ascii=False, default=str,
                 )
                 dead: set = set()

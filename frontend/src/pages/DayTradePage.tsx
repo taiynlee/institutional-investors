@@ -227,11 +227,12 @@ function LiveTab() {
     return () => clearInterval(tid)
   }, [closedAt])
 
+  const symsKey = list?.stocks?.map((s: any) => s.stock_id).sort().join(',') ?? ''
+
   useEffect(() => {
-    if (!list?.stocks?.length) return
-    const syms = list.stocks.map((s: any) => s.stock_id).join(',')
+    if (!symsKey) return
     if (evsRef.current) evsRef.current.close()
-    const evs = new EventSource(`${API}/stream?syms=${syms}`)
+    const evs = new EventSource(`${API}/stream?syms=${symsKey}`)
     // merge 策略：SSE 送空 {} 或部分資料時不覆蓋舊值，保留收盤快照
     evs.onmessage = e => {
       try {
@@ -241,7 +242,7 @@ function LiveTab() {
     }
     evsRef.current = evs
     return () => evs.close()
-  }, [list?.date])
+  }, [symsKey])
 
 
   const doAddCode = async (overrideCode?: string) => {
@@ -1370,6 +1371,8 @@ function HealthTab() {
   const [engineState, setEngineState] = useState<any>(null)
   const stream = useEngineStream()
 
+  const sysStats = stream?.sys_stats ?? {}
+
   // WebSocket 推送：取代 /engine/status 5秒輪詢
   useEffect(() => {
     if (stream && stream.type === 'state') setEngineState(stream)
@@ -1433,6 +1436,19 @@ function HealthTab() {
         {engineState?.dry_run != null && <span className="text-blue-400">DRY RUN</span>}
         {engineState?.symbols?.length > 0 && <span className={muted}>監控：{engineState.symbols.join(', ')}</span>}
         {engineState?.error && <span className="text-red-400 w-full">{engineState.error}</span>}
+        {sysStats.mem_used_pct != null && (
+          <span className={`text-xs ${sysStats.mem_used_pct >= 85 ? 'text-red-400' : sysStats.mem_used_pct >= 70 ? 'text-yellow-400' : muted}`}>
+            MEM {sysStats.mem_used_pct}% ({sysStats.mem_used_mb}/{sysStats.mem_total_mb} MB)
+          </span>
+        )}
+        {sysStats.load1 != null && (
+          <span className={`text-xs ${sysStats.load1 >= 4 ? 'text-red-400' : sysStats.load1 >= 2 ? 'text-yellow-400' : muted}`}>
+            Load {sysStats.load1}/{sysStats.load5}
+          </span>
+        )}
+        {sysStats.proc_rss_mb != null && (
+          <span className={`text-xs ${muted}`}>引擎 RSS {sysStats.proc_rss_mb} MB</span>
+        )}
         <span className={`ml-auto text-[10px] ${muted}`}>DailyScheduler 08:30 自動啟動 / 13:36 自動停止</span>
       </div>
 
