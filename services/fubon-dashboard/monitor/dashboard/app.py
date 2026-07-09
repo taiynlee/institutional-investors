@@ -1304,7 +1304,6 @@ def create_app(
         _trading_params["max_change_pct"] = max(0.1, body.max_change_pct)
         _trading_params["check_not_in_position"] = body.check_not_in_position
         _trading_params["check_futures_signal"] = body.check_futures_signal
-        _trading_params["bid_pct_threshold"] = max(0.0, min(100.0, body.bid_pct_threshold))
         _trading_params["amplitude_min_pct"] = max(0.0, min(20.0, body.amplitude_min_pct))
         _trading_params["bid_1m_pct_threshold"] = max(0.0, min(100.0, body.bid_1m_pct_threshold))
         _trading_params["vol_ratio_coefficient"] = max(0.1, min(10.0, body.vol_ratio_coefficient))
