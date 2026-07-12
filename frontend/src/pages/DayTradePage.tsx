@@ -1066,7 +1066,7 @@ const PARAM_DEFS: PD[] = [
   { id:'vol_1m_coef',              group:'進場條件', label:'外盤量係數',             desc:'⭐ 必要條件：過去N秒外盤量(張) ≥ 近5分鐘平均每分鐘總成交量(張) × 此係數，確認外盤有量撐。設0關閉；資料不足2分鐘自動跳過。例：近5分均量100張、係數0.8 → 外盤需≥80張。預設0.8', unit:'倍', rtKey:'vol_1m_coef', type:'number', step:0.1, min:0, max:5 },
   { id:'vol_trend_coef',           group:'進場條件', label:'量縮過濾係數',            desc:'防止進場後量縮：當前60秒外盤量 ≥ 前一60秒外盤量 × 此係數，確認量在持續或加速中。設0關閉。例：係數0.8 → 若前一分鐘爆500張、現在縮到200張（< 400），跳過此訊號。', unit:'倍', rtKey:'vol_trend_coef', type:'number', step:0.1, min:0, max:2 },
   { id:'vol_ratio_coefficient',    group:'進場條件', label:'量比係數',               desc:'今日累積量/5日均量的動態門檻係數：門檻 = (進場開始至現在的分鐘數) × 此係數。確認這支股票今天有在交易。設1.0代表成交量至少達到5日平均的當前進度', unit:'', rtKey:'vol_ratio_coefficient', type:'number', step:0.1, min:0.1, max:5 },
-  { id:'entry_start_time',         group:'進場條件', label:'進場開始時間',           desc:'此時間之前不開新倉（例：09:15 = 開盤後觀察15分鐘再進場）', unit:'HH:MM', rtKey:'entry_start_time', type:'time' },
+  { id:'entry_start_time',         group:'進場條件', label:'進場開始時間',           desc:'此時間之前不開新倉（例：09:15 = 開盤後觀察15分鐘再進場）', unit:'', rtKey:'entry_start_time', type:'time' },
   { id:'max_change_pct',           group:'進場條件', label:'漲幅上限',               desc:'個股當日漲幅超過此%不進場，避免追太高（漲停股除外）', unit:'%', rtKey:'max_change_pct', type:'number', step:0.5, min:0.5 },
   { id:'check_not_in_position',    group:'進場條件', label:'同標的未持倉才可進場',   desc:'勾選（預設）：同一標的已有持倉時拒絕再進場；取消勾選：允許同標的持倉中再進一張', unit:'', rtKey:'check_not_in_position', type:'boolean' },
   // 停損停利
@@ -1074,8 +1074,8 @@ const PARAM_DEFS: PD[] = [
   { id:'atr_multiplier',       group:'停損停利', label:'ATR 停損係數',    desc:'動態停損：取當日振幅（最高-最低）× 此係數 為停損距離，再取 max(stop_loss_ticks, ATR值)。設 0 關閉 ATR，純用 tick 數。例：振幅10元、係數0.4 → ATR停損距離4元', unit:'倍', rtKey:'atr_multiplier', type:'number', step:0.1, min:0, max:2 },
   { id:'take_profit_add_pct',  group:'停損停利', label:'停利附加漲幅',    desc:'停利觸價單 = 昨收 × (1 + (進場時漲幅 + 此%) / 100)，向下捨入 tick；例：進場漲4%、附加4% → 停利在昨收漲8%', unit:'%', rtKey:'take_profit_add_pct', type:'number', step:0.5, min:0.5 },
   // 交易時間
-  { id:'force_exit_time',         group:'交易時間', label:'強制出場時間',  desc:'到達此時間所有持倉強制市價出清（不掛限價，直接市價）', unit:'HH:MM', rtKey:'force_exit_time', type:'time' },
-  { id:'latest_dynamic_add_time', group:'交易時間', label:'進場截止時間',  desc:'此時間後不接受新進場信號，太接近收盤避免來不及出清', unit:'HH:MM', rtKey:'latest_dynamic_add_time', type:'time' },
+  { id:'force_exit_time',         group:'交易時間', label:'強制出場時間',  desc:'到達此時間所有持倉強制市價出清（不掛限價，直接市價）', unit:'', rtKey:'force_exit_time', type:'time' },
+  { id:'latest_dynamic_add_time', group:'交易時間', label:'進場截止時間',  desc:'此時間後不接受新進場信號，太接近收盤避免來不及出清', unit:'', rtKey:'latest_dynamic_add_time', type:'time' },
   // 委託設定
   { id:'commission_discount', group:'委託設定', label:'手續費折扣', desc:'券商手續費折讓倍率：0.28 = 付28%，72% 月底退還', unit:'折', rtKey:'commission_discount', type:'number', step:0.01, min:0.01, max:1 },
   // 當沖篩選條件
@@ -1228,7 +1228,7 @@ function ParamsTab() {
                             ...prev,
                             [p.id]: p.type === 'time' ? e.target.value : Number(e.target.value)
                           }))}
-                          className={`w-24 text-right bg-[#0c1929] border border-[#253d5c] text-[#dde6f0]
+                          className={`${p.type === 'time' ? 'w-36' : 'w-24'} text-right bg-[#0c1929] border border-[#253d5c] text-[#dde6f0]
                             px-2 py-1 text-xs ${mono} rounded focus:outline-none focus:border-[#60a5fa]`}
                         />
                       )}

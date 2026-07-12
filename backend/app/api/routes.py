@@ -145,16 +145,30 @@ async def get_score_a(
 ):
     """策略A：BB突破品質評分 (100分)，score_a > 0"""
     target_date = calc_date or date.today()
-    results = (await db.execute(
-        select(ScreeningResult)
-        .where(and_(
-            ScreeningResult.calc_date == target_date,
-            ScreeningResult.passes == True,
-            ScreeningResult.tags.contains("A"),
-            ScreeningResult.score_a > 0,
-        ))
-        .order_by(ScreeningResult.score_a.desc())
-    )).scalars().all()
+
+    async def _query_a(dt: date):
+        return (await db.execute(
+            select(ScreeningResult)
+            .where(and_(
+                ScreeningResult.calc_date == dt,
+                ScreeningResult.passes == True,
+                ScreeningResult.tags.contains("A"),
+                ScreeningResult.score_a > 0,
+            ))
+            .order_by(ScreeningResult.score_a.desc())
+        )).scalars().all()
+
+    results = await _query_a(target_date)
+    if not results and calc_date is None:
+        latest = (await db.execute(
+            select(ScreeningResult.calc_date)
+            .where(ScreeningResult.passes == True)
+            .order_by(ScreeningResult.calc_date.desc())
+            .limit(1)
+        )).scalar_one_or_none()
+        if latest:
+            target_date = latest
+            results = await _query_a(latest)
 
     codes = [r.code for r in results]
     stats = await _appearance_stats(codes, target_date, db) if codes else {}
@@ -174,15 +188,29 @@ async def get_score_b(
 ):
     """策略B：籌碼拉回評分，與主頁/score-a 一致：單一最新日期 + passes=True"""
     target_date = calc_date or date.today()
-    results = (await db.execute(
-        select(ScreeningResult)
-        .where(and_(
-            ScreeningResult.calc_date == target_date,
-            ScreeningResult.passes == True,
-            ScreeningResult.tags.contains("B"),
-        ))
-        .order_by(ScreeningResult.score_b.desc())
-    )).scalars().all()
+
+    async def _query_b(dt: date):
+        return (await db.execute(
+            select(ScreeningResult)
+            .where(and_(
+                ScreeningResult.calc_date == dt,
+                ScreeningResult.passes == True,
+                ScreeningResult.tags.contains("B"),
+            ))
+            .order_by(ScreeningResult.score_b.desc())
+        )).scalars().all()
+
+    results = await _query_b(target_date)
+    if not results and calc_date is None:
+        latest = (await db.execute(
+            select(ScreeningResult.calc_date)
+            .where(ScreeningResult.passes == True)
+            .order_by(ScreeningResult.calc_date.desc())
+            .limit(1)
+        )).scalar_one_or_none()
+        if latest:
+            target_date = latest
+            results = await _query_b(latest)
 
     codes = [r.code for r in results]
     stats = await _appearance_stats(codes, target_date, db) if codes else {}
@@ -220,22 +248,36 @@ async def get_score_c(
 @router.get("/api/result/dates")
 async def get_result_dates(db: AsyncSession = Depends(get_db)):
     candidate_dates = (await db.execute(
-        select(ScreeningResult.calc_date)
-        .distinct()
+        select(ScreeningResult.calc_date).distinct()
         .where(ScreeningResult.calc_date < date.today())
         .order_by(ScreeningResult.calc_date.desc())
         .limit(20)
     )).scalars().all()
 
+    if not candidate_dates:
+        return []
+
+    latest_price_date = (await db.execute(
+        select(DailyPrice.trade_date).order_by(DailyPrice.trade_date.desc()).limit(1)
+    )).scalar_one_or_none()
+
+    if not latest_price_date:
+        return []
+
+    # 一次撈所有交易日（最舊候選日後到最新收盤日），避免 N+1 查詢
+    all_trade_dates: set = set(r[0] for r in (await db.execute(
+        select(DailyPrice.trade_date).distinct()
+        .where(
+            DailyPrice.trade_date > candidate_dates[-1],
+            DailyPrice.trade_date <= latest_price_date,
+        )
+    )).all())
+
     valid = []
     for cd in candidate_dates:
-        has_next = (await db.execute(
-            select(DailyPrice.trade_date)
-            .where(DailyPrice.trade_date > cd)
-            .limit(1)
-        )).scalar_one_or_none()
-        if has_next:
-            valid.append(str(cd))
+        hold_days = sum(1 for d in all_trade_dates if d > cd)
+        if hold_days > 0:
+            valid.append({"date": str(cd), "hold_days": hold_days})
         if len(valid) >= 10:
             break
     return valid
@@ -337,7 +379,14 @@ async def get_result_comparison(
         })
 
     rows.sort(key=lambda x: x["chg_pct"], reverse=True)
-    return {"pred_date": str(chosen), "price_date": str(latest_price_date), "rows": rows}
+    win_count = sum(1 for r in rows if r["chg_pct"] > 0)
+    return {
+        "pred_date": str(chosen),
+        "price_date": str(latest_price_date),
+        "win_count": win_count,
+        "total_count": len(rows),
+        "rows": rows,
+    }
 
 
 @router.get("/api/price/{code}")
@@ -831,7 +880,12 @@ async def get_us_stocks(db: AsyncSession = Depends(get_db)):
             t = yf.Ticker(sym)
             hist = t.history(period="5d")  # 5d 確保週末也有資料
             if len(hist) < 1:
-                return None
+                # 無行情（新上市/暫停交易）→ 仍顯示但價格為 None
+                return {
+                    "symbol": sym, "name": name,
+                    "close": None, "chg_pct": None,
+                    "post_price": None, "post_chg_pct": None,
+                }
             close = float(hist["Close"].iloc[-1])
             prev  = float(hist["Close"].iloc[-2]) if len(hist) >= 2 else close
             chg_pct = (close - prev) / prev * 100 if prev else 0
@@ -1126,33 +1180,52 @@ async def get_ic_chains(db: AsyncSession = Depends(get_db)):
 async def get_watchlist_a(
     db: AsyncSession = Depends(get_db),
     status: Optional[str] = Query(None),
+    include_expired: bool = Query(False),
 ):
-    """策略A追蹤清單"""
+    """策略A追蹤清單（預設隱藏 expired/auto_removed）"""
+    _hidden = {"expired", "auto_removed"}
     q = select(WatchlistA)
     if status:
         q = q.where(WatchlistA.status == status)
+    elif not include_expired:
+        q = q.where(WatchlistA.status.not_in(_hidden))
     q = q.order_by(WatchlistA.added_date.desc())
     rows = (await db.execute(q)).scalars().all()
 
     codes = [r.code for r in rows]
     latest_prices: dict[str, float] = {}
+    closes_by_code: dict[str, list[float]] = {}
     if codes:
+        # 最新收盤
         price_subq = (
             select(DailyPrice.code, DailyPrice.close, DailyPrice.trade_date)
             .where(DailyPrice.code.in_(codes))
             .distinct(DailyPrice.code)
             .order_by(DailyPrice.code, DailyPrice.trade_date.desc())
         ).subquery()
-        price_rows = (await db.execute(select(price_subq))).all()
-        for r in price_rows:
+        for r in (await db.execute(select(price_subq))).all():
             latest_prices[r.code] = r.close
+
+        # 近 35 曆日收盤序列（BB 計算用，約 25 個交易日）
+        cutoff = date.today() - timedelta(days=35)
+        for r in (await db.execute(
+            select(DailyPrice.code, DailyPrice.close, DailyPrice.trade_date)
+            .where(DailyPrice.code.in_(codes), DailyPrice.trade_date >= cutoff)
+            .order_by(DailyPrice.code, DailyPrice.trade_date.asc())
+        )).all():
+            closes_by_code.setdefault(r.code, []).append(r.close)
 
     result = []
     for r in rows:
         close = latest_prices.get(r.code)
+        # chg_pct：已進場/已到位 → vs triggered_close；追蹤中 → vs added_close
+        chg_baseline = r.triggered_close if (r.triggered_close and r.status in ("triggered", "entered")) else r.added_close
         chg_pct = None
-        if close and r.added_close and r.added_close > 0:
-            chg_pct = round((close - r.added_close) / r.added_close * 100, 2)
+        if close and chg_baseline and chg_baseline > 0:
+            chg_pct = round((close - chg_baseline) / chg_baseline * 100, 2)
+        # 現在 BB
+        cls = closes_by_code.get(r.code, [])
+        current_bb = round(calc_bb_position(cls), 1) if len(cls) >= 20 else None
         result.append({
             "id": r.id,
             "code": r.code,
@@ -1166,7 +1239,9 @@ async def get_watchlist_a(
             "triggered_close": r.triggered_close,
             "triggered_bb_position": r.triggered_bb_position,
             "current_close": close,
+            "current_bb": current_bb,
             "chg_pct": chg_pct,
+            "chg_basis": "triggered" if (r.triggered_close and r.status in ("triggered", "entered")) else "added",
         })
     return result
 
@@ -1182,7 +1257,7 @@ async def update_watchlist_status(
     db: AsyncSession = Depends(get_db),
 ):
     """更新追蹤清單狀態 (entered / exited / dismissed)"""
-    valid = {"tracking", "triggered", "entered", "exited", "dismissed"}
+    valid = {"tracking", "triggered", "entered", "exited", "dismissed", "expired", "auto_removed"}
     if body.status not in valid:
         raise HTTPException(status_code=400, detail=f"Invalid status. Must be one of: {valid}")
     item = (await db.execute(
@@ -1404,8 +1479,12 @@ async def get_exit_alerts(db: AsyncSession = Depends(get_db)):
     )).scalars().all()
 
     closes_by_code: dict = {}
+    prices_by_code: dict = {}       # code → {trade_date: close}
+    latest_close_by_code: dict = {} # code → 最新收盤（rows 已 asc 排序，最後寫入即最新）
     for row in price_rows:
         closes_by_code.setdefault(row.code, []).append(row.close)
+        prices_by_code.setdefault(row.code, {})[row.trade_date] = row.close
+        latest_close_by_code[row.code] = row.close
 
     # 計算每個落榜股「已消失幾個篩選日」（recent_dates 已依日期降序）
     recent_dates_sorted_asc = list(reversed(recent_dates))  # 升序
@@ -1428,14 +1507,24 @@ async def get_exit_alerts(db: AsyncSession = Depends(get_db)):
             if chip_pct <= -1.5 and chip_12d_pct <= 0:
                 badges.append({"type": "chip", "label": "籌碼出場"})
 
+        current_close = latest_close_by_code.get(code)
+        price_at_last_seen = prices_by_code.get(code, {}).get(last_seen)
+        chg_since_last = None
+        if current_close and price_at_last_seen and price_at_last_seen > 0:
+            chg_since_last = round((current_close - price_at_last_seen) / price_at_last_seen * 100, 2)
+
         alerts.append({
             "code": code,
             "name": latest.name,
+            "tags": latest.tags or "",
             "bb": round(bb, 1),
+            "peak_bb": round(stock_peak_bb.get(code, 0), 1),
             "chip_3d_pct": round(chip_pct, 2) if chip_pct is not None else None,
             "last_seen_date": str(last_seen),
             "days_off": days_off,
             "badges": badges,
+            "current_close": current_close,
+            "chg_since_last": chg_since_last,
         })
 
     # 5個篩選日後自動移除；最近才落榜的排前面
