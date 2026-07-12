@@ -84,11 +84,12 @@ const REASON_LABEL: Record<string, string> = {
 function reasonLabel(r: string | undefined | null): string {
   if (!r) return ''
   if (REASON_LABEL[r]) return REASON_LABEL[r]
-  if (r.startsWith('change_pct_too_low_'))   return `漲幅不足(${r.replace('change_pct_too_low_', '')})`
   if (r.startsWith('change_pct_exceeded_'))  return `漲跌幅超限(${r.split('exceeded_')[1]})`
+  if (r.startsWith('chg1m_low_'))            return `1m漲幅不足(${r.replace('chg1m_low_', '')})`
   if (r.startsWith('bid1m_low_'))            return `外盤%不足(${r.replace('bid1m_low_', '')})`
   if (r.startsWith('vol_ratio_low_'))        return `量比不足(${r.replace('vol_ratio_low_', '')})`
   if (r.startsWith('vol_1m_low_'))           return `外盤量不足(${r.replace('vol_1m_low_', '')})`
+  if (r.startsWith('vol_fading_'))           return `量縮退潮(${r.replace('vol_fading_', '')})`
   return r
 }
 
@@ -101,7 +102,7 @@ function SignalTable({ entries }: { entries: any[] }) {
         if (!open[e.symbol]) {
           const row = {
             sig_time: e.ts, symbol: e.symbol, name: e.name,
-            change_pct: e.change_pct, bid_1m_pct: e.bid_1m_pct, vol_1m: e.vol_1m,
+            change_pct: e.change_pct, chg_1m_pct: e.chg_1m_pct, bid_1m_pct: e.bid_1m_pct, vol_1m: e.vol_1m, prev_vol_1m: e.prev_vol_1m,
             entry: e.price, tp: null, sl: null, lots: e.lots,
             exit_time: null, exit_type: null, pnl_lot: null,
           }
@@ -114,8 +115,10 @@ function SignalTable({ entries }: { entries: any[] }) {
           row.tp = e.take_profit
           row.sl = e.stop_loss
           if (e.change_pct != null) row.change_pct = e.change_pct
+          if (e.chg_1m_pct != null) row.chg_1m_pct = e.chg_1m_pct
           if (e.bid_1m_pct != null) row.bid_1m_pct = e.bid_1m_pct
           if (e.vol_1m != null) row.vol_1m = e.vol_1m
+          if (e.prev_vol_1m != null) row.prev_vol_1m = e.prev_vol_1m
         }
       } else if (e.type === 'sell') {
         const row = open[e.symbol]
@@ -177,8 +180,10 @@ function SignalTable({ entries }: { entries: any[] }) {
                       <td className="px-2 py-1.5 text-[#b0c4de] whitespace-nowrap">{r.name}</td>
                       <td className="px-2 py-1.5 text-[#8ab4d4] whitespace-nowrap">
                         {r.change_pct != null ? `漲${r.change_pct > 0 ? '+' : ''}${r.change_pct}%` : ''}
+                        {r.chg_1m_pct != null ? ` 1m${r.chg_1m_pct >= 0 ? '+' : ''}${r.chg_1m_pct}%` : ''}
                         {r.bid_1m_pct != null ? ` 外${r.bid_1m_pct}%` : ''}
                         {r.vol_1m != null ? ` 量${r.vol_1m}張` : ''}
+                        {r.prev_vol_1m != null ? `(前${r.prev_vol_1m}張)` : ''}
                       </td>
                       <td className="px-2 py-1.5 text-right">{r.entry?.toFixed(1) ?? '--'}</td>
                       <td className="px-2 py-1.5 text-right text-red-400">{r.tp?.toFixed(1) ?? '--'}</td>
@@ -332,6 +337,7 @@ function LiveTab() {
   }
 
   const cancelConditions = async (symbol: string) => {
+    if (!window.confirm(`確定取消 ${symbol} 的停損/停利觸價單？\n⚠ 取消後部位將裸曝，需手動從 App 賣出！`)) return
     setCancellingCond(symbol)
     try {
       await axios.post(`${API}/engine/cancel-conditions/${symbol}`)
@@ -346,7 +352,7 @@ function LiveTab() {
   const pnlColor = (v: number) => v > 0 ? 'text-red-400' : v < 0 ? 'text-green-400' : 'text-[#6b84a0]'
 
   const stocks: any[] = list?.stocks ?? []
-  const liveStats: Record<string, { bid_1m_pct: number; vol_1m?: number }> = stream?.live_stats ?? {}
+  const liveStats: Record<string, { bid_1m_pct: number; vol_1m?: number; chg_1m_pct?: number }> = stream?.live_stats ?? {}
   const idxData = ticks['__index__'] ?? {}
   const idxPrice: number | null = idxData.price ?? null
   const idxChgDayPct: number = idxData.chg_day_pct ?? 0
@@ -381,12 +387,22 @@ function LiveTab() {
             const _coef = (stream as any)?.vol_ratio_coefficient ?? 1.0
             const _volPct = Math.round(_mins * _coef * 10) / 10
             const _vol1mCoef = (stream as any)?.vol_1m_coef ?? 0.8
-            const _minChg = (stream as any)?.min_change_pct ?? 2.0
+            const _volTrendCoef = (stream as any)?.vol_trend_coef ?? 0.8
             const _bidThr = stream?.bid_1m_pct_threshold ?? 85
-            const _c3 = _vol1mCoef > 0
-              ? `③ 外盤量：過去60秒外盤量 ≥ 近5分均量×${_vol1mCoef}（資料不足自動跳過）`
-              : `③ 外盤量條件已關閉（vol_1m_coef=0）`
-            return `進場六條件：\n① 時間窗口（${est} ~ 截止）\n② 未持倉 / 今日進場次數 < 上限\n漲幅條件：${_minChg}% ≤ 今日漲幅 ≤ ${(stream as any)?.max_change_pct ?? 5}%\n⭐ 外盤雙條件（需同時成立）：\n① 外盤佔比 ≥ ${_bidThr}%\n${_c3}\n量比：今日成交量 ≥ 5日均量進度×${_coef}（門檻=${_volPct}%）`
+            const _winSec = (stream as any)?.tick_window_seconds ?? 60
+            const _maxChgPct = (stream as any)?.max_change_pct ?? 5.0
+            const _chgThr = (stream as any)?.chg_1m_min_pct ?? 0.6
+            const _c3 = `③ 漲幅上限：當日漲幅 ≤ ${_maxChgPct}%（避免追高）`
+            const _c4 = _chgThr > 0
+              ? `④ 1m漲幅 ≥ ${_chgThr}%（窗口${_winSec}秒內最早→現價，確認動能非假掛單）`
+              : `④ 1m漲幅條件已關閉（chg_1m_min_pct=0）`
+            const _c6 = _vol1mCoef > 0
+              ? `⑥ 外盤量 ≥ 近5分均量×${_vol1mCoef}（過去${_winSec}秒，資料不足自動跳過）`
+              : `⑥ 外盤量條件已關閉（vol_1m_coef=0）`
+            const _c7 = _volTrendCoef > 0
+              ? `⑦ 量縮過濾：當前60s外盤量 ≥ 前60s外盤量×${_volTrendCoef}（防止爆量後退潮進場）`
+              : `⑦ 量縮過濾已關閉（vol_trend_coef=0）`
+            return `進場八條件：\n① 時間窗口（${est} ~ 截止）\n② 未持倉 / 今日進場次數 < 上限\n${_c3}\n${_c4}\n⑤ 外盤佔比 ≥ ${_bidThr}%（觀察窗口 ${_winSec}秒）\n${_c6}\n${_c7}\n⑧ 量比：今日成交量 ≥ 5日均量進度×${_coef}（門檻=${_volPct}%）`
           })()}
         >
           <span className="text-[10px] text-[#6b84a0] mb-0.5">今日已交易</span>
@@ -562,6 +578,7 @@ function LiveTab() {
                   <th className="px-3 py-2 text-right" style={{minWidth:52}}>昨收</th>
                   <th className="px-3 py-2 text-right" style={{minWidth:60}}>現價</th>
                   <th className="px-3 py-2 text-right" style={{minWidth:66}}>漲幅</th>
+                  <th className="px-3 py-2 text-right" style={{minWidth:64}}>1m漲幅</th>
                   <th className="px-3 py-2 text-right" style={{minWidth:64}}>外盤%</th>
                   <th className="px-3 py-2 text-right" style={{minWidth:66}}>1m外盤(張)</th>
                   <th className="px-3 py-2 text-right" style={{minWidth:60}}>量比</th>
@@ -604,6 +621,16 @@ function LiveTab() {
                             {`${isUp ? '+' : ''}${rtPct.toFixed(2)}%`}
                           </span>
                         ) : <span className={muted}>—</span>}
+                      </td>
+                      {/* 1m漲幅 */}
+                      <td className={`px-3 py-2.5 text-right ${mono} text-xs`}>
+                        {ls?.chg_1m_pct != null ? (() => {
+                          const thr = (stream as any)?.chg_1m_min_pct ?? 0.6
+                          const v = ls.chg_1m_pct!
+                          const ok = thr <= 0 || v >= thr
+                          const cls = ok ? 'text-red-400 font-semibold' : v >= 0 ? 'text-yellow-400' : 'text-green-400'
+                          return <span className={cls} title={`門檻≥${thr}%`}>{v >= 0 ? '+' : ''}{v.toFixed(2)}%</span>
+                        })() : <span className={muted}>—</span>}
                       </td>
                       {/* 外盤% */}
                       <td className={`px-3 py-2.5 text-right ${mono} text-xs`}>
@@ -677,15 +704,22 @@ function TradesTab() {
   const [period, setPeriod] = useState<Period>('今日')
   const [loading, setLoading] = useState(true)
   const [deleting, setDeleting] = useState<string | null>(null)
+  const [commDiscount, setCommDiscount] = useState<number>(0.28)
 
   const loadTrades = () => {
     setLoading(true)
     axios.get(`${API}/trade-history`).then(r => setAllTrades(r.data)).catch(() => {}).finally(() => setLoading(false))
   }
 
-  useEffect(() => { loadTrades() }, [])
+  useEffect(() => {
+    loadTrades()
+    axios.get(`${API}/trading-params`).then(r => {
+      if (r.data.commission_discount != null) setCommDiscount(r.data.commission_discount)
+    }).catch(() => {})
+  }, [])
 
   const deleteTrade = async (trade_date: string, symbol: string) => {
+    if (!window.confirm(`確定刪除 ${trade_date} ${symbol} 的交易紀錄？此操作不可復原。`)) return
     const key = `${trade_date}-${symbol}`
     setDeleting(key)
     try {
@@ -721,7 +755,7 @@ function TradesTab() {
   const totalPnl = trades.reduce((s, r) => s + (r.pnl || 0), 0)
   const totalFee = trades.reduce((s, r) => s + (r.commission || 0), 0)
   const totalNet = totalPnl - totalFee
-  const totalRebate = trades.reduce((s, r) => s + Math.floor((r.brokerage_only || 0) * 0.72), 0)
+  const totalRebate = trades.reduce((s, r) => s + Math.floor((r.brokerage_only || 0) * (1 - commDiscount)), 0)
   const winRows = trades.filter(r => (r.pnl || 0) - (r.commission || 0) > 0).length
   const winRate = trades.length > 0 ? Math.round(winRows / trades.length * 100) : 0
 
@@ -795,7 +829,7 @@ function TradesTab() {
                 {trades.map((t, i) => {
                   const fee = t.commission || 0
                   const net = (t.pnl || 0) - fee
-                  const rebate = Math.floor((t.brokerage_only || 0) * 0.72)
+                  const rebate = Math.floor((t.brokerage_only || 0) * (1 - commDiscount))
                   const lots = t.total_lots ?? t.trade_count ?? 1
                   const totalBuy = t.avg_entry != null ? Math.round(t.avg_entry * lots * 1000) : null
                   const delKey = `${t.trade_date}-${t.symbol}`
@@ -953,6 +987,7 @@ function PreSessionTab() {
                   <th className="px-3 py-2 text-center">投信</th>
                   <th className="px-3 py-2 text-center">融資↓</th>
                   <th className="px-3 py-2 text-center">籌碼分</th>
+                  <th className="px-3 py-2 text-center">來源</th>
                   <th className="px-3 py-2 text-right">外資淨</th>
                   <th className="px-3 py-2 text-right">投信淨</th>
                   <th className="px-3 py-2 text-right">融資增</th>
@@ -991,6 +1026,11 @@ function PreSessionTab() {
                           {chipCnt}/3
                         </span>
                       </td>
+                      <td className="px-3 py-2.5 text-center">
+                        <span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${chipPass ? 'bg-green-400/15 text-green-400' : 'bg-blue-400/15 text-blue-400'}`}>
+                          {chipPass ? '籌碼' : '策略'}
+                        </span>
+                      </td>
                       <td className={`px-3 py-2.5 text-right ${mono} text-xs ${forOk ? 'text-green-400' : 'text-red-400'}`}>
                         {s.foreign_net > 0 ? '+' : ''}{s.foreign_net != null ? Math.round(s.foreign_net).toLocaleString() : '—'}
                       </td>
@@ -1020,15 +1060,18 @@ const PARAM_DEFS: PD[] = [
   { id:'max_position_capital', group:'倉位控制', label:'每次進場資金上限', desc:'每次進場最多動用的資金（超過就截斷）；張數 = floor(min(上限, 剩餘總資金) / (價格 × 1000))', unit:'TWD', rtKey:'max_position_capital', type:'number', step:100000, min:100000 },
   { id:'max_daily_positions',  group:'倉位控制', label:'每日進場次數上限', desc:'一天最多進場幾次（同標的可重複計入）；達上限後當日不再開新倉', unit:'次', rtKey:'max_daily_positions', type:'number', step:1, min:1 },
   // 進場條件（由常調 → 少調排序）
-  { id:'min_change_pct',           group:'進場條件', label:'漲幅下限',               desc:'⭐ 核心條件①：進場時個股漲幅需 ≥ 此%，確認股票已有漲勢、不是假突破。設 2.0% 代表只追已漲 2% 以上的股。根據 2026-07-09 實盤分析，漲幅>2% 是勝率最高的單一過濾器（30% vs 14%）', unit:'%', rtKey:'min_change_pct', type:'number', step:0.5, min:0, max:5 },
-  { id:'bid_1m_pct_threshold',     group:'進場條件', label:'外盤佔比門檻',           desc:'⭐ 核心條件②：觀察窗口內外盤（主動買單成交量）佔總成交量 ≥ 此%，確認主力在主動追買。外盤% = 成交在賣一以上的量 / 總量 × 100。建議 85%（根據實測，85% 以上勝率轉正期望）', unit:'%', rtKey:'bid_1m_pct_threshold', type:'number', step:5, min:50, max:100 },
-  { id:'vol_1m_coef',              group:'進場條件', label:'外盤量係數',             desc:'過去60秒外盤量(張) ≥ 近5分鐘平均每分鐘總成交量(張) × 此係數，確認外盤有量撐。設0關閉；資料不足2分鐘自動跳過。例：近5分均量100張、係數0.8 → 外盤需≥80張。預設0.8', unit:'倍', rtKey:'vol_1m_coef', type:'number', step:0.1, min:0, max:5 },
+  { id:'bid_1m_pct_threshold',     group:'進場條件', label:'外盤佔比門檻',           desc:'⭐ 核心條件：觀察窗口內外盤（主動買單成交量）佔總成交量 ≥ 此%，確認主力在主動追買。外盤% = 成交在賣一以上的量 / 總量 × 100。建議 85%（根據實測，85% 以上勝率轉正期望）', unit:'%', rtKey:'bid_1m_pct_threshold', type:'number', step:5, min:50, max:100 },
+  { id:'tick_window_seconds',      group:'進場條件', label:'外盤觀察窗口',           desc:'計算外盤佔比、外盤量與1m漲幅時的滾動時間窗口（秒）。例：60 = 取最近60秒內的資料；窗口越短越即時但越容易受噪音影響', unit:'秒', rtKey:'tick_window_seconds', type:'number', step:10, min:10, max:300 },
+  { id:'chg_1m_min_pct',          group:'進場條件', label:'1m漲幅下限',             desc:'⭐ 必要條件：觀察窗口內最早成交價至今的漲幅需達此%，確認短線動能真實（非委買掛單假象）。設0關閉。台股交易成本約0.3%，預設0.6%確保進場前價格已在上漲。', unit:'%', rtKey:'chg_1m_min_pct', type:'number', step:0.1, min:0, max:3 },
+  { id:'vol_1m_coef',              group:'進場條件', label:'外盤量係數',             desc:'⭐ 必要條件：過去N秒外盤量(張) ≥ 近5分鐘平均每分鐘總成交量(張) × 此係數，確認外盤有量撐。設0關閉；資料不足2分鐘自動跳過。例：近5分均量100張、係數0.8 → 外盤需≥80張。預設0.8', unit:'倍', rtKey:'vol_1m_coef', type:'number', step:0.1, min:0, max:5 },
+  { id:'vol_trend_coef',           group:'進場條件', label:'量縮過濾係數',            desc:'防止進場後量縮：當前60秒外盤量 ≥ 前一60秒外盤量 × 此係數，確認量在持續或加速中。設0關閉。例：係數0.8 → 若前一分鐘爆500張、現在縮到200張（< 400），跳過此訊號。', unit:'倍', rtKey:'vol_trend_coef', type:'number', step:0.1, min:0, max:2 },
   { id:'vol_ratio_coefficient',    group:'進場條件', label:'量比係數',               desc:'今日累積量/5日均量的動態門檻係數：門檻 = (進場開始至現在的分鐘數) × 此係數。確認這支股票今天有在交易。設1.0代表成交量至少達到5日平均的當前進度', unit:'', rtKey:'vol_ratio_coefficient', type:'number', step:0.1, min:0.1, max:5 },
   { id:'entry_start_time',         group:'進場條件', label:'進場開始時間',           desc:'此時間之前不開新倉（例：09:15 = 開盤後觀察15分鐘再進場）', unit:'HH:MM', rtKey:'entry_start_time', type:'time' },
-  { id:'max_change_pct',           group:'進場條件', label:'漲幅上限',               desc:'個股當日漲幅超過此%不進場，避免追太高（漲停股除外）。與漲幅下限形成進場漲幅區間 [min_change_pct, max_change_pct]', unit:'%', rtKey:'max_change_pct', type:'number', step:0.5, min:0.5 },
+  { id:'max_change_pct',           group:'進場條件', label:'漲幅上限',               desc:'個股當日漲幅超過此%不進場，避免追太高（漲停股除外）', unit:'%', rtKey:'max_change_pct', type:'number', step:0.5, min:0.5 },
   { id:'check_not_in_position',    group:'進場條件', label:'同標的未持倉才可進場',   desc:'勾選（預設）：同一標的已有持倉時拒絕再進場；取消勾選：允許同標的持倉中再進一張', unit:'', rtKey:'check_not_in_position', type:'boolean' },
   // 停損停利
-  { id:'stop_loss_ticks',      group:'停損停利', label:'停損 tick 數',    desc:'進場後向下跌超過此 tick 數觸發停損（觸價單）；停損價 = 進場價 - N × tick_size，向上捨入', unit:'tick', rtKey:'stop_loss_ticks', type:'number', step:1, min:1 },
+  { id:'stop_loss_ticks',      group:'停損停利', label:'停損 tick 數（最小值）', desc:'停損距離下限：進場價 - N × tick_size，向上捨入。ATR 動態模式下取 max(此值, ATR計算值)', unit:'tick', rtKey:'stop_loss_ticks', type:'number', step:1, min:1 },
+  { id:'atr_multiplier',       group:'停損停利', label:'ATR 停損係數',    desc:'動態停損：取當日振幅（最高-最低）× 此係數 為停損距離，再取 max(stop_loss_ticks, ATR值)。設 0 關閉 ATR，純用 tick 數。例：振幅10元、係數0.4 → ATR停損距離4元', unit:'倍', rtKey:'atr_multiplier', type:'number', step:0.1, min:0, max:2 },
   { id:'take_profit_add_pct',  group:'停損停利', label:'停利附加漲幅',    desc:'停利觸價單 = 昨收 × (1 + (進場時漲幅 + 此%) / 100)，向下捨入 tick；例：進場漲4%、附加4% → 停利在昨收漲8%', unit:'%', rtKey:'take_profit_add_pct', type:'number', step:0.5, min:0.5 },
   // 交易時間
   { id:'force_exit_time',         group:'交易時間', label:'強制出場時間',  desc:'到達此時間所有持倉強制市價出清（不掛限價，直接市價）', unit:'HH:MM', rtKey:'force_exit_time', type:'time' },
@@ -1061,6 +1104,19 @@ function ParamsTab() {
 
   const save = async () => {
     if (!rtParams) return
+    // Fix 1: dry_run live mode confirmation
+    if (rtParams.dry_run === false) {
+      if (!window.confirm('⚠️ 即將以「實盤 LIVE」模式儲存！\n下一個 tick 引擎將真實下單，確定嗎？')) return
+    }
+    // Fix 3: time field validation
+    for (const p of PARAM_DEFS) {
+      if (p.type === 'time' && vals[p.id] != null) {
+        if (!/^\d{2}:\d{2}$/.test(String(vals[p.id]))) {
+          setNote({ ok: false, msg: `✕ 時間格式錯誤：${p.label}（需為 HH:MM）` })
+          return
+        }
+      }
+    }
     setSaving(true); setNote(null)
     try {
       const body: Record<string, any> = { dry_run: rtParams.dry_run ?? true }
@@ -1068,7 +1124,13 @@ function ParamsTab() {
         if (vals[p.id] != null) body[p.rtKey] = vals[p.id]
       }
       await axios.post(`${API}/trading-params`, body)
-      setNote({ ok: true, msg: '✓ 已儲存' })
+      // Fix 6: reload server values to confirm what actually got saved
+      const r2 = await axios.get(`${API}/trading-params`)
+      setRtParams(r2.data)
+      const v: Record<string, any> = {}
+      for (const p of PARAM_DEFS) { v[p.id] = r2.data[p.rtKey] }
+      setVals(v)
+      setNote({ ok: true, msg: '✓ 已儲存，設定已從伺服器確認' })
     } catch (e: any) {
       setNote({ ok: false, msg: `✕ 儲存失敗：${e?.response?.data?.detail ?? e.message}` })
     } finally { setSaving(false) }
@@ -1157,7 +1219,7 @@ function ParamsTab() {
                         </label>
                       ) : (
                         <input
-                          type={p.type === 'time' ? 'text' : 'number'}
+                          type={p.type === 'time' ? 'time' : 'number'}
                           value={vals[p.id] ?? ''}
                           step={p.step}
                           min={p.min}
@@ -1410,7 +1472,9 @@ function SimulateBuySell() {
 
 // ── 系統健診 ─────────────────────────────────────────────────────────────────
 function HealthTab() {
-  const [result, setResult] = useState<any | null>(null)
+  const [result, setResult] = useState<any | null>(() => {
+    try { const s = sessionStorage.getItem('health-check-result'); return s ? JSON.parse(s) : null } catch { return null }
+  })
   const [running, setRunning] = useState(false)
   const [logs, setLogs] = useState<{ lines: string[]; file: string | null; date: string | null }>({ lines: [], file: null, date: null })
   const [engineState, setEngineState] = useState<any>(null)
@@ -1441,7 +1505,10 @@ function HealthTab() {
   const runCheck = (mode: 'quick' | 'full') => {
     setRunning(true)
     axios.post(`${API}/health-check/run?mode=${mode}`)
-      .then(r => setResult(r.data))
+      .then(r => {
+        setResult(r.data)
+        try { sessionStorage.setItem('health-check-result', JSON.stringify(r.data)) } catch {}
+      })
       .catch(() => {})
       .finally(() => setRunning(false))
   }
@@ -1585,6 +1652,7 @@ function HealthTab() {
 
 // ── 訊息 Log Tab ──────────────────────────────────────────────────────────────
 const MSG_TYPE_LABEL: Record<string, string> = {
+  signal:      '訊號觸發',
   auto_entry:  '自動進場',
   auto_exit:   '自動出場',
   dry_entry:   'DRY進場',
@@ -1598,6 +1666,7 @@ const MSG_TYPE_LABEL: Record<string, string> = {
 function LineLogTab() {
   const [data, setData] = useState<any>(null)
   const [loading, setLoading] = useState(true)
+  const [expandedRow, setExpandedRow] = useState<number | null>(null)
 
   const load = () => {
     setLoading(true)
@@ -1624,6 +1693,7 @@ function LineLogTab() {
   }
 
   const typeColor = (t: string) =>
+    t === 'signal'      ? 'text-orange-400' :
     t === 'auto_entry'  ? 'text-green-400' :
     t === 'auto_exit'   ? 'text-blue-400' :
     t === 'force_exit'  ? 'text-red-400' :
@@ -1638,9 +1708,12 @@ function LineLogTab() {
         <span className={`${mono} font-bold text-[#dde6f0]`}>{data?.total_sent ?? '–'} 則</span>
         <span className={`border-l border-[#253d5c] pl-4 ${muted}`}>剩餘額度</span>
         <span className={`${mono} font-bold ${(data?.free_remaining ?? 200) <= 20 ? 'text-red-400' : 'text-green-400'}`}>
-          {data?.free_remaining ?? '–'} / 200
+          {data?.free_remaining ?? '–'} / {data?.total_limit ?? 200}
         </span>
-        <span className={`${muted} text-xs`}>(LINE free plan 每月 200 則)</span>
+        {(data?.free_remaining ?? 200) <= 20 && (
+          <span className="text-xs text-red-400 font-semibold">⚠ 額度即將耗盡，止損通知可能無法發送！</span>
+        )}
+        <span className={`${muted} text-xs`}>(LINE free plan 每月上限)</span>
         <button onClick={load} disabled={loading}
           className={`ml-auto px-3 py-1 rounded text-xs border border-[#253d5c] ${muted} hover:text-[#dde6f0] disabled:opacity-40`}>
           {loading ? '載入中...' : '重新整理'}
@@ -1678,8 +1751,12 @@ function LineLogTab() {
                     <td className={`px-3 py-2 text-center ${mono} ${muted}`}>
                       {r.monthly_seq > 0 ? `#${r.monthly_seq}` : '–'}
                     </td>
-                    <td className="px-3 py-2 text-[#dde6f0] max-w-sm">
-                      <div className="truncate" title={r.content}>{r.content.replace(/\n/g, ' ｜ ')}</div>
+                    <td className="px-3 py-2 text-[#dde6f0] max-w-sm cursor-pointer"
+                        onClick={() => setExpandedRow(expandedRow === i ? null : i)}>
+                      {expandedRow === i
+                        ? <div className="whitespace-pre-wrap text-xs leading-relaxed">{r.content}</div>
+                        : <div className="truncate text-xs" title="點擊展開">{r.content.replace(/\n/g, ' ｜ ')}</div>
+                      }
                     </td>
                   </tr>
                 ))}

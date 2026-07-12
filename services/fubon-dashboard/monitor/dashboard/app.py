@@ -28,15 +28,18 @@ class TradingParamsBody(BaseModel):
     dry_run: bool = True
     commission_discount: float = 0.28
     # 進場條件
-    min_change_pct: float = 2.0
     max_change_pct: float = 5.0
+    chg_1m_min_pct: float = 0.6
     check_not_in_position: bool = True
     bid_1m_pct_threshold: float = 85.0
     vol_ratio_coefficient: float = 1.0
     vol_1m_coef: float = 0.8
+    vol_trend_coef: float = 0.8
+    tick_window_seconds: int = 60
     # 停損停利
-    stop_loss_ticks: int = 4
+    stop_loss_ticks: int = 6
     take_profit_add_pct: float = 4.0
+    atr_multiplier: float = 0.4
     # 交易時間
     entry_start_time: str = "09:15"
     latest_dynamic_add_time: str = "13:09"
@@ -112,10 +115,10 @@ def create_app(
     _engine = trading_engine
     _PARAM_KEYS = [
         "dry_run", "max_position_capital", "max_daily_positions", "commission_discount",
-        "min_change_pct", "max_change_pct",
+        "max_change_pct", "chg_1m_min_pct",
         "check_not_in_position",
-        "bid_1m_pct_threshold", "vol_ratio_coefficient", "vol_1m_coef",
-        "stop_loss_ticks", "take_profit_add_pct",
+        "bid_1m_pct_threshold", "vol_ratio_coefficient", "vol_1m_coef", "vol_trend_coef", "tick_window_seconds",
+        "stop_loss_ticks", "take_profit_add_pct", "atr_multiplier",
         "entry_start_time", "latest_dynamic_add_time", "force_exit_time",
         "daytrade_price_min", "daytrade_price_max",
     ]
@@ -124,14 +127,17 @@ def create_app(
         "max_position_capital": max_position_capital,
         "max_daily_positions": max_daily_positions,
         "commission_discount": 0.28,
-        "min_change_pct": 2.0,
         "max_change_pct": 5.0,
+        "chg_1m_min_pct": 0.6,
         "check_not_in_position": True,
         "bid_1m_pct_threshold": 85.0,
         "vol_ratio_coefficient": 1.0,
         "vol_1m_coef": 0.8,
-        "stop_loss_ticks": 4,
+        "vol_trend_coef": 0.8,
+        "tick_window_seconds": 60,
+        "stop_loss_ticks": 6,
         "take_profit_add_pct": 4.0,
+        "atr_multiplier": 0.4,
         "entry_start_time": "09:15",
         "latest_dynamic_add_time": "13:09",
         "force_exit_time": "13:20",
@@ -143,13 +149,34 @@ def create_app(
         """字串 → 正確型別"""
         if k in ("dry_run", "check_not_in_position"):
             return str(v).lower() in ("true", "1", "yes")
-        if k in ("max_position_capital", "max_daily_positions", "stop_loss_ticks"):
+        if k in ("max_position_capital", "max_daily_positions", "stop_loss_ticks", "tick_window_seconds"):
             return int(v)
-        if k in ("commission_discount", "take_profit_add_pct", "min_change_pct", "max_change_pct",
+        if k in ("commission_discount", "take_profit_add_pct", "max_change_pct", "chg_1m_min_pct",
                  "daytrade_price_min", "daytrade_price_max",
-                 "vol_ratio_coefficient", "vol_1m_coef", "bid_1m_pct_threshold"):
+                 "vol_ratio_coefficient", "vol_1m_coef", "vol_trend_coef", "bid_1m_pct_threshold",
+                 "atr_multiplier"):
             return float(v)
         return str(v)  # time strings
+
+    def _atr_stop_ticks_app(symbol: str, price: float) -> int:
+        fixed = int(_trading_params.get("stop_loss_ticks", 6))
+        mult  = float(_trading_params.get("atr_multiplier", 0.4))
+        if mult <= 0 or price <= 0 or _engine is None:
+            return fixed
+        daily_range = _engine.daily_high.get(symbol, 0) - _engine.daily_low.get(symbol, price)
+        if daily_range <= 0:
+            return fixed
+        from engine.execution.broker import tw_tick_size as _tws
+        ts = _tws(price)
+        return max(fixed, round(daily_range * mult / ts))
+
+    def _net_pnl(entry_price: float, exit_price: float, lots: int) -> float:
+        disc     = float(_trading_params.get("commission_discount", 0.28))
+        gross    = (exit_price - entry_price) * lots * 1000
+        buy_fee  = entry_price * lots * 1000 * 0.001425 * disc
+        sell_fee = exit_price  * lots * 1000 * 0.001425 * disc
+        tax      = exit_price  * lots * 1000 * 0.0015
+        return gross - buy_fee - sell_fee - tax
 
     def _sync_to_ticks_db(kv: dict):
         """把最新設定同步到 ticks.db，讓 engine _gs() 熱重載用"""
@@ -257,6 +284,7 @@ def create_app(
                         try:
                             live_stats[_sym] = {
                                 "tick_rise": round(_sess.tick_rise_60s, 1),
+                                "chg_1m_pct": round(_sess.chg_1m_pct, 2),
                                 "bid_1m_pct": round(_sess.bid_pct_window, 1),
                                 "vol_1m": round(_sess.vol_1m_lots, 1),
                                 "past_5m_avg": round(_sess.past_5min_avg_vol_lots, 1),
@@ -270,10 +298,13 @@ def create_app(
                 msg = json.dumps(
                     {"type": "state", **state,
                      "dry_run": _trading_params.get("dry_run", True),
-                     "min_change_pct": _trading_params.get("min_change_pct", 2.0),
                      "bid_1m_pct_threshold": _trading_params.get("bid_1m_pct_threshold", 85.0),
+                     "chg_1m_min_pct": _trading_params.get("chg_1m_min_pct", 0.6),
                      "vol_ratio_coefficient": _trading_params.get("vol_ratio_coefficient", 1.0),
                      "vol_1m_coef": _trading_params.get("vol_1m_coef", 0.8),
+                     "vol_trend_coef": _trading_params.get("vol_trend_coef", 0.8),
+                     "tick_window_seconds": _trading_params.get("tick_window_seconds", 60),
+                     "atr_multiplier": _trading_params.get("atr_multiplier", 0.4),
                      "entry_start_time": _trading_params.get("entry_start_time", "09:15"),
                      "pnl": pnl, "positions": positions,
                      "live_stats": live_stats,
@@ -1290,14 +1321,17 @@ def create_app(
         _trading_params["max_position_capital"] = body.max_position_capital
         _trading_params["max_daily_positions"] = body.max_daily_positions
         _trading_params["commission_discount"] = max(0.0, min(1.0, body.commission_discount))
-        _trading_params["min_change_pct"] = max(0.0, min(10.0, body.min_change_pct))
         _trading_params["max_change_pct"] = max(0.1, body.max_change_pct)
+        _trading_params["chg_1m_min_pct"] = max(0.0, body.chg_1m_min_pct)
         _trading_params["check_not_in_position"] = body.check_not_in_position
         _trading_params["bid_1m_pct_threshold"] = max(0.0, min(100.0, body.bid_1m_pct_threshold))
         _trading_params["vol_ratio_coefficient"] = max(0.1, min(10.0, body.vol_ratio_coefficient))
         _trading_params["vol_1m_coef"] = max(0.0, body.vol_1m_coef)
+        _trading_params["vol_trend_coef"] = max(0.0, body.vol_trend_coef)
+        _trading_params["tick_window_seconds"] = max(10, body.tick_window_seconds)
         _trading_params["stop_loss_ticks"] = max(1, body.stop_loss_ticks)
         _trading_params["take_profit_add_pct"] = max(0.1, body.take_profit_add_pct)
+        _trading_params["atr_multiplier"] = max(0.0, body.atr_multiplier)
         _trading_params["entry_start_time"] = body.entry_start_time
         _trading_params["latest_dynamic_add_time"] = body.latest_dynamic_add_time
         _trading_params["force_exit_time"] = body.force_exit_time
@@ -1318,13 +1352,15 @@ def create_app(
 
     @app.post("/debug/simulate-buy")
     def simulate_buy(symbol: str = "2382", price: float = 0.0, lots: int = 1,
-                     ref_price: float = 0.0, stop_loss_ticks: int = 4, take_profit_add_pct: float = 4.0):
+                     ref_price: float = 0.0, stop_loss_ticks: int = 0, take_profit_add_pct: float = 0.0):
         """模擬買入：建立暫存持倉，送 LINE 通知（dry_run=False 真實發送）。"""
         import urllib.request as _ur
         from engine.risk.position import Position
         from engine.execution.broker import tw_tick_size, round_up_tick, round_down_tick
         from engine.monitor.notifier import LineNotifier
         notifier = LineNotifier(dry_run=False)
+        if take_profit_add_pct <= 0:
+            take_profit_add_pct = float(_trading_params.get("take_profit_add_pct", 4.0))
         try:
             _pool = json.loads(_ur.urlopen("http://localhost:8000/api/pool", timeout=2).read())
             _sname = next((s.get("name","") for s in _pool if s.get("code")==symbol), "")
@@ -1335,7 +1371,7 @@ def create_app(
         if ref_price <= 0:
             ref_price = price
         ts = tw_tick_size(price)
-        stop_loss = round_up_tick(price - stop_loss_ticks * ts)
+        stop_loss = round_up_tick(price - _atr_stop_ticks_app(symbol, price) * ts)
         change_at_entry = (price - ref_price) / ref_price * 100 if ref_price > 0 else 0.0
         take_profit = round_down_tick(ref_price * (1 + (change_at_entry + take_profit_add_pct) / 100))
         pos = Position(symbol=symbol, entry_price=price, lots=lots,
@@ -1364,7 +1400,7 @@ def create_app(
             raise HTTPException(status_code=404, detail=f"無 {symbol} 模擬持倉，請先 simulate-buy")
         if price <= 0:
             price = pos["stop_loss"]
-        pnl = (price - pos["entry_price"]) * pos["lots"] * 1000
+        pnl = _net_pnl(pos["entry_price"], price, pos["lots"])
         _sname = pos.get("name", "")
         msg = (
             f"🔴【模擬出場】{symbol} {_sname}\n"
@@ -1471,7 +1507,7 @@ def create_app(
         result = []
         for sym, pos in _manual_positions.items():
             curr = _curr_price(sym)
-            unrealized = (curr - pos["entry_price"]) * pos["lots"] * 1000 if curr > 0 else None
+            unrealized = _net_pnl(pos["entry_price"], curr, pos["lots"]) if curr > 0 else None
             result.append({**pos, "curr_price": curr, "unrealized": unrealized})
         return result
 
@@ -1487,8 +1523,8 @@ def create_app(
         lots: int = 1,
         price: float = 0.0,
         prev_close: float = 0.0,
-        stop_loss_ticks: int = 4,
-        take_profit_add_pct: float = 4.0,
+        stop_loss_ticks: int = 0,
+        take_profit_add_pct: float = 0.0,
         force_market: bool = False,
     ):
         """
@@ -1498,6 +1534,11 @@ def create_app(
         """
         import datetime
         from engine.execution.broker import tw_tick_size, round_up_tick, round_down_tick
+
+        if stop_loss_ticks <= 0:
+            stop_loss_ticks = int(_trading_params.get("stop_loss_ticks", 6))
+        if take_profit_add_pct <= 0:
+            take_profit_add_pct = float(_trading_params.get("take_profit_add_pct", 4.0))
 
         if symbol in _manual_positions:
             raise HTTPException(status_code=400, detail=f"{symbol} 已有手動持倉，請先平倉")
@@ -1514,7 +1555,7 @@ def create_app(
 
         # 計算停損、停利
         ts = tw_tick_size(price)
-        stop_loss = round_up_tick(price - stop_loss_ticks * ts)
+        stop_loss = round_up_tick(price - _atr_stop_ticks_app(symbol, price) * ts)
         entry_chg_pct = (price - prev_close) / prev_close * 100 if prev_close > 0 else 0.0
         take_profit = round_down_tick(prev_close * (1 + (entry_chg_pct + take_profit_add_pct) / 100))
 
@@ -1597,7 +1638,7 @@ def create_app(
         sell_price = price if price > 0 else (_curr_price(symbol) or pos["entry_price"])
         broker.sell(symbol, pos["lots"], sell_price, reason="manual_exit")
 
-        pnl = (sell_price - pos["entry_price"]) * pos["lots"] * 1000
+        pnl = _net_pnl(pos["entry_price"], sell_price, pos["lots"])
         del _manual_positions[symbol]
 
         return {"ok": True, "symbol": symbol, "exit_price": sell_price,
@@ -1812,6 +1853,7 @@ def create_app(
             return {
                 "year_month": ym,
                 "total_sent": total,
+                "total_limit": 200,
                 "free_remaining": max(0, 200 - total),
                 "rows": [dict(r) for r in rows],
             }

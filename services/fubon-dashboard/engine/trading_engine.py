@@ -72,6 +72,8 @@ class TradingEngine:
         # 觸價單 GUID 記錄，供外部（API）手動取消
         self.condition_ids: dict[str, dict] = {}     # symbol → {"sl": guid, "tp": guid}
         self.broker = None                           # FubonBroker 實例（引擎執行期間有效）
+        self.daily_high: dict[str, float] = {}      # 今日最高成交價（09:00 後）
+        self.daily_low:  dict[str, float] = {}      # 今日最低成交價（09:00 後）
 
         _data = os.environ.get("FUBON_DATA_DIR", "/home/tommy0322/fubon-data")
         self._default_config = os.environ.get("FUBON_CONFIG", "/home/tommy0322/fubon-config/config.yaml")
@@ -244,13 +246,9 @@ class TradingEngine:
                 h, m = map(int, dynamic_add_str.split(":"))
                 return h * 60 + m
 
-        def _min_change_pct() -> float:
-            try: return max(0.0, float(_gs("min_change_pct", "2.0")))
-            except Exception: return 2.0
-
         def _stop_loss_ticks() -> int:
-            try: return max(1, int(_gs("stop_loss_ticks", "4")))
-            except Exception: return 4
+            try: return max(1, int(_gs("stop_loss_ticks", "6")))
+            except Exception: return 6
 
         def _take_profit_add_pct() -> float:
             try: return max(0.1, float(_gs("take_profit_add_pct", "4.0")))
@@ -287,8 +285,43 @@ class TradingEngine:
             try: return max(0.0, float(_gs("vol_1m_coef", "1.0")))
             except Exception: return 1.0
 
+        def _vol_trend_coef() -> float:
+            try: return max(0.0, float(_gs("vol_trend_coef", "0.8")))
+            except Exception: return 0.8
+
+        def _min_chg_1m_pct() -> float:
+            try: return max(0.0, float(_gs("chg_1m_min_pct", "0.6")))
+            except Exception: return 0.6
+
         def _check_not_in_position() -> bool:
             return str(_gs("check_not_in_position", "True")).lower() in ("true", "1", "yes")
+
+        def _atr_multiplier() -> float:
+            try: return max(0.0, float(_gs("atr_multiplier", "0.4")))
+            except Exception: return 0.4
+
+        def _atr_stop_ticks(symbol: str, price: float) -> int:
+            fixed = _stop_loss_ticks()
+            mult  = _atr_multiplier()
+            if mult <= 0 or price <= 0:
+                return fixed
+            daily_range = self.daily_high.get(symbol, 0) - self.daily_low.get(symbol, price)
+            if daily_range <= 0:
+                return fixed
+            ts = tw_tick_size(price)
+            return max(fixed, round(daily_range * mult / ts))
+
+        def _commission_discount() -> float:
+            try: return max(0.01, min(1.0, float(_gs("commission_discount", "0.28"))))
+            except Exception: return 0.28
+
+        def _calc_net_pnl(entry_price: float, exit_price: float, lots: int) -> float:
+            gross    = (exit_price - entry_price) * lots * 1000
+            disc     = _commission_discount()
+            buy_fee  = entry_price * lots * 1000 * 0.001425 * disc
+            sell_fee = exit_price  * lots * 1000 * 0.001425 * disc
+            tax      = exit_price  * lots * 1000 * 0.0015  # 當沖交易稅
+            return gross - buy_fee - sell_fee - tax
 
         with self._lock:
             self._state["dry_run"] = dry_run
@@ -651,8 +684,8 @@ class TradingEngine:
         _cum_bid: dict[str, int] = {}     # 累積外盤成交量（成交價 >= 賣一，主動買方）
         _cum_ask: dict[str, int] = {}     # 累積內盤成交量（成交價 <= 買一，主動賣方）
         _cum_vol: dict[str, int] = {}     # 今日累積成交量（SDK trades.volume，單位：張，與 TWSE v 欄位一致）
-        _daily_high: dict[str, float] = {}  # 今日最高成交價（09:00 後）
-        _daily_low:  dict[str, float] = {}  # 今日最低成交價（09:00 後）
+        self.daily_high.clear()
+        self.daily_low.clear()
         _log_cleared_date = [None]     # 追蹤清除日期
         _notified_today: set[str] = set()  # 今日已發 LINE 觸發通知的股票（每支只通知一次）
 
@@ -721,8 +754,8 @@ class TradingEngine:
             # H/L 只計 09:00 後真實成交（濾除試撮/暫停撮合的模擬價）
             _hr = int(ts_str[11:13])
             if _hr >= 9:
-                _daily_high[symbol] = max(_daily_high.get(symbol, price), price)
-                _daily_low[symbol]  = min(_daily_low.get(symbol, price), price)
+                self.daily_high[symbol] = max(self.daily_high.get(symbol, price), price)
+                self.daily_low[symbol]  = min(self.daily_low.get(symbol, price), price)
             sess.on_tick(price, size, ts_ns, tick_window_seconds=_tick_window_seconds())
             now = now_tw()
 
@@ -779,7 +812,7 @@ class TradingEngine:
             pos_before = om.positions.get(symbol)
             exit_reason = rm.on_tick(symbol=symbol, price=price, now=now)
             if exit_reason and pos_before:
-                pnl = (price - pos_before.entry_price) * pos_before.lots * 1000
+                pnl = _calc_net_pnl(pos_before.entry_price, price, pos_before.lots)
                 dt.record_trade(pnl=pnl, symbol=symbol, lots=pos_before.lots,
                                 entry_price=pos_before.entry_price, exit_price=price)
                 _entry_times.pop(symbol, None)
@@ -919,7 +952,6 @@ class TradingEngine:
 
             # 熱重載可調參數
             combiner.max_change_pct = _max_change_pct()
-            combiner.min_change_pct = _min_change_pct()
             rm.force_exit_time = _force_exit_time()
             self._state["dry_run"] = _is_dry_run()  # 讓 WebSocket push 反映最新設定
 
@@ -932,13 +964,15 @@ class TradingEngine:
             _avg5 = _avg_vol5.get(symbol, 0)
             _vr = (_cum_vol.get(symbol, 0) / _avg5 * 100) if _avg5 > 0 else 100.0
             _ref_price = sess.reference_price
-            _h = _daily_high.get(symbol, 0)
-            _l = _daily_low.get(symbol, _h)
+            _h = self.daily_high.get(symbol, 0)
+            _l = self.daily_low.get(symbol, _h)
             _amp = (_h - _l) / _ref_price * 100 if _ref_price > 0 and _h > _l else 0.0
             # snapshot sess 易變欄位，避免 WS thread 在評估後、通知前更新導致數值不一致
             _snap_bid1m = round(sess.bid_pct_window, 1)
             _snap_chg   = round(sess.change_pct, 2)
+            _snap_chg1m = round(sess.chg_1m_pct, 2)
             _snap_vol1m   = round(sess.vol_1m_lots, 1)
+            _snap_prev_vol1m = round(sess.prev_vol_1m_lots, 1)
             _snap_past5avg = round(sess.past_5min_avg_vol_lots, 1)
             result = sess.evaluate(
                 combiner=combiner,
@@ -955,6 +989,8 @@ class TradingEngine:
                 bid_1m_pct_threshold=_bid_1m_pct_threshold(),
                 past_5min_avg_vol=_snap_past5avg,
                 vol_1m_coef=_vol_1m_coef(),
+                vol_trend_coef=_vol_trend_coef(),
+                chg_1m_min_pct=_min_chg_1m_pct(),
             )
             # 記 eval log：外盤%超過門檻60%（接近）或已通過時才記，過濾低外盤噪音
             if _snap_bid1m >= 60 or result.should_enter:
@@ -975,8 +1011,13 @@ class TradingEngine:
                     "vol_1m": _snap_vol1m,
                     "vol_1m_thr": _v1m_thr,
                     "past_5m_avg": _snap_past5avg,
-                    # 條件 漲幅（下限 min_change_pct / 上限 max_change_pct）
+                    # 條件 量縮過濾
+                    "prev_vol_1m": _snap_prev_vol1m,
+                    # 條件 漲幅（上限 max_change_pct）
                     "change_pct": _snap_chg,
+                    # 條件 1分鐘漲幅（下限 chg_1m_min_pct）
+                    "chg_1m_pct": _snap_chg1m,
+                    "chg_1m_min_pct": round(_min_chg_1m_pct(), 2),
                 })
             theory = sess.evaluate_theoretical(
                 combiner=combiner,
@@ -989,6 +1030,8 @@ class TradingEngine:
                 bid_1m_pct_threshold=_bid_1m_pct_threshold(),
                 past_5min_avg_vol=_snap_past5avg,
                 vol_1m_coef=_vol_1m_coef(),
+                vol_trend_coef=_vol_trend_coef(),
+                chg_1m_min_pct=_min_chg_1m_pct(),
             )
 
             logger.info(
@@ -1012,12 +1055,20 @@ class TradingEngine:
                     _thr_now = round(_vol_ratio_min_pct(), 1)
                     _mode = "DRY RUN" if _is_dry_run() else "實盤"
                     _v1m_thr = round(_snap_past5avg * _vol_1m_coef(), 1) if _snap_past5avg > 0 else 0
+                    _trig_px = sess.curr_price
+                    _ts_sz   = tw_tick_size(_trig_px)
+                    _est_sl  = round_up_tick(_trig_px - _atr_stop_ticks(symbol, _trig_px) * _ts_sz)
+                    _est_tp  = round_down_tick(
+                        sess.reference_price * (1 + (_snap_chg + _take_profit_add_pct()) / 100)
+                    ) if sess.reference_price > 0 else 0.0
                     notifier.send(
                         f"📶 訊號觸發 [{_mode}] {symbol} {sname(symbol)}\n"
                         f"時間={now_tw().strftime('%H:%M:%S')}\n"
-                        f"漲幅={_snap_chg:+.2f}%（門檻≥{_min_change_pct():.1f}%）\n"
+                        f"觸發價={_trig_px:.2f}  預估停損={_est_sl:.2f}  預估停利={_est_tp:.2f}\n"
+                        f"漲幅={_snap_chg:+.2f}%  1m漲幅={_snap_chg1m:+.2f}%（門檻≥{_min_chg_1m_pct():.2f}%）\n"
                         f"外盤%={_snap_bid1m}%（門檻≥{_bid_1m_pct_threshold():.0f}%）\n"
                         f"外盤量={_snap_vol1m}張（門檻≥{_v1m_thr}張，近5分均={_snap_past5avg}張）\n"
+                        f"前60s量={_snap_prev_vol1m}張（量縮過濾門檻≥{round(_snap_prev_vol1m * _vol_trend_coef(), 1)}張）\n"
                         f"量比={round(_vr,1)}%（門檻≥{_thr_now}%）",
                         msg_type="signal",
                     )
@@ -1071,8 +1122,10 @@ class TradingEngine:
                     "price": price,
                     "dry_run": broker.dry_run,
                     "change_pct": _snap_chg,
+                    "chg_1m_pct": _snap_chg1m,
                     "bid_1m_pct": _snap_bid1m,
                     "vol_1m": _snap_vol1m,
+                    "prev_vol_1m": _snap_prev_vol1m,
                 })
             except Exception as _be:
                 _chase_buys.pop(symbol, None)
@@ -1118,8 +1171,8 @@ class TradingEngine:
                         _chase_buys.pop(sym, None)
                         _pending_buys.pop(sym, None)
                         ep = filled_px if filled_px > 0 else chase["order_price"]
-                        sl_t  = _stop_loss_ticks()
                         ts_sz = tw_tick_size(ep)
+                        sl_t  = _atr_stop_ticks(sym, ep)
                         stop_loss   = round_up_tick(ep - sl_t * ts_sz)
                         ref         = chase["ref_price"]
                         chg         = (ep - ref) / ref * 100 if ref > 0 else 0.0
@@ -1279,7 +1332,7 @@ class TradingEngine:
                         curr = (sessions[sym].curr_price
                                 if sym in sessions and sessions[sym].curr_price
                                 else pos.entry_price)
-                        pnl_est = (curr - pos.entry_price) * pos.lots * 1000
+                        pnl_est = _calc_net_pnl(pos.entry_price, curr, pos.lots)
 
                         logger.warning(
                             "⏰ 強制時間出場（主迴圈）%s %d張 @ %.2f，估損益=%+.0f",
