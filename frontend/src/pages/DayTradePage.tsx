@@ -1685,6 +1685,16 @@ function LineLogTab() {
     } catch { return s }
   }
 
+  const highlightMsg = (content: string): React.ReactNode => {
+    // 匹配 4位股票代碼 + 空格 + 股票名稱（到空格或｜結尾）
+    const parts = content.split(/(\d{4}\s+[一-龥A-Za-z·＆&\-]+)/)
+    return parts.map((p, i) =>
+      /^\d{4}\s+[一-龥A-Za-z·＆&\-]+$/.test(p)
+        ? <span key={i} className="text-yellow-300 font-bold">{p}</span>
+        : p
+    )
+  }
+
   const typeColor = (t: string) =>
     t === 'signal'      ? 'text-orange-400' :
     t === 'auto_entry'  ? 'text-green-400' :
@@ -1725,12 +1735,18 @@ function LineLogTab() {
           <div className={`text-center py-10 text-sm ${muted}`}>近 5 天無通知記錄</div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full text-xs">
+            <table className="w-full text-xs table-fixed">
+              <colgroup>
+                <col style={{width:'120px'}} />
+                <col style={{width:'72px'}} />
+                <col style={{width:'52px'}} />
+                <col />
+              </colgroup>
               <thead>
                 <tr className={`${muted} border-b border-[#253d5c]`}>
                   <th className="px-3 py-2 text-left whitespace-nowrap">時間</th>
                   <th className="px-3 py-2 text-left whitespace-nowrap">類型</th>
-                  <th className="px-3 py-2 text-center whitespace-nowrap">第 N 次</th>
+                  <th className="px-3 py-2 text-center whitespace-nowrap">#</th>
                   <th className="px-3 py-2 text-left">訊息內容</th>
                 </tr>
               </thead>
@@ -1744,11 +1760,11 @@ function LineLogTab() {
                     <td className={`px-3 py-2 text-center ${mono} ${muted}`}>
                       {r.monthly_seq > 0 ? `#${r.monthly_seq}` : '–'}
                     </td>
-                    <td className="px-3 py-2 text-[#dde6f0] max-w-sm cursor-pointer"
+                    <td className="px-3 py-2 text-[#dde6f0] cursor-pointer"
                         onClick={() => setExpandedRow(expandedRow === i ? null : i)}>
                       {expandedRow === i
-                        ? <div className="whitespace-pre-wrap text-xs leading-relaxed">{r.content}</div>
-                        : <div className="truncate text-xs" title="點擊展開">{r.content.replace(/\n/g, ' ｜ ')}</div>
+                        ? <div className="whitespace-pre-wrap text-xs leading-relaxed">{highlightMsg(r.content)}</div>
+                        : <div className="truncate text-xs" title="點擊展開">{highlightMsg(r.content.replace(/\n/g, ' ｜ '))}</div>
                       }
                     </td>
                   </tr>

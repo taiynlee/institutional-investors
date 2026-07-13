@@ -2419,8 +2419,6 @@ async def add_daytrade_candidate(body: DaytradeCandidateAddBody, db: AsyncSessio
     from datetime import timedelta as _td
 
     trade_date = date.fromisoformat(body.trade_date) if body.trade_date else date.today()
-    while trade_date.weekday() >= 5:
-        trade_date += _td(days=1)
 
     # fetch ref_close + avg_vol5 from daily_price
     price_rows = (await db.execute(_text("""
@@ -2455,8 +2453,6 @@ async def remove_daytrade_candidate(code: str, trade_date: Optional[str] = Query
     from datetime import timedelta as _td
 
     td = date.fromisoformat(trade_date) if trade_date else date.today()
-    while td.weekday() >= 5:
-        td += _td(days=1)
 
     await db.execute(_delete(DaytradeCandidate).where(
         DaytradeCandidate.trade_date == td,
