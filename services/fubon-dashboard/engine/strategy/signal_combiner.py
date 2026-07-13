@@ -14,7 +14,7 @@ class SignalCombiner:
     1. 時間窗口（entry_start_mins ~ entry_cutoff）
     2. 同標的當下未持倉（可關閉）
     3. 今日進場未達上限
-    4. 個股漲幅 ≤ max_change_pct（預設 5.0%，避免追高）
+    4. 個股漲跌幅絕對值 ≤ max_change_pct（預設 5.0%，避免追高或追跌）
     4b. 觀察窗口內 1 分鐘漲幅 >= chg_1m_min_pct（預設 0.6%，確認短線動能）
     5. ⭐ 必要條件（三者同時成立）：
        (a) 觀察窗口內上漲 >= tick_rise_threshold 個 tick（預設 4，設 0 關閉）
@@ -62,7 +62,7 @@ class SignalCombiner:
             return no("already_in_position")
         if positions_count >= max_positions:
             return no("max_daily_trades_reached")
-        if change_pct > self.max_change_pct:
+        if abs(change_pct) > self.max_change_pct:
             return no(f"change_pct_exceeded_{change_pct:.2f}pct")
         if chg_1m_min_pct > 0 and chg_1m_pct < chg_1m_min_pct:
             return no(f"chg1m_low_{chg_1m_pct:.2f}pct_need_{chg_1m_min_pct:.2f}pct")

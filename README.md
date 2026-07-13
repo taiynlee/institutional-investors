@@ -227,7 +227,7 @@ Docker Compose（frontend nginx）
 |---|------|----------|--------|
 | 1 | 時間窗口 | `entry_start_time`（預設 09:15）/ `latest_dynamic_add_time` | ✅ 數值 |
 | 2 | 同標的當下未持倉 / 今日進場次數 < 上限 | `check_not_in_position`（預設 true）/ `max_daily_positions`（預設 5） | ✅ 數值/開關 |
-| 3 | 漲幅上限（過濾追高） | `max_change_pct`（預設 5.0%） | ✅ 數值 |
+| 3 | 漲跌幅上限（過濾追高/追跌）：`abs(漲跌幅) ≤ max_change_pct` | `max_change_pct`（預設 5.0%） | ✅ 數值 |
 | **4** | **⭐ 1 分鐘漲幅 ≥ 下限**：觀察窗口內最早成交價至今漲幅，確認短線動能真實（非委買掛單假象） | `chg_1m_min_pct`（預設 0.6%，設 0 關閉） | ✅ 數值 |
 | **⑤a** | **⭐ tick 上漲 ≥ 門檻**：觀察窗口內最早→現價上漲幾個 tick（台股 tick 依股價 0.1~1 元），確認主動追買力道 | `tick_rise_threshold`（預設 4，設 0 關閉）/ `tick_window_seconds` | ✅ 數值 |
 | **⑤b** | **⭐ 外盤佔比 ≥ 門檻**：觀察窗口內外盤（主動買單成交量）佔比，確認主力在追買 | `bid_1m_pct_threshold`（預設 85%）/ `tick_window_seconds`（預設 60秒） | ✅ 數值 |

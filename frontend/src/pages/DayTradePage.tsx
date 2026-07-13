@@ -1072,7 +1072,7 @@ const PARAM_DEFS: PD[] = [
   { id:'vol_trend_coef',           group:'進場條件', label:'量縮過濾係數',            desc:'防止進場後量縮：當前60秒外盤量 ≥ 前一60秒外盤量 × 此係數，確認量在持續或加速中。設0關閉。例：係數0.8 → 若前一分鐘爆500張、現在縮到200張（< 400），跳過此訊號。', unit:'倍', rtKey:'vol_trend_coef', type:'number', step:0.1, min:0, max:2 },
   { id:'vol_ratio_coefficient',    group:'進場條件', label:'量比係數',               desc:'今日累積量/5日均量的動態門檻係數：門檻 = (進場開始至現在的分鐘數) × 此係數。確認這支股票今天有在交易。設1.0代表成交量至少達到5日平均的當前進度', unit:'', rtKey:'vol_ratio_coefficient', type:'number', step:0.1, min:0.1, max:5 },
   { id:'entry_start_time',         group:'進場條件', label:'進場開始時間',           desc:'此時間之前不開新倉（例：09:15 = 開盤後觀察15分鐘再進場）', unit:'', rtKey:'entry_start_time', type:'time' },
-  { id:'max_change_pct',           group:'進場條件', label:'漲幅上限',               desc:'個股當日漲幅超過此%不進場，避免追太高（漲停股除外）', unit:'%', rtKey:'max_change_pct', type:'number', step:0.5, min:0.5 },
+  { id:'max_change_pct',           group:'進場條件', label:'漲跌幅上限',              desc:'abs(當日漲跌幅) 超過此%不進場，雙向過濾：漲太多（追高）或跌太多（追跌）均排除', unit:'%', rtKey:'max_change_pct', type:'number', step:0.5, min:0.5 },
   { id:'check_not_in_position',    group:'進場條件', label:'同標的未持倉才可進場',   desc:'勾選（預設）：同一標的已有持倉時拒絕再進場；取消勾選：允許同標的持倉中再進一張', unit:'', rtKey:'check_not_in_position', type:'boolean' },
   // 停損停利
   { id:'stop_loss_ticks',      group:'停損停利', label:'停損 tick 數（最小值）', desc:'停損距離下限：進場價 - N × tick_size，向上捨入。ATR 動態模式下取 max(此值, ATR計算值)', unit:'tick', rtKey:'stop_loss_ticks', type:'number', step:1, min:1 },
