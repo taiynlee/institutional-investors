@@ -387,26 +387,18 @@ function LiveTab() {
             const _coef = (stream as any)?.vol_ratio_coefficient ?? 1.0
             const _volPct = Math.round(_mins * _coef * 10) / 10
             const _vol1mCoef = (stream as any)?.vol_1m_coef ?? 0.8
-            const _volTrendCoef = (stream as any)?.vol_trend_coef ?? 0.8
             const _bidThr = stream?.bid_1m_pct_threshold ?? 85
             const _winSec = (stream as any)?.tick_window_seconds ?? 60
             const _maxChgPct = (stream as any)?.max_change_pct ?? 5.0
-            const _chgThr = (stream as any)?.chg_1m_min_pct ?? 0.6
             const _tickThr = (stream as any)?.tick_rise_threshold ?? 4
-            const _c3 = `③ 漲幅上限：當日漲幅 ≤ ${_maxChgPct}%（避免追高）`
-            const _c4 = _chgThr > 0
-              ? `④ 1m漲幅 ≥ ${_chgThr}%（窗口${_winSec}秒內最早→現價，確認動能非假掛單）`
-              : `④ 1m漲幅條件已關閉（chg_1m_min_pct=0）`
+            const _c3 = `③ abs(漲跌幅) ≤ ${_maxChgPct}%（雙向過濾追高/追跌）`
             const _c5a = _tickThr > 0
               ? `⑤a tick上漲 ≥ ${_tickThr}個（窗口${_winSec}秒，確認主動追買力道）`
               : `⑤a tick上漲條件已關閉（tick_rise_threshold=0）`
-            const _c6 = _vol1mCoef > 0
+            const _c5c = _vol1mCoef > 0
               ? `⑤c 外盤量 ≥ 近5分均量×${_vol1mCoef}（過去${_winSec}秒，資料不足自動跳過）`
               : `⑤c 外盤量條件已關閉（vol_1m_coef=0）`
-            const _c7 = _volTrendCoef > 0
-              ? `⑦ 量縮過濾：當前60s外盤量 ≥ 前60s外盤量×${_volTrendCoef}（防止爆量後退潮進場）`
-              : `⑦ 量縮過濾已關閉（vol_trend_coef=0）`
-            return `進場九條件：\n① 時間窗口（${est} ~ 截止）\n② 未持倉 / 今日進場次數 < 上限\n${_c3}\n${_c4}\n${_c5a}\n⑤b 外盤佔比 ≥ ${_bidThr}%（觀察窗口 ${_winSec}秒）\n${_c6}\n${_c7}\n⑧ 量比：今日成交量 ≥ 5日均量進度×${_coef}（門檻=${_volPct}%）`
+            return `進場六條件：\n① 時間窗口（${est} ~ 截止）\n② 未持倉 / 今日進場次數 < 上限\n${_c3}\n${_c5a}\n⑤b 外盤佔比 ≥ ${_bidThr}%（觀察窗口 ${_winSec}秒）\n${_c5c}\n⑥ 量比：今日成交量 ≥ 5日均量進度×${_coef}（門檻=${_volPct}%）`
           })()}
         >
           <span className="text-[10px] text-[#6b84a0] mb-0.5">今日已交易</span>
@@ -629,11 +621,9 @@ function LiveTab() {
                       {/* 1m漲幅 */}
                       <td className={`px-3 py-2.5 text-right ${mono} text-xs`}>
                         {ls?.chg_1m_pct != null ? (() => {
-                          const thr = (stream as any)?.chg_1m_min_pct ?? 0.6
                           const v = ls.chg_1m_pct!
-                          const ok = thr <= 0 || v >= thr
-                          const cls = ok ? 'text-red-400 font-semibold' : v >= 0 ? 'text-yellow-400' : 'text-green-400'
-                          return <span className={cls} title={`門檻≥${thr}%`}>{v >= 0 ? '+' : ''}{v.toFixed(2)}%</span>
+                          const cls = v > 0 ? 'text-red-400 font-semibold' : v < 0 ? 'text-green-400' : 'text-yellow-400'
+                          return <span className={cls}>{v >= 0 ? '+' : ''}{v.toFixed(2)}%</span>
                         })() : <span className={muted}>—</span>}
                       </td>
                       {/* 外盤% */}
@@ -1067,9 +1057,7 @@ const PARAM_DEFS: PD[] = [
   { id:'bid_1m_pct_threshold',     group:'進場條件', label:'外盤佔比門檻',           desc:'⭐ 核心條件：觀察窗口內外盤（主動買單成交量）佔總成交量 ≥ 此%，確認主力在主動追買。外盤% = 成交在賣一以上的量 / 總量 × 100。建議 85%（根據實測，85% 以上勝率轉正期望）', unit:'%', rtKey:'bid_1m_pct_threshold', type:'number', step:5, min:50, max:100 },
   { id:'tick_window_seconds',      group:'進場條件', label:'外盤觀察窗口',           desc:'計算外盤佔比、外盤量與1m漲幅時的滾動時間窗口（秒）。例：60 = 取最近60秒內的資料；窗口越短越即時但越容易受噪音影響', unit:'秒', rtKey:'tick_window_seconds', type:'number', step:10, min:10, max:300 },
   { id:'tick_rise_threshold',      group:'進場條件', label:'tick上漲門檻',            desc:'⭐ 必要條件⑤a：觀察窗口（tick_window_seconds秒）內從最早價格上漲幾個tick以上才通過，確認主動追買力道。台股1個tick依股價（50元以下=0.1元，100~500元=0.5元，500元以上=1元）。設0關閉。預設4個tick。', unit:'個tick', rtKey:'tick_rise_threshold', type:'number', step:1, min:0, max:20 },
-  { id:'chg_1m_min_pct',          group:'進場條件', label:'1m漲幅下限',             desc:'⭐ 必要條件：觀察窗口內最早成交價至今的漲幅需達此%，確認短線動能真實（非委買掛單假象）。設0關閉。台股交易成本約0.3%，預設0.6%確保進場前價格已在上漲。', unit:'%', rtKey:'chg_1m_min_pct', type:'number', step:0.1, min:0, max:3 },
   { id:'vol_1m_coef',              group:'進場條件', label:'外盤量係數',             desc:'⭐ 必要條件：過去N秒外盤量(張) ≥ 近5分鐘平均每分鐘總成交量(張) × 此係數，確認外盤有量撐。設0關閉；資料不足2分鐘自動跳過。例：近5分均量100張、係數0.8 → 外盤需≥80張。預設0.8', unit:'倍', rtKey:'vol_1m_coef', type:'number', step:0.1, min:0, max:5 },
-  { id:'vol_trend_coef',           group:'進場條件', label:'量縮過濾係數',            desc:'防止進場後量縮：當前60秒外盤量 ≥ 前一60秒外盤量 × 此係數，確認量在持續或加速中。設0關閉。例：係數0.8 → 若前一分鐘爆500張、現在縮到200張（< 400），跳過此訊號。', unit:'倍', rtKey:'vol_trend_coef', type:'number', step:0.1, min:0, max:2 },
   { id:'vol_ratio_coefficient',    group:'進場條件', label:'量比係數',               desc:'今日累積量/5日均量的動態門檻係數：門檻 = (進場開始至現在的分鐘數) × 此係數。確認這支股票今天有在交易。設1.0代表成交量至少達到5日平均的當前進度', unit:'', rtKey:'vol_ratio_coefficient', type:'number', step:0.1, min:0.1, max:5 },
   { id:'entry_start_time',         group:'進場條件', label:'進場開始時間',           desc:'此時間之前不開新倉（例：09:15 = 開盤後觀察15分鐘再進場）', unit:'', rtKey:'entry_start_time', type:'time' },
   { id:'max_change_pct',           group:'進場條件', label:'漲跌幅上限',              desc:'abs(當日漲跌幅) 超過此%不進場，雙向過濾：漲太多（追高）或跌太多（追跌）均排除', unit:'%', rtKey:'max_change_pct', type:'number', step:0.5, min:0.5 },

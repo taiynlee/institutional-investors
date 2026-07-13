@@ -285,14 +285,6 @@ class TradingEngine:
             try: return max(0.0, float(_gs("vol_1m_coef", "1.0")))
             except Exception: return 1.0
 
-        def _vol_trend_coef() -> float:
-            try: return max(0.0, float(_gs("vol_trend_coef", "0.8")))
-            except Exception: return 0.8
-
-        def _min_chg_1m_pct() -> float:
-            try: return max(0.0, float(_gs("chg_1m_min_pct", "0.6")))
-            except Exception: return 0.6
-
         def _tick_rise_threshold() -> int:
             try: return max(0, int(_gs("tick_rise_threshold", "4")))
             except Exception: return 4
@@ -976,7 +968,6 @@ class TradingEngine:
             _snap_chg   = round(sess.change_pct, 2)
             _snap_chg1m = round(sess.chg_1m_pct, 2)
             _snap_vol1m   = round(sess.vol_1m_lots, 1)
-            _snap_prev_vol1m = round(sess.prev_vol_1m_lots, 1)
             _snap_past5avg = round(sess.past_5min_avg_vol_lots, 1)
             _snap_tick_rise = round(sess.tick_rise_60s, 1)
             result = sess.evaluate(
@@ -995,8 +986,6 @@ class TradingEngine:
                 bid_1m_pct_threshold=_bid_1m_pct_threshold(),
                 past_5min_avg_vol=_snap_past5avg,
                 vol_1m_coef=_vol_1m_coef(),
-                vol_trend_coef=_vol_trend_coef(),
-                chg_1m_min_pct=_min_chg_1m_pct(),
             )
             # 記 eval log：外盤%超過門檻60%（接近）或已通過時才記，過濾低外盤噪音
             if _snap_bid1m >= 60 or result.should_enter:
@@ -1019,13 +1008,9 @@ class TradingEngine:
                     "vol_1m": _snap_vol1m,
                     "vol_1m_thr": _v1m_thr,
                     "past_5m_avg": _snap_past5avg,
-                    # 條件 量縮過濾
-                    "prev_vol_1m": _snap_prev_vol1m,
                     # 條件 漲幅（上限 max_change_pct）
                     "change_pct": _snap_chg,
-                    # 條件 1分鐘漲幅（下限 chg_1m_min_pct）
                     "chg_1m_pct": _snap_chg1m,
-                    "chg_1m_min_pct": round(_min_chg_1m_pct(), 2),
                 })
             theory = sess.evaluate_theoretical(
                 combiner=combiner,
@@ -1039,8 +1024,6 @@ class TradingEngine:
                 bid_1m_pct_threshold=_bid_1m_pct_threshold(),
                 past_5min_avg_vol=_snap_past5avg,
                 vol_1m_coef=_vol_1m_coef(),
-                vol_trend_coef=_vol_trend_coef(),
-                chg_1m_min_pct=_min_chg_1m_pct(),
             )
 
             logger.info(
@@ -1074,11 +1057,10 @@ class TradingEngine:
                         f"📶 訊號觸發 [{_mode}] {symbol} {sname(symbol)}\n"
                         f"時間={now_tw().strftime('%H:%M:%S')}\n"
                         f"觸發價={_trig_px:.2f}  預估停損={_est_sl:.2f}  預估停利={_est_tp:.2f}\n"
-                        f"漲幅={_snap_chg:+.2f}%  1m漲幅={_snap_chg1m:+.2f}%（門檻≥{_min_chg_1m_pct():.2f}%）\n"
+                        f"漲幅={_snap_chg:+.2f}%  1m漲幅={_snap_chg1m:+.2f}%\n"
                         f"1m tick↑={_snap_tick_rise:.0f}個（門檻≥{_tick_rise_threshold()}個）\n"
                         f"外盤%={_snap_bid1m}%（門檻≥{_bid_1m_pct_threshold():.0f}%）\n"
                         f"外盤量={_snap_vol1m}張（門檻≥{_v1m_thr}張，近5分均={_snap_past5avg}張）\n"
-                        f"前60s量={_snap_prev_vol1m}張（量縮過濾門檻≥{round(_snap_prev_vol1m * _vol_trend_coef(), 1)}張）\n"
                         f"量比={round(_vr,1)}%（門檻≥{_thr_now}%）",
                         msg_type="signal",
                     )

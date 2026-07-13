@@ -227,19 +227,15 @@ Docker Compose（frontend nginx）
 |---|------|----------|--------|
 | 1 | 時間窗口 | `entry_start_time`（預設 09:15）/ `latest_dynamic_add_time` | ✅ 數值 |
 | 2 | 同標的當下未持倉 / 今日進場次數 < 上限 | `check_not_in_position`（預設 true）/ `max_daily_positions`（預設 5） | ✅ 數值/開關 |
-| 3 | 漲跌幅上限（過濾追高/追跌）：`abs(漲跌幅) ≤ max_change_pct` | `max_change_pct`（預設 5.0%） | ✅ 數值 |
-| **4** | **⭐ 1 分鐘漲幅 ≥ 下限**：觀察窗口內最早成交價至今漲幅，確認短線動能真實（非委買掛單假象） | `chg_1m_min_pct`（預設 0.6%，設 0 關閉） | ✅ 數值 |
+| 3 | `abs(漲跌幅) ≤ max_change_pct`（雙向過濾追高/追跌） | `max_change_pct`（預設 5.0%） | ✅ 數值 |
 | **⑤a** | **⭐ tick 上漲 ≥ 門檻**：觀察窗口內最早→現價上漲幾個 tick（台股 tick 依股價 0.1~1 元），確認主動追買力道 | `tick_rise_threshold`（預設 4，設 0 關閉）/ `tick_window_seconds` | ✅ 數值 |
 | **⑤b** | **⭐ 外盤佔比 ≥ 門檻**：觀察窗口內外盤（主動買單成交量）佔比，確認主力在追買 | `bid_1m_pct_threshold`（預設 85%）/ `tick_window_seconds`（預設 60秒） | ✅ 數值 |
 | **⑤c** | **⭐ 外盤量 ≥ 動態基準**：觀察窗口內外盤量(張) ≥ 近5分鐘平均每分鐘總成交量 × 係數；資料不足2分鐘自動跳過 | `vol_1m_coef`（預設 0.8，設 0 關閉）/ `tick_window_seconds` | ✅ 數值 |
-| 7 | 量縮過濾：觀察窗口內外盤量 ≥ 前一窗口外盤量 × 係數（量不能縮） | `vol_trend_coef`（預設 0.8，設 0 關閉） | ✅ 數值 |
-| 8 | 今日累積量/5日均量 >= 開盤後觀察分鐘數 × 係數% | `vol_ratio_coefficient`（預設 1.0）；例：09:15進場 → 15×1.0=15% | ✅ 數值 |
-
-> **條件 4（chg_1m_min_pct）設計說明：** `bid_1m_pct` 測量的是委買掛單佔比（order book depth），在機構派發時散戶護盤也會推高這個數字，是假買盤。`chg_1m_min_pct` 要求價格本身在觀察窗口內真的上漲 ≥ 0.6%，確認買盤有實際成交推動價格，而非只有掛單。兩個條件互補：一個看買盤意願，一個看買盤是否真實推價。
+| 6 | 今日累積量/5日均量 >= 開盤後觀察分鐘數 × 係數% | `vol_ratio_coefficient`（預設 1.0）；例：09:15進場 → 15×1.0=15% | ✅ 數值 |
 
 > **條件 ⑤a/⑤b/⑤c 三者同時成立（核心外盤三條件）：** tick_rise 確認價格真在動；bid_1m_pct 確認外盤佔比夠高；vol_1m_coef 確認外盤量相對近5分均量達標。三者缺一不可。
 
-條件 2 的 check_not_in_position 可在前端「交易設定」頁面透過 checkbox 開關。條件 4、⑤a、⑤c、7 設 0 可關閉。所有數值條件皆可即時調整。
+條件 2 的 check_not_in_position 可在前端「交易設定」頁面透過 checkbox 開關。⑤a、⑤c 設 0 可關閉。所有數值條件皆可即時調整。
 
 所有參數儲存於 PostgreSQL `trading_settings`，透過前端「交易設定」頁面修改後**立即生效**（寫入 PG + 同步 ticks.db 熱重載快取，引擎每 tick 重讀，無需重啟）。
 

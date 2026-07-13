@@ -29,12 +29,10 @@ class TradingParamsBody(BaseModel):
     commission_discount: float = 0.28
     # 進場條件
     max_change_pct: float = 5.0
-    chg_1m_min_pct: float = 0.6
     check_not_in_position: bool = True
     bid_1m_pct_threshold: float = 85.0
     vol_ratio_coefficient: float = 1.0
     vol_1m_coef: float = 0.8
-    vol_trend_coef: float = 0.8
     tick_window_seconds: int = 60
     tick_rise_threshold: int = 4
     # 停損停利
@@ -116,9 +114,9 @@ def create_app(
     _engine = trading_engine
     _PARAM_KEYS = [
         "dry_run", "max_position_capital", "max_daily_positions", "commission_discount",
-        "max_change_pct", "chg_1m_min_pct",
+        "max_change_pct",
         "check_not_in_position",
-        "bid_1m_pct_threshold", "vol_ratio_coefficient", "vol_1m_coef", "vol_trend_coef", "tick_window_seconds", "tick_rise_threshold",
+        "bid_1m_pct_threshold", "vol_ratio_coefficient", "vol_1m_coef", "tick_window_seconds", "tick_rise_threshold",
         "stop_loss_ticks", "take_profit_add_pct", "atr_multiplier",
         "entry_start_time", "latest_dynamic_add_time", "force_exit_time",
         "daytrade_price_min", "daytrade_price_max",
@@ -129,12 +127,10 @@ def create_app(
         "max_daily_positions": max_daily_positions,
         "commission_discount": 0.28,
         "max_change_pct": 5.0,
-        "chg_1m_min_pct": 0.6,
         "check_not_in_position": True,
         "bid_1m_pct_threshold": 85.0,
         "vol_ratio_coefficient": 1.0,
         "vol_1m_coef": 0.8,
-        "vol_trend_coef": 0.8,
         "tick_window_seconds": 60,
         "tick_rise_threshold": 4,
         "stop_loss_ticks": 6,
@@ -153,9 +149,9 @@ def create_app(
             return str(v).lower() in ("true", "1", "yes")
         if k in ("max_position_capital", "max_daily_positions", "stop_loss_ticks", "tick_window_seconds", "tick_rise_threshold"):
             return int(v)
-        if k in ("commission_discount", "take_profit_add_pct", "max_change_pct", "chg_1m_min_pct",
+        if k in ("commission_discount", "take_profit_add_pct", "max_change_pct",
                  "daytrade_price_min", "daytrade_price_max",
-                 "vol_ratio_coefficient", "vol_1m_coef", "vol_trend_coef", "bid_1m_pct_threshold",
+                 "vol_ratio_coefficient", "vol_1m_coef", "bid_1m_pct_threshold",
                  "atr_multiplier"):
             return float(v)
         return str(v)  # time strings
@@ -301,10 +297,8 @@ def create_app(
                     {"type": "state", **state,
                      "dry_run": _trading_params.get("dry_run", True),
                      "bid_1m_pct_threshold": _trading_params.get("bid_1m_pct_threshold", 85.0),
-                     "chg_1m_min_pct": _trading_params.get("chg_1m_min_pct", 0.6),
                      "vol_ratio_coefficient": _trading_params.get("vol_ratio_coefficient", 1.0),
                      "vol_1m_coef": _trading_params.get("vol_1m_coef", 0.8),
-                     "vol_trend_coef": _trading_params.get("vol_trend_coef", 0.8),
                      "tick_window_seconds": _trading_params.get("tick_window_seconds", 60),
                      "tick_rise_threshold": _trading_params.get("tick_rise_threshold", 4),
                      "atr_multiplier": _trading_params.get("atr_multiplier", 0.4),
@@ -1325,12 +1319,10 @@ def create_app(
         _trading_params["max_daily_positions"] = body.max_daily_positions
         _trading_params["commission_discount"] = max(0.0, min(1.0, body.commission_discount))
         _trading_params["max_change_pct"] = max(0.1, body.max_change_pct)
-        _trading_params["chg_1m_min_pct"] = max(0.0, body.chg_1m_min_pct)
         _trading_params["check_not_in_position"] = body.check_not_in_position
         _trading_params["bid_1m_pct_threshold"] = max(0.0, min(100.0, body.bid_1m_pct_threshold))
         _trading_params["vol_ratio_coefficient"] = max(0.1, min(10.0, body.vol_ratio_coefficient))
         _trading_params["vol_1m_coef"] = max(0.0, body.vol_1m_coef)
-        _trading_params["vol_trend_coef"] = max(0.0, body.vol_trend_coef)
         _trading_params["tick_window_seconds"] = max(10, body.tick_window_seconds)
         _trading_params["tick_rise_threshold"] = max(0, body.tick_rise_threshold)
         _trading_params["stop_loss_ticks"] = max(1, body.stop_loss_ticks)

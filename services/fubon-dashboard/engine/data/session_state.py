@@ -148,8 +148,6 @@ class SymbolSession:
         bid_1m_pct_threshold: float = 85.0,
         past_5min_avg_vol: float = 0.0,
         vol_1m_coef: float = 0.8,
-        vol_trend_coef: float = 0.0,
-        chg_1m_min_pct: float = 0.0,
     ) -> SignalResult:
         current_mins = current_time.hour * 60 + current_time.minute
         time_ok = current_mins >= entry_start_mins and current_mins < entry_cutoff_mins
@@ -170,10 +168,6 @@ class SymbolSession:
             vol_1m_lots=self.vol_1m_lots,
             past_5min_avg_vol=past_5min_avg_vol,
             vol_1m_coef=vol_1m_coef,
-            prev_vol_1m_lots=self.prev_vol_1m_lots,
-            vol_trend_coef=vol_trend_coef,
-            chg_1m_pct=self.chg_1m_pct,
-            chg_1m_min_pct=chg_1m_min_pct,
         )
 
     def evaluate_theoretical(
@@ -189,8 +183,6 @@ class SymbolSession:
         bid_1m_pct_threshold: float = 85.0,
         past_5min_avg_vol: float = 0.0,
         vol_1m_coef: float = 0.8,
-        vol_trend_coef: float = 0.0,
-        chg_1m_min_pct: float = 0.0,
     ) -> SignalResult:
         current_mins = current_time.hour * 60 + current_time.minute
         time_ok = current_mins >= entry_start_mins and current_mins < entry_cutoff_mins
@@ -211,8 +203,4 @@ class SymbolSession:
             vol_1m_lots=self.vol_1m_lots,
             past_5min_avg_vol=past_5min_avg_vol,
             vol_1m_coef=vol_1m_coef,
-            prev_vol_1m_lots=self.prev_vol_1m_lots,
-            vol_trend_coef=vol_trend_coef,
-            chg_1m_pct=self.chg_1m_pct,
-            chg_1m_min_pct=chg_1m_min_pct,
         )
