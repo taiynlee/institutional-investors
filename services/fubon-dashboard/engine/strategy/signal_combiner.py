@@ -64,7 +64,9 @@ class SignalCombiner:
             return no(f"tick_rise_low_{tick_rise:.1f}_need_{tick_rise_threshold}")
         if bid_1m_pct < bid_1m_pct_threshold:
             return no(f"bid1m_low_{bid_1m_pct:.0f}pct_need_{bid_1m_pct_threshold:.0f}pct")
-        if vol_1m_coef > 0 and past_5min_avg_vol > 0:
+        if vol_1m_coef > 0:
+            if past_5min_avg_vol <= 0:
+                return no("vol_avg_not_ready")
             min_vol = past_5min_avg_vol * vol_1m_coef
             if vol_1m_lots < min_vol:
                 return no(f"vol_1m_low_{vol_1m_lots:.1f}lots_need_{min_vol:.1f}lots")
