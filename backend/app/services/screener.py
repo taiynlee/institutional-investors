@@ -197,7 +197,7 @@ def check_entry_criteria(
     passes_B_price = False
     bb_peak_B = 0.0
     days_ago_B = 0
-    if trend_ok and bb_now <= 8:
+    if trend_ok and bb_now <= 5:
         result = _find_30d_high_breakout(
             closes, highs, lows, volumes, lookback=50, require_volume=False,
             start_days_ago=1,
@@ -395,14 +395,18 @@ def calc_score_a(
     chip12d: float,
     shareholder_change: float,
     vol_ratio: float = 0.0,
+    sh_chg_stale: bool = False,
 ) -> float:
     """
     策略A專用評分（100分）
 
-    A. 籌碼強度（30分）
-    B. 突破品質（35分）
-    C. 動能品質（15分）
-    D. 千張大戶積累（20分）
+    A. 籌碼強度（30分）— chip1d + chip12d；雙負時扣 8 分
+    B. 突破品質（35分）— BB位階、收盤位置、漲幅、量比
+    C. 動能品質（15分）— 布林上軌斜率（越陡=越成熟=越低分）、MA20斜率
+    D. 千張大戶積累（20分）— TDCC週報；sh_chg_stale=True 時僅給中性 2 分
+
+    upper_slope 反向計分為設計：策略A定義「啟動初期」，斜率 2-3% 為最佳
+    進場點，≥8% 代表趨勢已延伸，追高風險高。
     """
     score = 0.0
 
@@ -418,6 +422,10 @@ def calc_score_a(
     elif chip12d > 2:   score += 9
     elif chip12d > 1:   score += 5
     elif chip12d > 0:   score += 2
+
+    # 今日 + 12日均為賣超 → 雙確認籌碼惡化，扣 8 分
+    if chip1d <= 0 and chip12d < 0:
+        score -= 8
 
     # B. 突破品質（35分）
     if bb_position >= 11:  score += 8
@@ -446,11 +454,14 @@ def calc_score_a(
     elif 0.5 <= ma20_slope < 0.8 or 1.2 < ma20_slope <= 1.5: score += 3
 
     # D. 千張大戶積累（20分）
+    # TDCC 資料超過 10 天未更新時 sh_chg_stale=True，只給中性基準分避免過度獎勵陳舊數據
     if shareholder_change is not None:
-        if shareholder_change >= 5:    score += 20
-        elif shareholder_change >= 3:  score += 16
-        elif shareholder_change >= 2:  score += 10
-        elif shareholder_change >= 1:  score += 6
-        elif shareholder_change >= 0:  score += 2
+        if sh_chg_stale:
+            score += 2
+        elif shareholder_change >= 5:    score += 20
+        elif shareholder_change >= 3:    score += 16
+        elif shareholder_change >= 2:    score += 10
+        elif shareholder_change >= 1:    score += 6
+        elif shareholder_change >= 0:    score += 2
 
     return round(min(100, max(0, score)), 1)

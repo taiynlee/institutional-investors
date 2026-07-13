@@ -14,8 +14,11 @@ Strategy C: 基本面加速
 """
 
 from __future__ import annotations
+import logging
 from dataclasses import dataclass, field
 from datetime import date
+
+_log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -40,11 +43,12 @@ def _score_yoy(yoy: float) -> int:
 
 
 def _score_accel(yoy_latest: float, yoy_prev: float, yoy_prev2: float) -> int:
-    m3 = yoy_latest > yoy_prev > yoy_prev2
-    m2 = yoy_latest > yoy_prev
-    if m3: return 15
-    if m2: return 9
-    return 4
+    # gate 已確保方向，這裡評加速幅度（2期累計delta）
+    delta = (yoy_latest - yoy_prev) + (yoy_prev - yoy_prev2)
+    if delta > 20: return 15
+    if delta > 10: return 12
+    if delta > 5:  return 9
+    return 6
 
 
 def _score_mom(mom: float, month: int) -> int:
@@ -57,8 +61,10 @@ def _score_mom(mom: float, month: int) -> int:
 
 
 def _score_eps_qoq(eps_new: float, eps_old: float) -> int:
+    if eps_old < 0:
+        return 15 if eps_new > 0 else 0  # 虧轉盈 = 最大轉機
     if eps_old == 0:
-        return 6 if eps_new > 0 else 0
+        return 9 if eps_new > 0 else 0   # 無基期，轉正給中分
     pct = (eps_new - eps_old) / abs(eps_old) * 100
     if pct > 20: return 15
     if pct > 10: return 12
@@ -99,7 +105,7 @@ def calc_score_c(snap: FinSnapshot) -> int:
 def passes_c(snap: FinSnapshot) -> bool:
     if snap.rev_yoy_latest < 10.0:
         return False
-    if not (snap.rev_yoy_latest > snap.rev_yoy_prev):
+    if not (snap.rev_yoy_latest > snap.rev_yoy_prev > snap.rev_yoy_prev2):  # 連2個月加速
         return False
     if len(snap.eps) < 2:
         return False
@@ -184,6 +190,18 @@ async def run_screener_c() -> list[dict]:
         if not latest_rev:
             return []
         ref_year, ref_month = latest_rev.year, latest_rev.month
+
+        # Freshness check: 月營收應在次月10日前公告
+        # 若 DB 最新資料超過應公告日 15 天仍未更新，視為 stale
+        next_m = ref_month + 1 if ref_month < 12 else 1
+        next_y = ref_year if ref_month < 12 else ref_year + 1
+        expected_release = date(next_y, next_m, 10)
+        if (today - expected_release).days > 15:
+            _log.warning(
+                "screener_c: revenue data stale (latest=%d-%02d, expected_release=%s, today=%s) — skip",
+                ref_year, ref_month, expected_release, today,
+            )
+            return []
 
         pool_stocks = {r.code: r for r in (await db.execute(select(StockPool))).scalars().all()}
 

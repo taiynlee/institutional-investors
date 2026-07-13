@@ -52,9 +52,16 @@ export interface ResultRow {
   is_ai_pick: boolean
 }
 
+export interface ResultDateItem {
+  date: string
+  hold_days: number
+}
+
 export interface ResultData {
   pred_date: string | null
   price_date: string | null
+  win_count: number
+  total_count: number
   rows: ResultRow[]
 }
 
@@ -69,11 +76,15 @@ export interface ExitSignal {
 export interface ExitAlert {
   code: string
   name: string
+  tags: string
   bb: number
+  peak_bb: number
   chip_3d_pct: number | null
   last_seen_date: string
   days_off: number
   badges: { type: string; label: string }[]
+  current_close: number | null
+  chg_since_last: number | null
 }
 
 export interface JobStatus {
@@ -118,7 +129,9 @@ export interface WatchlistAItem {
   triggered_close: number | null
   triggered_bb_position: number | null
   current_close: number | null
+  current_bb: number | null
   chg_pct: number | null
+  chg_basis: 'triggered' | 'added'
 }
 
 export interface ScoreCResult {

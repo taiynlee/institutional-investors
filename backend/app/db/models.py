@@ -133,6 +133,7 @@ class WatchlistA(Base):
     triggered_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     triggered_close: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     triggered_bb_position: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    expired_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
@@ -221,18 +222,6 @@ class DaytradeCandidate(Base):
     avg_vol5_lot: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     chip_count: Mapped[Optional[int]] = mapped_column(SmallInteger, nullable=True)
     above_ma20: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
-
-
-class DaytradePreSessionLog(Base):
-    __tablename__ = "daytrade_pre_session_log"
-    id: Mapped[int] = mapped_column(primary_key=True)
-    run_date: Mapped[date] = mapped_column(Date, index=True)
-    started_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
-    status: Mapped[str] = mapped_column(String(20), default="running")
-    total_stocks: Mapped[int] = mapped_column(Integer, default=0)
-    success_stocks: Mapped[int] = mapped_column(Integer, default=0)
-    error_msg: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
 
 
 class FetchLog(Base):

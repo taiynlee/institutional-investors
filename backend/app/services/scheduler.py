@@ -1,7 +1,7 @@
 import asyncio
 import logging
 import numpy as np
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import select, and_, func, text
 from app.db.base import AsyncSessionLocal
@@ -299,7 +299,7 @@ async def job4_screener(force: bool = False, target_date: date | None = None):
             _m20sl = calc_ma20_slope(closes)
             _cpct  = calc_close_position(closes[-1], highs[-1], lows[-1])
             _chg_pct = (closes[-1] / closes[-2] - 1) * 100 if len(closes) >= 2 else 0.0
-            _sh_chg = await _get_shareholder_change(stock.code) if a_passes else None
+            _sh_chg, _sh_stale = await _get_shareholder_change(stock.code) if a_passes else (None, True)
             _vol20_avg = float(np.mean(volumes[-21:-1])) if len(volumes) >= 21 else 0.0
             _vol_ratio_today = float(volumes[-1] / _vol20_avg) if _vol20_avg > 0 else 0.0
             _score_a = calc_score_a(
@@ -312,6 +312,7 @@ async def job4_screener(force: bool = False, target_date: date | None = None):
                 chip12d=chip.get("chip_ratio_12d", 0),
                 shareholder_change=_sh_chg,
                 vol_ratio=_vol_ratio_today,
+                sh_chg_stale=_sh_stale,
             ) if a_passes else 0.0
             results.append(ScreeningResult(
                 code=stock.code,
@@ -423,7 +424,8 @@ async def job4_screener(force: bool = False, target_date: date | None = None):
                             select(WatchlistA).where(WatchlistA.id == item.id)
                         )).scalar_one_or_none()
                         if item_db:
-                            await db.delete(item_db)
+                            item_db.status = "expired"
+                            item_db.expired_at = datetime.utcnow()
                             await db.commit()
                     logger.info(f"WatchlistA auto-expired {item.code} after {trading_days} trading days")
                     continue
@@ -468,7 +470,8 @@ async def job4_screener(force: bool = False, target_date: date | None = None):
                             select(WatchlistA).where(WatchlistA.id == item.id)
                         )).scalar_one_or_none()
                         if item_db:
-                            await db.delete(item_db)
+                            item_db.status = "auto_removed"
+                            item_db.expired_at = datetime.utcnow()
                             await db.commit()
                     logger.info(f"WatchlistA auto-removed {item.code} ({days_since} days after trigger)")
             except Exception as e:
@@ -754,9 +757,10 @@ async def _get_holders_bonus(code: str) -> dict:
             .limit(4)
         )).scalars().all()
     vals = [float(r.pct_1000_lot) for r in rows]
-    def diff(i: int) -> float:
-        return round(vals[0] - vals[i], 2) if len(vals) > i else 0.0
-    return {"w1": diff(1), "w2": diff(2), "w3": diff(3)}
+    # 連續週差分：w1=本週, w2=上週, w3=兩週前 — 反映每週獨立趨勢而非累積
+    def cons(i: int) -> float:
+        return round(vals[i - 1] - vals[i], 2) if len(vals) > i else 0.0
+    return {"w1": cons(1), "w2": cons(2), "w3": cons(3)}
 
 
 async def _get_inst_map(code: str, days: int = 60, end_date: date | None = None) -> dict:
@@ -817,7 +821,8 @@ async def _get_chip_summary(code: str, today: date, capital_lots: float) -> dict
     }
 
 
-async def _get_shareholder_change(code: str, max_weeks: int = 6) -> float | None:
+async def _get_shareholder_change(code: str, max_weeks: int = 6) -> tuple[float | None, bool]:
+    """回傳 (週增減%, is_stale)；TDCC 最新報告超過 10 天則標記為 stale。"""
     async with AsyncSessionLocal() as db:
         rows = (await db.execute(
             select(Shareholding.report_date, Shareholding.pct_1000_lot)
@@ -826,10 +831,11 @@ async def _get_shareholder_change(code: str, max_weeks: int = 6) -> float | None
             .limit(max_weeks + 1)
         )).all()
     if len(rows) < 2:
-        return None
+        return None, True
+    is_stale = (date.today() - rows[0].report_date).days > 10
     latest = rows[0].pct_1000_lot
     oldest = rows[min(len(rows) - 1, max_weeks)].pct_1000_lot
-    return round(latest - oldest, 4)
+    return round(latest - oldest, 4), is_stale
 
 
 async def job5_monthly_revenue(force: bool = False):

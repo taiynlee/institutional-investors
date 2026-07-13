@@ -979,7 +979,7 @@ def create_app(
         try:
             with sqlite3.connect(f"file:{_ticks_db}?mode=ro", uri=True,
                                  check_same_thread=False) as c:
-                row = c.execute("SELECT MAX(ts), COUNT(*) FROM ticks WHERE ts >= date('now','-1 day')").fetchone()
+                row = c.execute("SELECT MAX(ts), COUNT(*) FROM ticks WHERE ts >= date('now','localtime')").fetchone()
                 if row and row[0]:
                     last_ts_str = row[0]
                     try:
@@ -1228,14 +1228,6 @@ def create_app(
                 _dt_resp = _dt_r.json()
                 result["daytrade_latest_date"] = _dt_resp.get("date")
                 result["daytrade_latest_count"] = _dt_resp.get("count", 0)
-            _ps_r = _httpx.get(f"{_BACKEND}/api/pre-session/logs", params={"limit": 1}, timeout=5)
-            if _ps_r.status_code == 200:
-                _ps = _ps_r.json()
-                if _ps:
-                    result["last_presession_date"] = _ps[0].get("run_date")
-                    result["last_presession_status"] = _ps[0].get("status")
-                    result["last_presession_success"] = _ps[0].get("success_stocks")
-                    result["last_presession_total"] = _ps[0].get("total_stocks")
         except Exception:
             pass
 
@@ -1282,24 +1274,6 @@ def create_app(
             result["latest_log_file"] = None
 
         return result
-
-    # ── Pre-session log ───────────────────────────────────────────────────────
-    @app.get("/pre-session/logs")
-    def get_pre_session_logs():
-        import httpx as _httpx
-        try:
-            r = _httpx.get(f"{_BACKEND}/api/pre-session/logs", timeout=8)
-            if r.status_code == 200:
-                return r.json()
-        except Exception:
-            pass
-        if _store is None:
-            return []
-        return _store.get_pre_session_logs(limit=10)
-
-    @app.get("/pre-session/db-size")
-    def get_db_size():
-        return {"size_mb": 0}
 
     # ── Trading params ────────────────────────────────────────────────────────
     @app.get("/trading-params")

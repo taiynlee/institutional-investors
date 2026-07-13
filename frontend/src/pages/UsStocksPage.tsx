@@ -4,8 +4,8 @@ import axios from 'axios'
 interface UsStock {
   symbol: string
   name: string
-  close: number
-  chg_pct: number
+  close: number | null
+  chg_pct: number | null
   post_price: number | null
   post_chg_pct: number | null
 }
@@ -234,12 +234,12 @@ export function UsStocksPage() {
               </thead>
               <tbody>
                 {stocks.map(s => {
-                  const highlight = s.chg_pct >= 0 && s.post_chg_pct != null && s.post_chg_pct > 3
+                  const highlight = s.chg_pct != null && s.chg_pct >= 0 && s.post_chg_pct != null && s.post_chg_pct > 3
                   return (
                     <tr key={s.symbol} className={`border-b border-gray-800 transition-colors ${highlight ? 'bg-amber-950 hover:bg-amber-900' : 'hover:bg-gray-800'}`}>
                       <td className="px-4 py-3 font-mono text-blue-300 font-bold">{s.symbol}</td>
                       <td className="px-4 py-3 text-gray-300">{s.name}</td>
-                      <td className="px-4 py-3 text-right text-white font-mono">{s.close.toFixed(2)}</td>
+                      <td className="px-4 py-3 text-right text-white font-mono">{s.close != null ? s.close.toFixed(2) : <span className="text-gray-600">—</span>}</td>
                       <td className="px-4 py-3 text-right"><ChgBadge val={s.chg_pct} /></td>
                       <td className="px-4 py-3 text-right font-mono text-gray-300">
                         {s.post_price != null ? s.post_price.toFixed(2) : <span className="text-gray-600">—</span>}

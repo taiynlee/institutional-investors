@@ -12,7 +12,7 @@ from app.db.models import (
     ScreeningResult, FetchLog, DailyPrice, MarginTrading, AIPick,
     StockList, Institutional, Shareholding, IcClassification,
     CompanyTag, MonthlyRevenue, QuarterlyEps, WatchlistA, StockPool, UsWatchlist,
-    DaytradeCandidate, DaytradePreSessionLog, TradingSetting,
+    DaytradeCandidate, TradingSetting,
 )
 from app.services.screener import calc_bb_position
 
@@ -2462,77 +2462,3 @@ async def remove_daytrade_candidate(code: str, trade_date: Optional[str] = Query
     return {"ok": True, "trade_date": td.isoformat(), "code": code}
 
 
-# ── Pre-session log (PG-backed) ──────────────────────────────────────────────
-
-class PreSessionLogStartBody(BaseModel):
-    run_date: str
-    total_stocks: int = 0
-
-
-class PreSessionLogFinishBody(BaseModel):
-    finished_at: Optional[str] = None
-    status: str = "ok"
-    success_stocks: int = 0
-    error_msg: Optional[str] = None
-
-
-@router.post("/api/pre-session/log/start")
-async def start_pre_session_log(body: PreSessionLogStartBody, db: AsyncSession = Depends(get_db)):
-    log = DaytradePreSessionLog(
-        run_date=date.fromisoformat(body.run_date),
-        total_stocks=body.total_stocks,
-    )
-    db.add(log)
-    await db.commit()
-    await db.refresh(log)
-    return {"id": log.id}
-
-
-@router.patch("/api/pre-session/log/{log_id}")
-async def finish_pre_session_log(
-    log_id: int,
-    body: PreSessionLogFinishBody,
-    db: AsyncSession = Depends(get_db),
-):
-    log = (await db.execute(
-        select(DaytradePreSessionLog).where(DaytradePreSessionLog.id == log_id)
-    )).scalar_one_or_none()
-    if not log:
-        raise HTTPException(status_code=404, detail="log not found")
-    log.status = body.status
-    log.success_stocks = body.success_stocks
-    log.error_msg = body.error_msg
-    log.finished_at = (
-        datetime.fromisoformat(body.finished_at) if body.finished_at else datetime.utcnow()
-    )
-    await db.commit()
-    return {"ok": True}
-
-
-@router.get("/api/pre-session/logs")
-async def get_pre_session_logs(db: AsyncSession = Depends(get_db)):
-    from zoneinfo import ZoneInfo
-    rows = (await db.execute(
-        select(DaytradePreSessionLog)
-        .order_by(DaytradePreSessionLog.id.desc())
-        .limit(20)
-    )).scalars().all()
-
-    def _fmt_dt(dt):
-        if dt is None:
-            return None
-        return dt.replace(tzinfo=ZoneInfo("UTC")).astimezone(ZoneInfo("Asia/Taipei")).strftime("%Y-%m-%d %H:%M:%S")
-
-    return [
-        {
-            "id": r.id,
-            "run_date": r.run_date.isoformat() if r.run_date else None,
-            "started_at": _fmt_dt(r.started_at),
-            "finished_at": _fmt_dt(r.finished_at),
-            "status": r.status,
-            "total_stocks": r.total_stocks,
-            "success_stocks": r.success_stocks,
-            "error_msg": r.error_msg,
-        }
-        for r in rows
-    ]
