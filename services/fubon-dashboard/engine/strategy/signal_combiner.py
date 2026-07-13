@@ -14,11 +14,12 @@ class SignalCombiner:
     1. 時間窗口（entry_start_mins ~ entry_cutoff）
     2. 同標的當下未持倉（可關閉）
     3. 今日進場未達上限
-    4. 個股漲幅在 min_change_pct ~ max_change_pct 之間
-       （min 預設 2.0%，確認股票已有漲勢；max 預設 5.0%，避免追高）
-    5. ⭐ 必要條件（兩者同時成立）：
-       (a) 觀察窗口內外盤佔比 >= bid_1m_pct_threshold（預設 85%），且
-       (b) 過去 60 秒外盤量(張) >= 近5分鐘平均每分鐘總成交量(張) × vol_1m_coef
+    4. 個股漲幅 ≤ max_change_pct（預設 5.0%，避免追高）
+    4b. 觀察窗口內 1 分鐘漲幅 >= chg_1m_min_pct（預設 0.6%，確認短線動能）
+    5. ⭐ 必要條件（三者同時成立）：
+       (a) 觀察窗口內上漲 >= tick_rise_threshold 個 tick（預設 4，設 0 關閉）
+       (b) 觀察窗口內外盤佔比 >= bid_1m_pct_threshold（預設 85%），且
+       (c) 過去 60 秒外盤量(張) >= 近5分鐘平均每分鐘總成交量(張) × vol_1m_coef
            （0=關閉；資料不足2分鐘自動跳過；預設 0.8）
     6. 今日累積量/5日均量 >= 開盤後觀察分鐘數 × vol_ratio_coefficient%
     """
@@ -26,10 +27,8 @@ class SignalCombiner:
     def __init__(
         self,
         max_change_pct: float = 5.0,
-        min_change_pct: float = 2.0,
     ):
         self.max_change_pct = max_change_pct
-        self.min_change_pct = min_change_pct
 
     def evaluate(
         self,
@@ -42,11 +41,17 @@ class SignalCombiner:
         check_not_in_position: bool = True,
         vol_ratio: float = 100.0,
         vol_ratio_min_pct: float = 0.0,
+        tick_rise: float = 0.0,
+        tick_rise_threshold: int = 4,
         bid_1m_pct: float = 50.0,
         bid_1m_pct_threshold: float = 85.0,
         vol_1m_lots: float = 0.0,
         past_5min_avg_vol: float = 0.0,
         vol_1m_coef: float = 0.8,
+        prev_vol_1m_lots: float = 0.0,
+        vol_trend_coef: float = 0.0,
+        chg_1m_pct: float = 0.0,
+        chg_1m_min_pct: float = 0.0,
     ) -> SignalResult:
         def no(r):
             return SignalResult(symbol=symbol, should_enter=False, reason=r)
@@ -57,17 +62,22 @@ class SignalCombiner:
             return no("already_in_position")
         if positions_count >= max_positions:
             return no("max_daily_trades_reached")
-        if change_pct < self.min_change_pct:
-            return no(f"change_pct_too_low_{change_pct:.2f}pct_need_{self.min_change_pct:.1f}pct")
         if change_pct > self.max_change_pct:
             return no(f"change_pct_exceeded_{change_pct:.2f}pct")
-        # ⑤ 外盤條件 (a)(b)
+        if chg_1m_min_pct > 0 and chg_1m_pct < chg_1m_min_pct:
+            return no(f"chg1m_low_{chg_1m_pct:.2f}pct_need_{chg_1m_min_pct:.2f}pct")
+        # ⑤ 三者同時成立 (a)(b)(c)
+        if tick_rise_threshold > 0 and tick_rise < tick_rise_threshold:
+            return no(f"tick_rise_low_{tick_rise:.1f}_need_{tick_rise_threshold}")
         if bid_1m_pct < bid_1m_pct_threshold:
             return no(f"bid1m_low_{bid_1m_pct:.0f}pct_need_{bid_1m_pct_threshold:.0f}pct")
         if vol_1m_coef > 0 and past_5min_avg_vol > 0:
             min_vol = past_5min_avg_vol * vol_1m_coef
             if vol_1m_lots < min_vol:
                 return no(f"vol_1m_low_{vol_1m_lots:.1f}lots_need_{min_vol:.1f}lots")
+        if vol_trend_coef > 0 and prev_vol_1m_lots > 0:
+            if vol_1m_lots < prev_vol_1m_lots * vol_trend_coef:
+                return no(f"vol_fading_{vol_1m_lots:.1f}lots_prev_{prev_vol_1m_lots:.1f}lots")
         if vol_ratio_min_pct > 0 and vol_ratio < vol_ratio_min_pct:
             return no(f"vol_ratio_low_{vol_ratio:.1f}pct_need_{vol_ratio_min_pct:.1f}pct")
 

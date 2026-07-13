@@ -60,10 +60,10 @@ class SymbolSession:
         pass  # quote data no longer used
 
     def on_bid_ask_tick(self, bid_vol: int, ask_vol: int, window_seconds: int = 60):
-        """記錄本 tick 的買賣量到滾動窗口，用於計算觀察期間買盤佔比與外盤量。"""
+        """記錄本 tick 的買賣量到滾動窗口，用於計算觀察期間買盤佔比與外盤量。保留 2×window 供前一窗口比較。"""
         dt = now_tw()
         self._quote_history.append((dt, bid_vol, ask_vol))
-        cutoff = dt - timedelta(seconds=window_seconds)
+        cutoff = dt - timedelta(seconds=window_seconds * 2)
         while self._quote_history and self._quote_history[0][0] < cutoff:
             self._quote_history.popleft()
 
@@ -79,16 +79,28 @@ class SymbolSession:
 
     @property
     def bid_pct_window(self) -> float:
-        """觀察窗口內買盤佔總成交量的比例（%）。"""
-        total_bid = sum(b for _, b, _ in self._quote_history)
-        total_ask = sum(a for _, _, a in self._quote_history)
+        """觀察窗口內（最近60秒）買盤佔總成交量的比例（%）。"""
+        dt = now_tw()
+        cutoff = dt - timedelta(seconds=60)
+        total_bid = sum(b for t, b, _ in self._quote_history if t >= cutoff)
+        total_ask = sum(a for t, _, a in self._quote_history if t >= cutoff)
         total = total_bid + total_ask
         return total_bid / total * 100 if total > 0 else 50.0
 
     @property
     def vol_1m_lots(self) -> float:
         """過去 60 秒內外盤成交量（張）。bid_vol 單位：股，÷1000=張。"""
-        return sum(b for _, b, _ in self._quote_history) / 1000
+        dt = now_tw()
+        cutoff = dt - timedelta(seconds=60)
+        return sum(b for t, b, _ in self._quote_history if t >= cutoff) / 1000
+
+    @property
+    def prev_vol_1m_lots(self) -> float:
+        """60~120 秒前的外盤成交量（張），用於判斷量是否在縮。"""
+        dt = now_tw()
+        cutoff_near = dt - timedelta(seconds=60)
+        cutoff_far  = dt - timedelta(seconds=120)
+        return sum(b for t, b, _ in self._quote_history if cutoff_far <= t < cutoff_near) / 1000
 
     @property
     def past_5min_avg_vol_lots(self) -> float:
@@ -97,6 +109,16 @@ class SymbolSession:
         if len(hist) < 2:
             return 0.0
         return sum(hist) / len(hist)
+
+    @property
+    def chg_1m_pct(self) -> float:
+        """觀察窗口內最早成交價至今的漲幅（%）。"""
+        if len(self._price_history) < 2:
+            return 0.0
+        oldest_price = self._price_history[0][1]
+        if oldest_price <= 0:
+            return 0.0
+        return (self.curr_price - oldest_price) / oldest_price * 100
 
     @property
     def tick_rise_60s(self) -> float:
@@ -121,10 +143,13 @@ class SymbolSession:
         check_not_in_position: bool = True,
         vol_ratio: float = 100.0,
         vol_ratio_min_pct: float = 0.0,
+        tick_rise_threshold: int = 4,
         bid_1m_pct: float = 50.0,
         bid_1m_pct_threshold: float = 85.0,
         past_5min_avg_vol: float = 0.0,
         vol_1m_coef: float = 0.8,
+        vol_trend_coef: float = 0.0,
+        chg_1m_min_pct: float = 0.0,
     ) -> SignalResult:
         current_mins = current_time.hour * 60 + current_time.minute
         time_ok = current_mins >= entry_start_mins and current_mins < entry_cutoff_mins
@@ -138,11 +163,17 @@ class SymbolSession:
             check_not_in_position=check_not_in_position,
             vol_ratio=vol_ratio,
             vol_ratio_min_pct=vol_ratio_min_pct,
+            tick_rise=self.tick_rise_60s,
+            tick_rise_threshold=tick_rise_threshold,
             bid_1m_pct=bid_1m_pct,
             bid_1m_pct_threshold=bid_1m_pct_threshold,
             vol_1m_lots=self.vol_1m_lots,
             past_5min_avg_vol=past_5min_avg_vol,
             vol_1m_coef=vol_1m_coef,
+            prev_vol_1m_lots=self.prev_vol_1m_lots,
+            vol_trend_coef=vol_trend_coef,
+            chg_1m_pct=self.chg_1m_pct,
+            chg_1m_min_pct=chg_1m_min_pct,
         )
 
     def evaluate_theoretical(
@@ -153,10 +184,13 @@ class SymbolSession:
         entry_start_mins: int = 9 * 60 + 15,
         vol_ratio: float = 100.0,
         vol_ratio_min_pct: float = 0.0,
+        tick_rise_threshold: int = 4,
         bid_1m_pct: float = 50.0,
         bid_1m_pct_threshold: float = 85.0,
         past_5min_avg_vol: float = 0.0,
         vol_1m_coef: float = 0.8,
+        vol_trend_coef: float = 0.0,
+        chg_1m_min_pct: float = 0.0,
     ) -> SignalResult:
         current_mins = current_time.hour * 60 + current_time.minute
         time_ok = current_mins >= entry_start_mins and current_mins < entry_cutoff_mins
@@ -170,9 +204,15 @@ class SymbolSession:
             check_not_in_position=False,
             vol_ratio=vol_ratio,
             vol_ratio_min_pct=vol_ratio_min_pct,
+            tick_rise=self.tick_rise_60s,
+            tick_rise_threshold=tick_rise_threshold,
             bid_1m_pct=bid_1m_pct,
             bid_1m_pct_threshold=bid_1m_pct_threshold,
             vol_1m_lots=self.vol_1m_lots,
             past_5min_avg_vol=past_5min_avg_vol,
             vol_1m_coef=vol_1m_coef,
+            prev_vol_1m_lots=self.prev_vol_1m_lots,
+            vol_trend_coef=vol_trend_coef,
+            chg_1m_pct=self.chg_1m_pct,
+            chg_1m_min_pct=chg_1m_min_pct,
         )
