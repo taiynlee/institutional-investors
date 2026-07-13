@@ -229,8 +229,8 @@ Docker Compose（frontend nginx）
 | 2 | 同標的當下未持倉 / 今日進場次數 < 上限 | `check_not_in_position`（預設 true）/ `max_daily_positions`（預設 5） | ✅ 數值/開關 |
 | 3 | `abs(漲跌幅) ≤ max_change_pct`（雙向過濾追高/追跌） | `max_change_pct`（預設 5.0%） | ✅ 數值 |
 | **⑤a** | **⭐ tick 上漲 ≥ 門檻**：觀察窗口內最早→現價上漲幾個 tick（台股 tick 依股價 0.1~1 元），確認主動追買力道 | `tick_rise_threshold`（預設 4，設 0 關閉）/ `tick_window_seconds` | ✅ 數值 |
-| **⑤b** | **⭐ 外盤佔比 ≥ 門檻**：觀察窗口內外盤（主動買單成交量）佔比，確認主力在追買 | `bid_1m_pct_threshold`（預設 85%）/ `tick_window_seconds`（預設 60秒） | ✅ 數值 |
-| **⑤c** | **⭐ 主動買成交量 ≥ 動態基準**：過去N秒主動買單實際成交量(張) ≥ 近5分鐘平均每分鐘總成交量 × 係數（非委買掛單，是追價成交）；資料不足2分鐘時拒絕進場（`vol_avg_not_ready`） | `vol_1m_coef`（預設 0.8，設 0 關閉）/ `tick_window_seconds` | ✅ 數值 |
+| **⑤b** | **⭐ 外盤佔比 ≥ 門檻**：觀察窗口內外盤（主動買單(外盤)成交量）佔比，確認主力在追買 | `bid_1m_pct_threshold`（預設 85%）/ `tick_window_seconds`（預設 60秒） | ✅ 數值 |
+| **⑤c** | **⭐ 主動買(外盤)成交量 ≥ 動態基準**：過去N秒主動買單(外盤)實際成交量(張) ≥ 近5分鐘平均每分鐘總成交量 × 係數（非委買掛單，是實際追價成交）；資料不足2分鐘時拒絕進場（`vol_avg_not_ready`） | `vol_1m_coef`（預設 0.8，設 0 關閉）/ `tick_window_seconds` | ✅ 數值 |
 | 6 | 今日累積量/5日均量 >= 開盤後觀察分鐘數 × 係數% | `vol_ratio_coefficient`（預設 1.0）；例：09:15進場 → 15×1.0=15% | ✅ 數值 |
 
 > **條件 ⑤a/⑤b/⑤c 三者同時成立（核心外盤三條件）：** tick_rise 確認價格真在動；bid_1m_pct 確認外盤佔比夠高；vol_1m_coef 確認外盤量相對近5分均量達標。三者缺一不可。
