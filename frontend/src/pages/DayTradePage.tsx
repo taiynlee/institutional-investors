@@ -1670,9 +1670,17 @@ function LineLogTab() {
   }
 
   useEffect(() => {
+    const interval = () => {
+      const h = new Date().toLocaleString('en-US', { timeZone: 'Asia/Taipei', hour: '2-digit', hour12: false })
+      const m = new Date().toLocaleString('en-US', { timeZone: 'Asia/Taipei', minute: '2-digit', hour12: false })
+      const mins = parseInt(h) * 60 + parseInt(m)
+      return mins >= 9 * 60 && mins < 13 * 60 + 31 ? 3_000 : 15_000
+    }
     load()
-    const t = setInterval(load, 15_000)
-    return () => clearInterval(t)
+    let t: ReturnType<typeof setTimeout>
+    const schedule = () => { t = setTimeout(() => { load(); schedule() }, interval()) }
+    schedule()
+    return () => clearTimeout(t)
   }, [])
 
   const rows: any[] = data?.rows ?? []
@@ -1727,7 +1735,7 @@ function LineLogTab() {
       <div id="line-log-table" className={card}>
         <div className={`px-4 py-2 border-b border-[#253d5c] text-xs ${muted} flex items-center gap-3`}>
           <span>近 5 天通知記錄（共 {rows.length} 筆）</span>
-          <span className="text-[#4a9f6e]">● 每 15 秒自動更新</span>
+          <span className="text-[#4a9f6e]">● 盤中每 3 秒／盤後每 15 秒自動更新</span>
         </div>
         {loading && rows.length === 0 ? (
           <div className={`text-center py-10 text-sm ${muted}`}>載入中...</div>
