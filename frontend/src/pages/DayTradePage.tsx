@@ -876,8 +876,8 @@ function PreSessionTab() {
   const [selDate, setSelDate]   = useState('')
   const [list, setList]         = useState<any | null>(null)
   const [listLoading, setListLoading] = useState(false)
-  const [priceMin, setPriceMin] = useState<number>(200)
-  const [priceMax, setPriceMax] = useState<number>(990)
+  const [priceMin, setPriceMin] = useState<number>(100)
+  const [priceMax, setPriceMax] = useState<number>(1500)
 
   useEffect(() => {
     axios.get(`${API}/trading-params`).then(r => {
@@ -935,23 +935,15 @@ function PreSessionTab() {
         <div className={`text-[10px] uppercase tracking-widest ${muted} mb-3`}>最新觀察名單產生邏輯（每日 21:05）</div>
         <div className="space-y-3 text-xs text-[#dde6f0]">
           <div>
-            <div className="font-semibold text-[#60a5fa] mb-1">① 股票池 × 篩選條件</div>
-            <div className="pl-3 space-y-0.5">
-              <div className="text-[#6b84a0] text-[11px]">籌碼加分 ≥ 2 條入選</div>
-              <div>⬡ 外資昨日買超（foreign_net &gt; 0）</div>
-              <div>⬡ 投信連續買超（trust_net &gt; 0）</div>
-              <div>⬡ 融資餘額日減少（margin_change &lt; 0）</div>
-            </div>
-          </div>
-          <div>
-            <div className="font-semibold text-[#60a5fa] mb-0.5">② ∪ 策略A + 策略B 當日篩選結果</div>
-          </div>
-          <div>
-            <div className="font-semibold text-[#60a5fa] mb-0.5">③ ∪ 策略C 當日名單（全部納入）</div>
+            <div className="font-semibold text-[#60a5fa] mb-0.5">股票池全部納入（不篩 chip_count / 策略A/B/C）</div>
+            <div className="text-[#6b84a0] text-[11px] pl-3">外資/投信/融資僅供參考顯示，不作為入選條件</div>
           </div>
           <div className="pt-1 border-t border-[#253d5c]">
             <div className="font-semibold text-[#f59e0b] mb-0.5">過濾</div>
             <div>昨收 {priceMin}~{priceMax} 元　·　處置股全排除</div>
+          </div>
+          <div className="text-[#6b84a0] text-[11px]">
+            候選檔數受 Fubon 單一 WS 連線 100 檔訂閱上限限制，超過時上方會顯示警示
           </div>
         </div>
       </div>
@@ -961,7 +953,12 @@ function PreSessionTab() {
       <div className={card}>
         <div className={`px-4 py-2 border-b border-[#253d5c] flex items-center gap-2`}>
           <span className={`text-xs ${muted}`}>選股結果</span>
-          {list && <Badge text={`${list.count} 檔`} color="blue" />}
+          {list && <Badge text={`${list.count} 檔`} color={list.count > 100 ? 'red' : 'blue'} />}
+          {list && list.count > 100 && (
+            <span className="text-xs font-semibold text-red-400">
+              ⚠ 超過 100 檔（Fubon 單一 WS 連線訂閱上限），部分股票可能無法即時訂閱
+            </span>
+          )}
           {list?.date && <span className={`text-xs ${muted}`}>{list.date}</span>}
         </div>
         {listLoading ? (
@@ -981,7 +978,6 @@ function PreSessionTab() {
                   <th className="px-3 py-2 text-center">投信</th>
                   <th className="px-3 py-2 text-center">融資↓</th>
                   <th className="px-3 py-2 text-center">籌碼分</th>
-                  <th className="px-3 py-2 text-center">來源</th>
                   <th className="px-3 py-2 text-right">外資淨</th>
                   <th className="px-3 py-2 text-right">投信淨</th>
                   <th className="px-3 py-2 text-right">融資增</th>
@@ -1018,11 +1014,6 @@ function PreSessionTab() {
                       <td className="px-3 py-2.5 text-center">
                         <span className={`text-xs font-bold px-1.5 py-0.5 rounded ${chipPass ? 'bg-green-400/15 text-green-400' : 'bg-[#253d5c] text-[#6b84a0]'}`}>
                           {chipCnt}/3
-                        </span>
-                      </td>
-                      <td className="px-3 py-2.5 text-center">
-                        <span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${chipPass ? 'bg-green-400/15 text-green-400' : 'bg-blue-400/15 text-blue-400'}`}>
-                          {chipPass ? '籌碼' : '策略'}
                         </span>
                       </td>
                       <td className={`px-3 py-2.5 text-right ${mono} text-xs ${forOk ? 'text-green-400' : 'text-red-400'}`}>

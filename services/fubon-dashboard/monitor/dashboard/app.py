@@ -44,8 +44,8 @@ class TradingParamsBody(BaseModel):
     latest_dynamic_add_time: str = "13:09"
     force_exit_time: str = "13:20"
     # 當沖篩選
-    daytrade_price_min: float = 60.0
-    daytrade_price_max: float = 990.0
+    daytrade_price_min: float = 100.0
+    daytrade_price_max: float = 1500.0
 
 
 def _today() -> str:
@@ -112,6 +112,7 @@ def create_app(
     _store = daily_store
     _ticks_db = ticks_db
     _engine = trading_engine
+    _BACKEND = "http://localhost:8000"
     _PARAM_KEYS = [
         "dry_run", "max_position_capital", "max_daily_positions", "commission_discount",
         "max_change_pct",
@@ -139,8 +140,8 @@ def create_app(
         "entry_start_time": "09:15",
         "latest_dynamic_add_time": "13:09",
         "force_exit_time": "13:20",
-        "daytrade_price_min": 60.0,
-        "daytrade_price_max": 3000.0,
+        "daytrade_price_min": 100.0,
+        "daytrade_price_max": 1500.0,
     }
 
     def _cast_param(k: str, v: str):
@@ -500,8 +501,6 @@ def create_app(
             return []
 
     # ── Daytrade list — 全部改從 PG backend 讀取 ─────────────────────────────
-    _BACKEND = "http://localhost:8000"
-
     @app.get("/daytrade-list")
     def get_daytrade_list(date_str: str = ""):
         import httpx as _httpx
@@ -515,7 +514,9 @@ def create_app(
     @app.post("/daytrade-list/sync")
     def sync_daytrade_list(date_str: str = ""):
         """21:05 由 backend job8 觸發：
-        pool live-filter（chip_count≥2）∪ 策略A/B/C − 股價範圍 − 處置股 → PG daytrade_candidate
+        全部 pool − 股價範圍 − 處置股 → PG daytrade_candidate
+        （不再篩選 chip_count / 策略A/B/C，pool 內全部股票只要符合股價範圍
+        且非處置股即入選；篩選收窄改用 daytrade_price_min/max 控制檔數）
         """
         from datetime import date as _date, timedelta
         import httpx as _httpx
@@ -526,17 +527,17 @@ def create_app(
             nxt += timedelta(days=1)
         target_date = nxt.isoformat()
 
-        price_min = _trading_params.get("daytrade_price_min", 60.0)
-        price_max = _trading_params.get("daytrade_price_max", 990.0)
+        price_min = _trading_params.get("daytrade_price_min", 100.0)
+        price_max = _trading_params.get("daytrade_price_max", 1500.0)
         selected: set[str] = set()
         # snapshot: {code: {ref_close, ref_close_date, avg_vol5_lot, chip_count, above_ma20}}
         snapshots: dict = {}
 
-        # 1. Pool live-filter（chip_count≥2）
+        # 1. 全部 pool（不篩 chip_count）
         live_count = 0
         try:
             r = _httpx.get(f"{_BACKEND}/api/daytrade/list",
-                           params={"live": "true", "source": "pool"}, timeout=30)
+                           params={"live": "false", "source": "pool"}, timeout=30)
             if r.status_code == 200:
                 stocks = r.json().get("stocks", [])
                 live_count = len(stocks)
@@ -553,28 +554,7 @@ def create_app(
         except Exception:
             pass
 
-        # 2. 策略A / 策略B / 策略C（聯集，去重；傳 calc_date=base 避免 fallback 舊資料）
-        score_count = 0
-        _calc_date = base.isoformat()
-        try:
-            for ep in (f"{_BACKEND}/api/score-a", f"{_BACKEND}/api/score-b"):
-                r = _httpx.get(ep, params={"calc_date": _calc_date}, timeout=10)
-                if r.status_code == 200:
-                    codes = [row["code"] for row in r.json() if "code" in row]
-                    score_count += len(codes)
-                    selected.update(codes)
-        except Exception:
-            pass
-        try:
-            r = _httpx.get(f"{_BACKEND}/api/score-c", params={"calc_date": _calc_date}, timeout=15)
-            if r.status_code == 200:
-                codes = [row["code"] for row in r.json() if "code" in row]
-                score_count += len(codes)
-                selected.update(codes)
-        except Exception:
-            pass
-
-        # 3. 股價範圍過濾（批次取昨收，過濾 < price_min 或 > price_max）
+        # 2. 股價範圍過濾（批次取昨收，過濾 < price_min 或 > price_max）
         price_excluded = 0
         if selected:
             try:
@@ -600,7 +580,7 @@ def create_app(
             except Exception:
                 pass
 
-        # 4. 處置股票過濾（TWT85U 全部排除，避免分批競價量爆表且禁止當沖）
+        # 3. 處置股票過濾（TWT85U 全部排除，避免分批競價量爆表且禁止當沖）
         disposal_excluded = 0
         try:
             import urllib.request as _ureq_d, json as _json_d
@@ -639,7 +619,7 @@ def create_app(
 
         return {
             "ok": True, "date": target_date, "count": len(codes_list),
-            "live_filter": live_count, "score_abc": score_count,
+            "pool_total": live_count,
             "excluded_price": price_excluded, "excluded_disposal": disposal_excluded,
             "price_range": [price_min, price_max],
         }
@@ -657,18 +637,6 @@ def create_app(
             raise
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
-
-    @app.get("/daytrade-list/live")
-    def get_daytrade_list_live():
-        """PG-backed: 取最新 daytrade candidates，套用 above_ma20 & vol_ok & chip_count>=2"""
-        import httpx as _httpx
-        try:
-            r = _httpx.get(f"{_BACKEND}/api/daytrade/list", params={"live": "true"}, timeout=10)
-            data = r.json()
-            stocks = data.get("stocks", [])
-            return {"date": data.get("date"), "count": len(stocks), "stocks": stocks}
-        except Exception as e:
-            raise HTTPException(status_code=502, detail=str(e))
 
     @app.get("/daytrade-list/dates")
     def get_daytrade_dates():

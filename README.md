@@ -200,7 +200,7 @@ Docker Compose（frontend nginx）
 | 今日交易 | WebSocket `/fubon-api/ws/stream` + SSE | 即時持倉 + 盤中損益（WS 串流，每秒更新）。觀察名單欄位：代碼/名稱、昨收、現價、漲幅%、**1m漲幅%**（觀察窗口最早→現價，顏色依 `chg_1m_min_pct` 門檻）、外盤%（bid佔比）、1m外盤張、量比、振幅%。「今日已交易」格子 hover 顯示**進場八條件**詳情（含目前閾值）。今日進場紀錄顯示觸發當時的漲幅/1m漲幅/外盤%/外盤量。欄位閾值顏色跟隨「交易設定」即時更新。取消觸價單按鈕有確認 dialog。 |
 | 手動買賣 | `/fubon-api/manual-trade/*` | 買進：市價IOC + 自動掛OCO停損/停利觸價單；賣出：ROD限價現賣，不綁持倉紀錄 |
 | 交易紀錄 | `/fubon-api/trade-history` | 歷史交易紀錄（今日/本月/上一月…全部）；統計損益、手續費、**預估月退讓（依 commission_discount 動態計算）**、筆數、獲利率；刪除有確認 dialog |
-| 當沖篩選 | `/fubon-api/daytrade-list` | 歷史各日選股結果；每列顯示代碼/昨收/均量5日/MA20/外資/投信/融資↓/籌碼分/**來源（籌碼池 or 策略A/B/C）**；篩選邏輯說明卡顯示進入條件 |
+| 當沖篩選 | `/fubon-api/daytrade-list` | 歷史各日候選名單；每列顯示代碼/昨收/均量5日/MA20/外資/投信/融資↓/籌碼分（僅供參考，不篩選）；股票池全部納入，只用股價範圍 + 處置股排除過濾；候選數 > 100（Fubon 單連線訂閱上限）時頁面頂部顯示警示 |
 | 交易設定 | `/fubon-api/trading-params` + PG `trading_settings` | 所有引擎參數（即時生效）。儲存後**自動重取伺服器確認值**顯示。切換至實盤模式需二次確認。時間欄位使用 time picker + 格式驗證。 |
 | 後台設定 | `/fubon-api/config` + `/fubon-api/system-status` | 服務狀態（API/引擎）、連線設定（只讀）、帳號資訊（密碼遮蔽） |
 | 當沖健診 | `/fubon-api/health-check/results` + `/fubon-api/logs/latest` | 快速/完整健診（✔/⚠/✘ 表格）、LINE 模擬測試、引擎 log 100 行；**健診結果切換子頁後保留（sessionStorage）** |
@@ -707,7 +707,7 @@ vol_ratio = mean(volume[-5:]) / mean(volume[-10:-5])
 20:45  Job 2 — 抓融資借券（TWSE TWT93U，約 20:30 更新）
 週六 11:30 / 週日 18:30  Job 3 — 抓 TDCC 集保持股集中度（週五收盤資料，週六先跑一次、週日晚間再跑一次確保資料齊全）
 21:00  Job 4 — 執行篩選計算，更新 screening_result，呼叫 Claude API 產生 AI 精選（週日額外 22:30 再跑一次，配合 Job 3 週日資料）
-21:15  Job 8 — 當沖篩選（pool × score-a/b → PG daytrade_candidate，隔日引擎啟動時讀取）
+21:15  Job 8 — 當沖候選名單（全部 pool → 股價範圍(預設100~1500) → 處置股排除 → PG daytrade_candidate，隔日引擎啟動時讀取；不再篩 chip_count / 策略A/B/C）
 每月10-25日 12:00  Job 5 — 抓月營收（MOPS）
 每季（3/1, 5/16, 8/15, 11/15 09:00）  Job 6 — 抓季報 EPS（FinMind TaiwanStockFinancialStatements）
 每半年（1/1, 7/1 02:00）  Job 7 — 抓產業鏈分類（IC Chain），更新 ic_classification

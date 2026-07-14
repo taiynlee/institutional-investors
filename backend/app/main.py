@@ -127,8 +127,8 @@ async def _apply_migrations():
             "latest_dynamic_add_time":  "13:09",
             "force_exit_time":          "13:20",
             "commission_discount":      "0.28",
-            "daytrade_price_min":       "60.0",
-            "daytrade_price_max":       "3000.0",
+            "daytrade_price_min":       "100.0",
+            "daytrade_price_max":       "1500.0",
         }
         from datetime import datetime as _dt
         now_ts = _dt.utcnow()

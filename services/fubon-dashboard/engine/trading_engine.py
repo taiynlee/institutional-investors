@@ -987,9 +987,9 @@ class TradingEngine:
                 past_5min_avg_vol=_snap_past5avg,
                 vol_1m_coef=_vol_1m_coef(),
             )
-            # 記 eval log：外盤%超過門檻60%（接近）或已通過時才記，過濾低外盤噪音
+            _v1m_thr = round(_snap_past5avg * _vol_1m_coef(), 1) if _snap_past5avg > 0 else 0
+            # 記 eval log（UI 顯示用，僅存最近200筆）：外盤%超過門檻60%（接近）或已通過時才記，過濾低外盤噪音
             if _snap_bid1m >= 60 or result.should_enter:
-                _v1m_thr = round(_snap_past5avg * _vol_1m_coef(), 1) if _snap_past5avg > 0 else 0
                 _append_log({
                     "type": "eval",
                     "ts": now_tw().strftime("%H:%M:%S"),
@@ -1033,12 +1033,29 @@ class TradingEngine:
                 "✓" if theory.should_enter else "✗", theory.reason or "ok",
                 sess.change_pct, _snap_bid1m,
             )
+            # 完整特徵快照（無條件記錄，不受 UI 過濾影響）：
+            # 供事後分析——不管有沒有觸發，都留下當下所有參數值 + 現價，
+            # 之後可用 ticks.db 的歷史價格回溯任意分鐘數的漲跌，評估「若當時進場會賺賠多少」，
+            # 也能用來檢查現有門檻是否卡掉了原本會賺錢的訊號，或發掘尚未使用的參數關聯。
             log_event("signal_eval",
                       symbol=symbol,
+                      price=sess.curr_price,
+                      ref_price=round(_ref_price, 2) if _ref_price else None,
                       actual_enter=result.should_enter, actual_reason=result.reason,
                       theory_enter=theory.should_enter, theory_reason=theory.reason,
                       change_pct=round(sess.change_pct, 2),
-                      bid_1m_pct=_snap_bid1m)
+                      chg_1m_pct=_snap_chg1m,
+                      tick_rise=_snap_tick_rise,
+                      tick_rise_thr=_tick_rise_threshold(),
+                      bid_1m_pct=_snap_bid1m,
+                      bid_1m_pct_thr=_bid_1m_pct_threshold(),
+                      vol_ratio=round(_vr, 1),
+                      vol_ratio_thr=round(_vol_ratio_min_pct(), 1),
+                      vol_1m=_snap_vol1m,
+                      vol_1m_thr=_v1m_thr,
+                      past_5m_avg=_snap_past5avg,
+                      amplitude_pct=round(_amp, 2),
+                      market_chg_pct=round(market_chg, 2) if market_chg != 999.0 else None)
 
             if result.should_enter:
                 # 每支股票今日第一次觸發 → 發 LINE（dry_run 也送）
@@ -1053,6 +1070,19 @@ class TradingEngine:
                     _est_tp  = round_down_tick(
                         sess.reference_price * (1 + (_snap_chg + _take_profit_add_pct()) / 100)
                     ) if sess.reference_price > 0 else 0.0
+                    # 訊號觸發當下的完整快照：預估停損/停利 + 當時生效的參數值，
+                    # 供事後回放（例：若改用移動停利/不同停損寬度，實際結果會不會更好）
+                    log_event("signal_fired",
+                              symbol=symbol,
+                              trigger_price=_trig_px,
+                              ref_price=round(sess.reference_price, 2) if sess.reference_price else None,
+                              est_stop_loss=_est_sl,
+                              est_take_profit=_est_tp,
+                              stop_loss_ticks=_stop_loss_ticks(),
+                              atr_multiplier=_atr_multiplier(),
+                              take_profit_add_pct=_take_profit_add_pct(),
+                              change_pct=_snap_chg,
+                              chg_1m_pct=_snap_chg1m)
                     notifier.send(
                         f"📶 訊號觸發 [{_mode}] {symbol} {sname(symbol)}\n"
                         f"時間={now_tw().strftime('%H:%M:%S')}\n"
@@ -1070,10 +1100,12 @@ class TradingEngine:
             # 防禦：若 symbol 在處置/全額交割清單（啟動時建立），禁止下單
             if symbol in _restricted:
                 logger.warning("跳過下單 %s（處置/全額交割股，未被啟動過濾攔截）", symbol)
+                log_event("order_blocked", symbol=symbol, reason="restricted")
                 return
             # 若已有追價買單進行中，不重複送單
             if symbol in _chase_buys:
                 logger.debug("跳過 %s：追價買單進行中", symbol)
+                log_event("order_blocked", symbol=symbol, reason="chase_buys_pending")
                 return
             broker.dry_run = _is_dry_run()
             price = sess.curr_price
@@ -1084,6 +1116,8 @@ class TradingEngine:
             lots = bm.calculate_lots(price=price, remaining_budget=remaining)
             if lots <= 0:
                 logger.info("%s 計算張數=0，跳過", symbol)
+                log_event("order_blocked", symbol=symbol, reason="lots_zero",
+                          price=price, remaining=remaining, max_per_entry=bm.max_per_entry)
                 return
 
             ref = sess.reference_price
@@ -1122,6 +1156,7 @@ class TradingEngine:
             except Exception as _be:
                 _chase_buys.pop(symbol, None)
                 logger.error("買進下單失敗 %s: %s", symbol, _be)
+                log_event("order_blocked", symbol=symbol, reason="buy_exception", error=str(_be))
 
         # ── 成交回報 callback（確認買賣是否真正成交，部分成交自動補單）──────────
         def _on_filled(*args):
