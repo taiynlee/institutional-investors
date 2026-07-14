@@ -1161,13 +1161,13 @@ def create_app(
                 with sqlite3.connect(f"file:{_ticks_db}?mode=ro", uri=True,
                                      check_same_thread=False) as c:
                     row = c.execute(
-                        "SELECT SUM(volume)/1000 FROM ticks WHERE symbol=? AND ts LIKE ?",
+                        "SELECT MAX(volume) FROM ticks WHERE symbol=? AND ts LIKE ?",
                         (sample_sym, f"{_today()}%")
                     ).fetchone()
                     vol = int(row[0]) if row and row[0] else 0
                 add(19, f"成交量 ({sample_sym})", vol > 0, warn=vol == 0,
                     detail=f"{vol:,} 張" if vol > 0 else "盤前/休市 - 無成交",
-                    data_source="ticks.db/ticks SUM(volume)/1000")
+                    data_source="ticks.db/ticks MAX(volume)")
             except Exception as e:
                 _no_tbl = "no such table" in str(e) or "unable to open database file" in str(e)
                 if _no_tbl:

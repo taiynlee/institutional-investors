@@ -180,10 +180,10 @@ class FubonFeed:
 
         size    = data.get("size")
         cum_vol = int(data.get("volume") or 0)   # 今日累積成交量（張）
+        _sz = int(size or 0)
         if self._on_quote is not None and price is not None:
             bid = data.get("bid")
             ask = data.get("ask")
-            _sz = int(size or 0)
             if _sz > 0:
                 fp   = float(price)
                 prev = self._last_price.get(symbol)

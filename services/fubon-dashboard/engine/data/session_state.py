@@ -46,7 +46,7 @@ class SymbolSession:
         self._price_history.append((dt, price))
         while self._price_history and self._price_history[0][0] < cutoff:
             self._price_history.popleft()
-        # 更新分鐘桶（總成交量，size 單位：股，÷1000=張）
+        # 更新分鐘桶（總成交量，size 單位：張，SDK 直接回傳張數，不需再÷1000）
         minute_key = dt.hour * 60 + dt.minute
         if self._curr_minute_key == -1:
             self._curr_minute_key = minute_key
@@ -54,7 +54,7 @@ class SymbolSession:
             self._min_vol_hist.append(self._curr_min_vol_acc)
             self._curr_minute_key = minute_key
             self._curr_min_vol_acc = 0.0
-        self._curr_min_vol_acc += size / 1000
+        self._curr_min_vol_acc += size
 
     def on_quote(self, bids: list, asks: list):
         pass  # quote data no longer used
@@ -89,10 +89,10 @@ class SymbolSession:
 
     @property
     def vol_1m_lots(self) -> float:
-        """過去 60 秒內外盤成交量（張）。bid_vol 單位：股，÷1000=張。"""
+        """過去 60 秒內外盤成交量（張）。bid_vol 單位：張，SDK 直接回傳張數，不需再÷1000。"""
         dt = now_tw()
         cutoff = dt - timedelta(seconds=60)
-        return sum(b for t, b, _ in self._quote_history if t >= cutoff) / 1000
+        return sum(b for t, b, _ in self._quote_history if t >= cutoff)
 
     @property
     def prev_vol_1m_lots(self) -> float:
@@ -100,7 +100,7 @@ class SymbolSession:
         dt = now_tw()
         cutoff_near = dt - timedelta(seconds=60)
         cutoff_far  = dt - timedelta(seconds=120)
-        return sum(b for t, b, _ in self._quote_history if cutoff_far <= t < cutoff_near) / 1000
+        return sum(b for t, b, _ in self._quote_history if cutoff_far <= t < cutoff_near)
 
     @property
     def past_5min_avg_vol_lots(self) -> float:
