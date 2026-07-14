@@ -66,7 +66,7 @@ institutional-investors/
 │   │   │   │   ├── price.py      # 歷史價格補抓
 │   │   │   │   └── stock_list.py # 電子股清單（FinMind）
 │   │   │   ├── screener.py       # BB 計算 + A/B/C 篩選邏輯 + 評分
-│   │   │   └── scheduler.py      # asyncio 排程迴圈（7 Jobs + 非交易日 fallback）
+│   │   │   └── scheduler.py      # asyncio 排程迴圈（8 Jobs + 非交易日 fallback）
 │   │   └── db/
 │   │       ├── base.py       # SQLAlchemy engine + session
 │   │       └── models.py     # ORM 資料模型
@@ -242,7 +242,9 @@ Docker Compose（frontend nginx）
 ### 出場策略
 
 **進場同時掛出觸價單：**
-- 停損：進場價 - `stop_loss_ticks`（預設 4）tick（向上捨入）→ LessThanOrEqual 條件單
+- 停損：進場價 - `stop_ticks` tick（向上捨入）→ LessThanOrEqual 條件單
+  - `stop_ticks = max(stop_loss_ticks（預設 6）, round(當日振幅 × atr_multiplier（預設 0.4）/ tick_size))`
+  - 即固定跳動數與 ATR（當日高低價振幅）動態值取大者，個股當日振幅越大，停損越寬，避免雜訊洗出；`atr_multiplier` 設 0 可停用 ATR 動態放寬，回退固定 `stop_loss_ticks`
 - 停利：昨收 × (1 + (進場時漲幅 + `take_profit_add_pct`（預設 4%）) / 100)（向下捨入）→ GreaterThanOrEqual 條件單
 
 **強制出場機制（三層保護）：**
@@ -308,7 +310,7 @@ Docker Compose（frontend nginx）
 | 元件 | 說明 |
 |------|------|
 | **AI 精選** | 狀態列左側：job4 後由 Claude AI 精選最值得關注個股，點擊複製精選理由 |
-| **Job 狀態列** | 7 個排程執行狀態（✓ 時間 / 等待中 / ✗ 失敗）排列於狀態列 |
+| **Job 狀態列** | 8 個排程執行狀態（✓ 時間 / 等待中 / ✗ 失敗）排列於狀態列 |
 | **個股卡片** | 顯示代號、名稱、篩選日、評分、資加/戶加、千張大戶週增減（1w/2w/3w diff） |
 | **策略 badge** | A=綠色、B=黃色、C=藍色（BB+squeeze 時顯示青色 B+） |
 | **BBGauge** | 布林位階進度條，位階>5=綠、0~5=黃、0~-3=橘、<-3=紅 |
@@ -703,12 +705,12 @@ vol_ratio = mean(volume[-5:]) / mean(volume[-10:-5])
 
 18:00  Job 1 — 抓三大法人 + 日成交資料（TWSE T86，18:00 後穩定發布）
 20:45  Job 2 — 抓融資借券（TWSE TWT93U，約 20:30 更新）
-18:30  Job 3 — 抓 TDCC 集保持股集中度（僅週日，週日晚間完成）
-21:00  Job 4 — 執行篩選計算，更新 screening_result，呼叫 Claude API 產生 AI 精選
-21:05  Job 8 — 當沖篩選（pool × score-a/b → PG daytrade_candidate，隔日引擎啟動時讀取）
+週六 11:30 / 週日 18:30  Job 3 — 抓 TDCC 集保持股集中度（週五收盤資料，週六先跑一次、週日晚間再跑一次確保資料齊全）
+21:00  Job 4 — 執行篩選計算，更新 screening_result，呼叫 Claude API 產生 AI 精選（週日額外 22:30 再跑一次，配合 Job 3 週日資料）
+21:15  Job 8 — 當沖篩選（pool × score-a/b → PG daytrade_candidate，隔日引擎啟動時讀取）
 每月10-25日 12:00  Job 5 — 抓月營收（MOPS）
-每季（3/1, 5/16, 8/15, 11/15）  Job 6 — 抓季報 EPS（FinMind TaiwanStockFinancialStatements）
-每半年（1/1, 7/1）  Job 7 — 抓產業鏈分類（IC Chain），更新 ic_classification
+每季（3/1, 5/16, 8/15, 11/15 09:00）  Job 6 — 抓季報 EPS（FinMind TaiwanStockFinancialStatements）
+每半年（1/1, 7/1 02:00）  Job 7 — 抓產業鏈分類（IC Chain），更新 ic_classification
 每週日 02:30       Cleanup — 刪除超過保留期的舊資料（PG；詳見「資料保留策略」）
 
 啟動時補抓（startup_gap_backfill）:
@@ -716,11 +718,11 @@ vol_ratio = mean(volume[-5:]) / mean(volume[-10:-5])
   補抓完每一天後立刻補算 job4 篩選結果（假日 0 rows 除外，不觸發 job4）
 ```
 
-> **排程引擎：** asyncio 自製 `_scheduler_loop`（每分鐘比對台北時間觸發 7 個排程 Job），搭配 `job_watchdog`（每 30 分鐘檢查當日 job1/2/4/8 是否成功，失敗則補跑）與 `startup_gap_backfill`（開機時補歷史缺口）。
+> **排程引擎：** asyncio 自製 `_scheduler_loop`（每分鐘比對台北時間觸發 8 個排程 Job），搭配 `job_watchdog`（每 5 分鐘檢查當日 job1/2/4/8 是否成功，失敗則補跑）與 `startup_gap_backfill`（開機時補歷史缺口）。
 
 > **Job 4 資料完整性防護：** Job 4 執行前查詢 DB 確認當日 `institutional` 資料已入庫；若無資料則跳過篩選並記錄警告，避免用舊資料計算 chip_ratio_6d。
 
-儀表板頂部狀態列顯示 7 個排程的執行狀態，完成後顯示台北時間更新時刻（如 `✓ 18:02`），尚未執行顯示「等待中」。Job5/6/7 使用動態 log key（如 `job5_202605`、`job6_q2_2026`、`job7_2026H1`）以支援多期紀錄。
+儀表板頂部狀態列顯示 8 個排程的執行狀態，完成後顯示台北時間更新時刻（如 `✓ 18:02`），尚未執行顯示「等待中」。Job5/6/7 使用動態 log key（如 `job5_202605`、`job6_q2_2026`、`job7_2026H1`）以支援多期紀錄。
 
 ### 資料保留策略（DB 清理）
 
@@ -736,7 +738,6 @@ vol_ratio = mean(volume[-5:]) / mean(volume[-10:-5])
 | `screening_result` | **365 曆日** | 退場止損頁依賴歷史篩選紀錄 |
 | `fetch_log` | **90 曆日** | 作業日誌，無長期分析價值 |
 | `daytrade_candidate` | **90 曆日** | 當沖候選，短期參考 |
-| `daytrade_pre_session_log` | **90 曆日** | 作業日誌 |
 | `ai_pick` | **365 曆日** | AI 精選歷史記錄 |
 | `monthly_revenue` | **36 個月（3 年）** | YoY 計算需 2 年前資料；多留 1 年緩衝 |
 | `quarterly_eps` | **3 年** | EPS 趨勢分析 |
@@ -764,16 +765,23 @@ vol_ratio = mean(volume[-5:]) / mean(volume[-10:-5])
 | `daily_price` | 個股日 K 線 OHLCV | `(code, trade_date)` |
 | `institutional` | 三大法人每日買賣超 | `(code, trade_date)` |
 | `margin_trading` | 融資融券每日餘額 | `(code, trade_date)` |
+| `securities_lending` | 借券賣出每日餘額 | `(code, trade_date)` |
 | `shareholding` | 千張大戶持股（TDCC 週報） | `(code, report_date)` |
 | `screening_result` | 每日篩選結果與評分 | `(code, calc_date)` |
 | `watchlist_a` | 策略A追蹤清單（自動加入；tracking 超過10交易日未觸發自動刪除） | `(code, added_date)` |
+| `ai_pick` | Job4 後 Claude API 產生的每日 AI 精選紀錄 | `(code, calc_date)` |
+| `monthly_revenue` | 月營收（MOPS，YoY/MoM 計算用） | `(code, year, month)` |
+| `quarterly_eps` | 季報 EPS（FinMind） | `(code, year, quarter)` |
+| `ic_classification` | 產業鏈分類 | `code` |
+| `company_tags` | 個股標籤 | — |
 | `stock_pool` | 當沖監控股票池（fuel for job8） | `code` |
 | `daytrade_candidate` | 每日當沖候選（job8 篩出） | `(trade_date, code)` |
-| `daytrade_pre_session_log` | 盤前跑批紀錄 | `id` |
 | `us_watchlist` | 美股追蹤清單 | `symbol` |
 | `fetch_log` | 爬取作業紀錄（防重複） | `(job_name, fetch_date)` |
-| `trading_settings` | 當沖引擎可調參數（key-value，15 項，即時熱重載） | `key` |
+| `trading_settings` | 當沖引擎可調參數（key-value，19 項，即時熱重載） | `key` |
 | `line_notifications`（SQLite） | LINE 通知記錄（月序號、msg_type、內容、成功/失敗；保留 5 天） | `id` |
+
+> `daytrade_pre_session_log`（盤前跑批紀錄）已於程式碼中移除（無呼叫端的死路徑），舊表可能仍留有歷史殘留列，但不再寫入，此處不再列出。
 
 ### 詳細欄位設計
 
@@ -899,7 +907,7 @@ fetch_log (job_name, fetch_date PK)  ← 獨立，不關聯其他表
 | yfinance | latest | 大盤指數（^TWII）+ 美股收盤/盤後價 |
 | pandas / numpy | latest | 資料處理、布林帶計算 |
 | anthropic | latest | Claude API（AI 精選，job4 後呼叫） |
-| asyncio（內建） | — | 自製 `_scheduler_loop`，每分鐘比對台北時間觸發 7 個排程 Job |
+| asyncio（內建） | — | 自製 `_scheduler_loop`，每分鐘比對台北時間觸發 8 個排程 Job |
 | alembic | — | 未使用；migration 透過 main.py `ALTER TABLE ADD COLUMN IF NOT EXISTS` 執行 |
 
 ### 前端
