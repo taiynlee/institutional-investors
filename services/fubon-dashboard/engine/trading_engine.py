@@ -292,21 +292,6 @@ class TradingEngine:
         def _check_not_in_position() -> bool:
             return str(_gs("check_not_in_position", "True")).lower() in ("true", "1", "yes")
 
-        def _atr_multiplier() -> float:
-            try: return max(0.0, float(_gs("atr_multiplier", "0.4")))
-            except Exception: return 0.4
-
-        def _atr_stop_ticks(symbol: str, price: float) -> int:
-            fixed = _stop_loss_ticks()
-            mult  = _atr_multiplier()
-            if mult <= 0 or price <= 0:
-                return fixed
-            daily_range = self.daily_high.get(symbol, 0) - self.daily_low.get(symbol, price)
-            if daily_range <= 0:
-                return fixed
-            ts = tw_tick_size(price)
-            return max(fixed, round(daily_range * mult / ts))
-
         def _commission_discount() -> float:
             try: return max(0.01, min(1.0, float(_gs("commission_discount", "0.28"))))
             except Exception: return 0.28
@@ -1066,7 +1051,7 @@ class TradingEngine:
                     _v1m_thr = round(_snap_past5avg * _vol_1m_coef(), 1) if _snap_past5avg > 0 else 0
                     _trig_px = sess.curr_price
                     _ts_sz   = tw_tick_size(_trig_px)
-                    _est_sl  = round_up_tick(_trig_px - _atr_stop_ticks(symbol, _trig_px) * _ts_sz)
+                    _est_sl  = round_up_tick(_trig_px - _stop_loss_ticks() * _ts_sz)
                     _est_tp  = round_down_tick(
                         sess.reference_price * (1 + (_snap_chg + _take_profit_add_pct()) / 100)
                     ) if sess.reference_price > 0 else 0.0
@@ -1079,7 +1064,6 @@ class TradingEngine:
                               est_stop_loss=_est_sl,
                               est_take_profit=_est_tp,
                               stop_loss_ticks=_stop_loss_ticks(),
-                              atr_multiplier=_atr_multiplier(),
                               take_profit_add_pct=_take_profit_add_pct(),
                               change_pct=_snap_chg,
                               chg_1m_pct=_snap_chg1m)
@@ -1199,7 +1183,7 @@ class TradingEngine:
                         _pending_buys.pop(sym, None)
                         ep = filled_px if filled_px > 0 else chase["order_price"]
                         ts_sz = tw_tick_size(ep)
-                        sl_t  = _atr_stop_ticks(sym, ep)
+                        sl_t  = _stop_loss_ticks()
                         stop_loss   = round_up_tick(ep - sl_t * ts_sz)
                         ref         = chase["ref_price"]
                         chg         = (ep - ref) / ref * 100 if ref > 0 else 0.0

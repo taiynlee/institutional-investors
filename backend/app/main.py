@@ -122,7 +122,6 @@ async def _apply_migrations():
             "vol_trend_coef":           "0.8",
             "stop_loss_ticks":          "6",
             "take_profit_add_pct":      "4.0",
-            "atr_multiplier":           "0.4",
             "entry_start_time":         "09:15",
             "latest_dynamic_add_time":  "13:09",
             "force_exit_time":          "13:20",

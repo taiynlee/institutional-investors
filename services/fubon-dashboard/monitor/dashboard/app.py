@@ -38,7 +38,6 @@ class TradingParamsBody(BaseModel):
     # 停損停利
     stop_loss_ticks: int = 6
     take_profit_add_pct: float = 4.0
-    atr_multiplier: float = 0.4
     # 交易時間
     entry_start_time: str = "09:15"
     latest_dynamic_add_time: str = "13:09"
@@ -118,7 +117,7 @@ def create_app(
         "max_change_pct",
         "check_not_in_position",
         "bid_1m_pct_threshold", "vol_ratio_coefficient", "vol_1m_coef", "tick_window_seconds", "tick_rise_threshold",
-        "stop_loss_ticks", "take_profit_add_pct", "atr_multiplier",
+        "stop_loss_ticks", "take_profit_add_pct",
         "entry_start_time", "latest_dynamic_add_time", "force_exit_time",
         "daytrade_price_min", "daytrade_price_max",
     ]
@@ -136,7 +135,6 @@ def create_app(
         "tick_rise_threshold": 4,
         "stop_loss_ticks": 6,
         "take_profit_add_pct": 4.0,
-        "atr_multiplier": 0.4,
         "entry_start_time": "09:15",
         "latest_dynamic_add_time": "13:09",
         "force_exit_time": "13:20",
@@ -152,22 +150,9 @@ def create_app(
             return int(v)
         if k in ("commission_discount", "take_profit_add_pct", "max_change_pct",
                  "daytrade_price_min", "daytrade_price_max",
-                 "vol_ratio_coefficient", "vol_1m_coef", "bid_1m_pct_threshold",
-                 "atr_multiplier"):
+                 "vol_ratio_coefficient", "vol_1m_coef", "bid_1m_pct_threshold"):
             return float(v)
         return str(v)  # time strings
-
-    def _atr_stop_ticks_app(symbol: str, price: float) -> int:
-        fixed = int(_trading_params.get("stop_loss_ticks", 6))
-        mult  = float(_trading_params.get("atr_multiplier", 0.4))
-        if mult <= 0 or price <= 0 or _engine is None:
-            return fixed
-        daily_range = _engine.daily_high.get(symbol, 0) - _engine.daily_low.get(symbol, price)
-        if daily_range <= 0:
-            return fixed
-        from engine.execution.broker import tw_tick_size as _tws
-        ts = _tws(price)
-        return max(fixed, round(daily_range * mult / ts))
 
     def _net_pnl(entry_price: float, exit_price: float, lots: int) -> float:
         disc     = float(_trading_params.get("commission_discount", 0.28))
@@ -302,7 +287,6 @@ def create_app(
                      "vol_1m_coef": _trading_params.get("vol_1m_coef", 0.8),
                      "tick_window_seconds": _trading_params.get("tick_window_seconds", 60),
                      "tick_rise_threshold": _trading_params.get("tick_rise_threshold", 4),
-                     "atr_multiplier": _trading_params.get("atr_multiplier", 0.4),
                      "entry_start_time": _trading_params.get("entry_start_time", "09:15"),
                      "pnl": pnl, "positions": positions,
                      "live_stats": live_stats,
@@ -570,7 +554,7 @@ def create_app(
                     before = len(selected)
                     selected = {
                         c for c in selected
-                        if price_min <= prices.get(c, price_min) <= price_max
+                        if c in prices and price_min <= prices[c] <= price_max
                     }
                     price_excluded = before - len(selected)
                     # 清除被排除的 snapshot
@@ -1269,7 +1253,6 @@ def create_app(
         _trading_params["tick_rise_threshold"] = max(0, body.tick_rise_threshold)
         _trading_params["stop_loss_ticks"] = max(1, body.stop_loss_ticks)
         _trading_params["take_profit_add_pct"] = max(0.1, body.take_profit_add_pct)
-        _trading_params["atr_multiplier"] = max(0.0, body.atr_multiplier)
         _trading_params["entry_start_time"] = body.entry_start_time
         _trading_params["latest_dynamic_add_time"] = body.latest_dynamic_add_time
         _trading_params["force_exit_time"] = body.force_exit_time
@@ -1309,7 +1292,7 @@ def create_app(
         if ref_price <= 0:
             ref_price = price
         ts = tw_tick_size(price)
-        stop_loss = round_up_tick(price - _atr_stop_ticks_app(symbol, price) * ts)
+        stop_loss = round_up_tick(price - int(_trading_params.get("stop_loss_ticks", 6)) * ts)
         change_at_entry = (price - ref_price) / ref_price * 100 if ref_price > 0 else 0.0
         take_profit = round_down_tick(ref_price * (1 + (change_at_entry + take_profit_add_pct) / 100))
         pos = Position(symbol=symbol, entry_price=price, lots=lots,
@@ -1493,7 +1476,7 @@ def create_app(
 
         # 計算停損、停利
         ts = tw_tick_size(price)
-        stop_loss = round_up_tick(price - _atr_stop_ticks_app(symbol, price) * ts)
+        stop_loss = round_up_tick(price - int(_trading_params.get("stop_loss_ticks", 6)) * ts)
         entry_chg_pct = (price - prev_close) / prev_close * 100 if prev_close > 0 else 0.0
         take_profit = round_down_tick(prev_close * (1 + (entry_chg_pct + take_profit_add_pct) / 100))
 

@@ -242,9 +242,8 @@ Docker Compose（frontend nginx）
 ### 出場策略
 
 **進場同時掛出觸價單：**
-- 停損：進場價 - `stop_ticks` tick（向上捨入）→ LessThanOrEqual 條件單
-  - `stop_ticks = max(stop_loss_ticks（預設 6）, round(當日振幅 × atr_multiplier（預設 0.4）/ tick_size))`
-  - 即固定跳動數與 ATR（當日高低價振幅）動態值取大者，個股當日振幅越大，停損越寬，避免雜訊洗出；`atr_multiplier` 設 0 可停用 ATR 動態放寬，回退固定 `stop_loss_ticks`
+- 停損：進場價 - `stop_loss_ticks` tick（預設 8，向上捨入）→ LessThanOrEqual 條件單
+  - 2026-07-15 移除 ATR 動態停損（`atr_multiplier`）：實測長期被固定值卡住幾乎沒生效，且觀測窗內停損命中率偏高（振幅不比獲利單小），改成單純固定 tick 數，邏輯更透明好調
 - 停利：昨收 × (1 + (進場時漲幅 + `take_profit_add_pct`（預設 4%）) / 100)（向下捨入）→ GreaterThanOrEqual 條件單
 
 **強制出場機制（三層保護）：**
@@ -708,6 +707,7 @@ vol_ratio = mean(volume[-5:]) / mean(volume[-10:-5])
 週六 11:30 / 週日 18:30  Job 3 — 抓 TDCC 集保持股集中度（週五收盤資料，週六先跑一次、週日晚間再跑一次確保資料齊全）
 21:00  Job 4 — 執行篩選計算，更新 screening_result，呼叫 Claude API 產生 AI 精選（週日額外 22:30 再跑一次，配合 Job 3 週日資料）
 21:15  Job 8 — 當沖候選名單（全部 pool → 股價範圍(預設100~1500) → 處置股排除 → PG daytrade_candidate，隔日引擎啟動時讀取；不再篩 chip_count / 策略A/B/C）
+       - 2026-07-15 修正股價範圍過濾 fail-open bug：`/api/stocks/latest-prices` 查不到昨收的股票，過濾條件誤用 `price_min` 當預設值代入比較，導致必定判定為「在範圍內」而放行（例：安碁 6174 昨收查不到、實際股價57元，仍混入候選名單）。修正後查不到價格一律排除。
 每月10-25日 12:00  Job 5 — 抓月營收（MOPS）
 每季（3/1, 5/16, 8/15, 11/15 09:00）  Job 6 — 抓季報 EPS（FinMind TaiwanStockFinancialStatements）
 每半年（1/1, 7/1 02:00）  Job 7 — 抓產業鏈分類（IC Chain），更新 ic_classification

@@ -1054,8 +1054,7 @@ const PARAM_DEFS: PD[] = [
   { id:'max_change_pct',           group:'進場條件', label:'漲跌幅上限',              desc:'abs(當日漲跌幅) 超過此%不進場，雙向過濾：漲太多（追高）或跌太多（追跌）均排除', unit:'%', rtKey:'max_change_pct', type:'number', step:0.5, min:0.5 },
   { id:'check_not_in_position',    group:'進場條件', label:'同標的未持倉才可進場',   desc:'勾選（預設）：同一標的已有持倉時拒絕再進場；取消勾選：允許同標的持倉中再進一張', unit:'', rtKey:'check_not_in_position', type:'boolean' },
   // 停損停利
-  { id:'stop_loss_ticks',      group:'停損停利', label:'停損 tick 數（最小值）', desc:'停損距離下限：進場價 - N × tick_size，向上捨入。ATR 動態模式下取 max(此值, ATR計算值)', unit:'tick', rtKey:'stop_loss_ticks', type:'number', step:1, min:1 },
-  { id:'atr_multiplier',       group:'停損停利', label:'ATR 停損係數',    desc:'動態停損：取當日振幅（最高-最低）× 此係數 為停損距離，再取 max(stop_loss_ticks, ATR值)。設 0 關閉 ATR，純用 tick 數。例：振幅10元、係數0.4 → ATR停損距離4元', unit:'倍', rtKey:'atr_multiplier', type:'number', step:0.1, min:0, max:2 },
+  { id:'stop_loss_ticks',      group:'停損停利', label:'停損 tick 數', desc:'停損距離：進場價 - N × tick_size，向上捨入', unit:'tick', rtKey:'stop_loss_ticks', type:'number', step:1, min:1 },
   { id:'take_profit_add_pct',  group:'停損停利', label:'停利附加漲幅',    desc:'停利觸價單 = 昨收 × (1 + (進場時漲幅 + 此%) / 100)，向下捨入 tick；例：進場漲4%、附加4% → 停利在昨收漲8%', unit:'%', rtKey:'take_profit_add_pct', type:'number', step:0.5, min:0.5 },
   // 交易時間
   { id:'force_exit_time',         group:'交易時間', label:'強制出場時間',  desc:'到達此時間所有持倉強制市價出清（不掛限價，直接市價）', unit:'', rtKey:'force_exit_time', type:'time' },
