@@ -19,6 +19,22 @@ LOG_DIR  = Path(os.environ.get("FUBON_LOG_DIR", "/home/tommy0322/fubon-logs"))
 REPORT_DIR = Path(os.environ.get("FUBON_DATA_DIR", "/home/tommy0322/fubon-data")) / "analysis"
 REPORT_DIR.mkdir(exist_ok=True)
 
+LINE_BOT_URL = os.environ.get("LINE_BOT_URL", "http://localhost:8001")
+
+
+def notify_line(message: str) -> None:
+    """盤後異常直接推播，避免像 2026-07-17 那樣引擎整天沒跑卻沒人發現。"""
+    try:
+        req = urllib.request.Request(
+            f"{LINE_BOT_URL.rstrip('/')}/notify",
+            data=json.dumps({"message": message}).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        urllib.request.urlopen(req, timeout=10)
+    except Exception as e:
+        print(f"LINE 通知送出失敗（不影響報告產出）: {e}")
+
 # ── tick 面值 ──────────────────────────────────────────────────────────────────
 def tick_size(price: float) -> float:
     if price < 10:    return 0.01
@@ -297,6 +313,16 @@ def analyze(target_date: str | None = None) -> dict:
             (today,),
         ).fetchall()
         conn.close()
+
+        jsonl_path = LOG_DIR / f"dry_run_{today}.jsonl"
+        if not jsonl_path.exists():
+            notify_line(
+                f"⚠️ {today} 完全沒有交易 log（{jsonl_path.name} 不存在），"
+                f"引擎今天可能整天沒有正常運作，麻煩檢查 fubon-dashboard 服務狀態"
+            )
+        elif not trades_db:
+            notify_line(f"📭 {today} 引擎有跑，但今天沒有任何訊號觸發進場（jsonl 存在但無 order_buy 紀錄）")
+
         report = {
             "date": today,
             "source": "intraday_trades_only",

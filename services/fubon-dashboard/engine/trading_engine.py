@@ -793,6 +793,9 @@ class TradingEngine:
             pos_before = om.positions.get(symbol)
             exit_reason = rm.on_tick(symbol=symbol, price=price, now=now)
             if exit_reason and pos_before:
+                # 立即移除持倉，避免 Position.check_price() 無狀態、
+                # 價格持續停在停損/停利價之外時每個 tick 重複觸發出場
+                om.positions.pop(symbol, None)
                 pnl = _calc_net_pnl(pos_before.entry_price, price, pos_before.lots)
                 dt.record_trade(pnl=pnl, symbol=symbol, lots=pos_before.lots,
                                 entry_price=pos_before.entry_price, exit_price=price)
@@ -928,7 +931,8 @@ class TradingEngine:
 
         def _evaluate_signal(symbol: str, sess: SymbolSession, now_time: time):
             not_in_pos = symbol not in om.positions  # 同標的可重複進場（只要當下未持倉）
-            trades_today = dt.daily_entries
+            # dry_run 下不套用每日檔數上限：訊號本身用於事後分析，不該被 max_daily_positions 卡住
+            trades_today = 0 if _is_dry_run() else dt.daily_entries
             now = now_tw()
 
             # 熱重載可調參數
@@ -1137,6 +1141,23 @@ class TradingEngine:
                     "vol_1m": _snap_vol1m,
                     "prev_vol_1m": _snap_prev_vol1m,
                 })
+                if _is_dry_run():
+                    # dry_run 沒有真實成交回報（on_filled 永不觸發），立即模擬成交建倉，
+                    # 讓後續 SL/TP 監控（rm.on_tick）與出場記錄（order_sell）能正常運作，
+                    # 不然每筆訊號的實際輸贏都要事後手動用 ticks.db 重建。
+                    ts_sz = tw_tick_size(price)
+                    sl_t  = _stop_loss_ticks()
+                    stop_loss   = round_up_tick(price - sl_t * ts_sz)
+                    chg         = (price - ref) / ref * 100 if ref > 0 else 0.0
+                    take_profit = round_down_tick(ref * (1 + (chg + _take_profit_add_pct()) / 100))
+                    pos = Position(symbol=symbol, entry_price=price, lots=lots,
+                                   stop_loss=stop_loss, take_profit=take_profit)
+                    om.positions[symbol] = pos
+                    _entry_times[symbol] = now_tw()
+                    dt.record_entry(symbol)
+                    _chase_buys.pop(symbol, None)
+                    log_event("order_buy", symbol=symbol, price=price, lots=lots,
+                              stop_loss=stop_loss, take_profit=take_profit)
             except Exception as _be:
                 _chase_buys.pop(symbol, None)
                 logger.error("買進下單失敗 %s: %s", symbol, _be)
